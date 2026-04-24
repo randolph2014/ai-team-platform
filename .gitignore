@@ -1,0 +1,38 @@
+# Dependencies
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.sqlite3
+
+# AI worktree artifacts
+.ai/worktrees/
+.ai/runs/
+
+# Node (frontend)
+web/node_modules/
+web/dist/
+web/.next/
+
+# Docker
+docker/data/
