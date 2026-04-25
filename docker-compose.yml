@@ -1,0 +1,40 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    command: ["ai-team", "serve", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      AI_TEAM_DB_URL: postgresql://ai_team:ai_team@postgres:5432/ai_team
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - ai-team-output:/app/.ai/team-output
+    depends_on:
+      - postgres
+
+  web:
+    build:
+      context: web
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ai_team
+      POSTGRES_PASSWORD: ai_team
+      POSTGRES_DB: ai_team
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./persistence/migrations/001_init.up.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+
+volumes:
+  ai-team-output:
+  postgres-data:

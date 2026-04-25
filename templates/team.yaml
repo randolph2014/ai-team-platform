@@ -1,0 +1,104 @@
+providers:
+  Auto:
+    cli: auto
+
+agents:
+  - name: solution-architect
+    provider: Auto
+    role: architect
+    prompt: agents/solution-architect.md
+
+  - name: brainstormer
+    provider: Auto
+    role: brainstormer
+    prompt: agents/brainstormer.md
+
+  - name: devils-advocate
+    provider: Auto
+    role: reviewer
+    prompt: agents/devils-advocate.md
+
+  - name: tech-lead
+    provider: Auto
+    role: lead
+    prompt: agents/tech-lead.md
+
+  - name: qa-automation
+    provider: Auto
+    role: tester
+    prompt: agents/qa-automation.md
+
+  - name: code-reviewer
+    provider: Auto
+    role: reviewer
+    prompt: agents/code-reviewer.md
+
+worktree:
+  enabled: false
+  base_branch: main
+  merge_strategy: squash
+  auto_cleanup: true
+  merge_on_conflict: pause
+
+pipeline:
+  - id: plan
+    name: "方案讨论"
+    parallel: true
+    agents: [brainstormer, devils-advocate]
+    input: requirement
+    output:
+      brainstormer: brainstorm.md
+      devils-advocate: gap-analysis.md
+
+  - id: architect
+    name: "方案定稿"
+    parallel: false
+    agents: [solution-architect]
+    input: [requirement, brainstorm.md, gap-analysis.md]
+    output:
+      solution-architect: solution-draft.md
+
+  - id: context
+    name: "代码库扫描"
+    type: context_scan
+    input: [solution-draft.md]
+    output_file: codebase-context.md
+
+  - id: develop
+    name: "开发"
+    parallel: false
+    agents: [tech-lead]
+    input: [requirement, solution-draft.md, codebase-context.md]
+    output:
+      tech-lead: tech-lead-output.md
+    loopback_to: develop
+    loopback_trigger: "error:"
+    max_retries: 3
+
+  - id: qa
+    name: "测试"
+    parallel: false
+    stop_parallel_on_first_error: false
+    agents: [qa-automation]
+    input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, "git-diff"]
+    output:
+      qa-automation: test-report.md
+    loopback_to: develop
+    loopback_trigger: ["FAILED", "ERROR", "失败", "exit code: 1", "退出码: 1"]
+    max_retries: 2
+
+  - id: review
+    name: "代码审查"
+    parallel: false
+    agents: [code-reviewer]
+    input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, "git-diff"]
+    output:
+      code-reviewer: review-report.md
+    loopback_to: develop
+    loopback_trigger: "Request Changes"
+    max_retries: 2
+
+  - id: accept
+    name: "人工验收"
+    type: human_review
+    input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, review-report.md, "git-diff"]

@@ -1,0 +1,4 @@
+recursive-include templates *
+recursive-include adapters *
+recursive-include docs/prototypes *
+recursive-include persistence/migrations *.sql

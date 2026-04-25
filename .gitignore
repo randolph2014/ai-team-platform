@@ -1,7 +1,9 @@
 # Dependencies
 __pycache__/
+.pytest_cache/
 *.pyc
 *.pyo
+*.egg-info/
 .venv/
 venv/
 env/
@@ -28,11 +30,14 @@ Thumbs.db
 # AI worktree artifacts
 .ai/worktrees/
 .ai/runs/
+.ai/team-output/
+.playwright-mcp/
 
 # Node (frontend)
 web/node_modules/
 web/dist/
 web/.next/
+web/tsconfig.tsbuildinfo
 
 # Docker
 docker/data/

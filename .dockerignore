@@ -1,0 +1,9 @@
+.git
+.ai
+.venv
+__pycache__
+*.pyc
+web/node_modules
+web/dist
+.playwright-mcp
+ai-team-dashboard-*.png
