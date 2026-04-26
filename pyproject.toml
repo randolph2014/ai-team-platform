@@ -9,6 +9,7 @@ description = "Workflow engine, CLI, API, and dashboard for AI Team pipelines."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "asyncpg>=0.29",
   "fastapi>=0.110",
   "pydantic>=2.6",
   "pyyaml>=6.0",

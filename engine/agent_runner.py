@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import ConfigError
+from .cost_tracker import CostTracker, estimate_tokens
 from .events import EventBus
 from .models import AgentDefinition, AgentRun, utc_now
 
@@ -70,10 +71,11 @@ def _decode_claude_stream_line(line: str) -> str:
 
 
 class AgentRunner:
-    def __init__(self, config: Dict[str, Any], bus: Optional[EventBus] = None) -> None:
+    def __init__(self, config: Dict[str, Any], bus: Optional[EventBus] = None, cost_tracker: Optional[CostTracker] = None) -> None:
         self.config = config
         self.bus = bus or EventBus()
         self.runner_config = config.get("runner", {})
+        self.cost_tracker = cost_tracker
 
     def run(
         self,
@@ -86,6 +88,7 @@ class AgentRunner:
         output_file: Path,
         raw_log_file: Path,
     ) -> AgentRun:
+        self._last_prompt = prompt
         started = time.monotonic()
         timeout = agent.timeout or self.runner_config.get("agent_timeout_seconds") or 1800
         heartbeat_seconds = int(self.runner_config.get("heartbeat_seconds") or 0)
@@ -211,6 +214,13 @@ class AgentRunner:
     def _complete(self, agent_run: AgentRun, started: float, run_id: str, stage_id: str) -> AgentRun:
         agent_run.completed_at = utc_now()
         agent_run.duration_seconds = round(time.monotonic() - started, 3)
+
+        if self.cost_tracker:
+            try:
+                self._track_cost(agent_run, run_id, stage_id)
+            except Exception:
+                pass
+
         self.bus.emit(
             "agent:completed",
             run_id,
@@ -221,3 +231,30 @@ class AgentRunner:
             output_file=agent_run.output_file,
         )
         return agent_run
+
+    def _track_cost(self, agent_run: AgentRun, run_id: str, stage_id: str) -> None:
+        output_text = ""
+        if agent_run.output_file:
+            output_path = Path(agent_run.output_file)
+            if output_path.exists():
+                try:
+                    output_text = output_path.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
+
+        prompt_tokens = estimate_tokens(getattr(self, "_last_prompt", ""))
+        completion_tokens = estimate_tokens(output_text)
+
+        provider_config = self.config.get("providers", {}).get(agent_run.provider, {})
+        model = provider_config.get("model") if isinstance(provider_config, dict) else "default"
+        if not model:
+            model = "default"
+
+        self.cost_tracker.track_usage(
+            run_id=run_id,
+            agent_name=agent_run.agent_name,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            stage_id=stage_id,
+        )

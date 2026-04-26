@@ -55,7 +55,47 @@ export interface RunListItem {
   run_id: string;
   status: RunStatus;
   pipeline?: string | null;
+  requirement?: string;
   output_dir?: string;
   started_at?: string;
   completed_at?: string;
+  duration_seconds?: number;
+}
+
+export interface Pipeline {
+  id: string;
+  name: string;
+  description: string;
+  yaml: string;
+  stage_count?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface Settings {
+  provider: {
+    default_provider: string;
+    claude_params: string;
+    codex_params: string;
+  };
+  context_scanner: {
+    enabled: boolean;
+    max_file_size: number;
+    exclude_dirs: string;
+  };
+  worktree: {
+    isolation_mode: string;
+    base_branch: string;
+    merge_strategy: string;
+  };
+  quality_gates: {
+    build_gate: string;
+    test_gate: string;
+    coverage_gate: string;
+  };
+  runner: {
+    agent_timeout: string;
+    heartbeat: string;
+    log_mode: string;
+  };
 }

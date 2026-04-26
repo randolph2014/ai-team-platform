@@ -1,6 +1,29 @@
 from __future__ import annotations
 
+import logging
+from contextlib import asynccontextmanager
+
 from .runtime import active_runs, event_store, run_projects
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _lifespan(app):
+    """应用生命周期：启动时执行数据库迁移，关闭时释放连接池"""
+    try:
+        from persistence import run_migrations
+
+        await run_migrations()
+    except Exception:
+        logger.exception("Database migration failed")
+    yield
+    try:
+        from persistence import close_pool
+
+        await close_pool()
+    except Exception:
+        logger.exception("Database pool shutdown failed")
 
 
 def create_app():
@@ -14,7 +37,7 @@ def create_app():
     from .routes.runs import router as runs_router
     from .ws import router as ws_router
 
-    app = FastAPI(title="AI Team Platform", version="0.1.0")
+    app = FastAPI(title="AI Team Platform", version="0.1.0", lifespan=_lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

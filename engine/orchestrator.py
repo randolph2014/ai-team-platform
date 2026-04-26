@@ -20,6 +20,7 @@ from .config import (
     validate_production_config,
 )
 from .context_scanner import scan_codebase
+from .cost_tracker import CostTracker
 from .events import EventBus
 from .models import AgentDefinition, AgentRun, RunReport, StageRun, model_to_dict, utc_now
 from .quality_gates import (
@@ -284,7 +285,8 @@ class Orchestrator:
         )
         start = time.monotonic()
         self.bus.emit("stage:started", report.run_id, stage_id=stage_id, stage_name=stage_run.stage_name, iteration=stage_run.iteration)
-        runner = AgentRunner(self.config, bus=self.bus)
+        cost_tracker = CostTracker(self.project_root, bus=self.bus)
+        runner = AgentRunner(self.config, bus=self.bus, cost_tracker=cost_tracker)
         agent_names = _as_list(stage.get("agents"))
         if not agent_names:
             stage_run.status = "skipped"
@@ -430,6 +432,12 @@ class Orchestrator:
     def _write_report(self, report: RunReport, output_dir: Path) -> None:
         self._refresh_artifacts(report, output_dir)
         report.write(output_dir / "report.json")
+        try:
+            from persistence import save_report_sync
+
+            save_report_sync(report, self.config)
+        except Exception:
+            pass
 
 
 def load_report(path: Path) -> RunReport:

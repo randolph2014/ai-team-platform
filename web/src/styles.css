@@ -108,6 +108,7 @@ main { flex: 1; min-width: 0; height: 100vh; overflow: auto; }
   gap: 16px;
   margin-bottom: 24px;
 }
+.pageActions { display: flex; align-items: center; gap: 10px; }
 h1, h2, h3, p { margin: 0; }
 h1 { font-size: 20px; line-height: 1.2; }
 h2 { font-size: 15px; }
@@ -138,8 +139,10 @@ h2 { font-size: 15px; }
   color: var(--text-secondary);
   background: var(--bg-secondary);
 }
+.iconButton:hover { background: var(--bg-hover); color: var(--text-primary); }
 .linkButton { border: 0; background: transparent; color: var(--accent-hover); }
 
+/* Stats */
 .statsGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 24px; }
 .statCard {
   min-height: 128px;
@@ -158,6 +161,88 @@ h2 { font-size: 15px; }
 .statCard.success strong, .statCard.success svg { color: var(--green); }
 .statCard.blue strong, .statCard.blue svg { color: var(--blue); }
 
+/* Skeleton */
+.skeletonLine {
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  height: 14px;
+  animation: skeletonPulse 1.8s ease-in-out infinite;
+}
+.skeletonText { color: var(--text-muted) !important; }
+.w-80 { width: 80px !important; }
+.w-120 { width: 120px !important; }
+.w-140 { width: 140px !important; }
+.w-180 { width: 180px !important; }
+.w-200 { width: 200px !important; }
+.w-full { width: 100% !important; }
+.skeleton { opacity: .6; }
+@keyframes skeletonPulse {
+  0%, 100% { opacity: .4; }
+  50% { opacity: .8; }
+}
+
+/* Empty states */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 48px 20px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.emptyState p { font-size: 15px; font-weight: 600; color: var(--text-secondary); }
+.emptyState small { font-size: 12px; }
+
+/* Error panel */
+.errorPanel {
+  max-width: 480px;
+  margin: 60px auto 0;
+  border: 1px solid var(--red-bg);
+  border-radius: 8px;
+  background: var(--bg-card);
+  padding: 28px;
+  text-align: center;
+}
+.errorPanel h2 { color: var(--red); margin-bottom: 10px; }
+.errorPanel p { color: var(--text-secondary); margin-bottom: 16px; line-height: 1.6; }
+
+/* Form errors */
+.formError {
+  border: 1px solid #991b1b;
+  border-radius: 6px;
+  background: var(--red-bg);
+  color: var(--red);
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.fieldError {
+  display: block;
+  color: var(--red);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+/* Save banner */
+.saveBanner {
+  border: 1px solid var(--green-bg);
+  border-radius: 6px;
+  background: var(--green-bg);
+  color: var(--green);
+  padding: 10px 16px;
+  margin-bottom: 18px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.saveBannerError {
+  border-color: #991b1b;
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+/* Panels */
 .panel {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -175,6 +260,7 @@ tbody tr:hover td { background: var(--bg-hover); }
 .mono { font-family: var(--font-mono); color: var(--text-secondary); }
 .ellipsis { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 
+/* Badges */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -193,6 +279,7 @@ tbody tr:hover td { background: var(--bg-hover); }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* RunDetail */
 .runHeader {
   display: flex;
   align-items: flex-start;
@@ -212,6 +299,13 @@ tbody tr:hover td { background: var(--bg-hover); }
 .requirementPanel p { color: var(--text-secondary); line-height: 1.7; }
 .inlineError { margin-top: 8px; color: var(--yellow) !important; font-size: 12px; }
 .detailGrid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 18px; align-items: start; }
+
+/* WebSocket indicator */
+.wsIndicator { font-size: 12px; font-weight: 600; }
+.wsConnected { color: var(--green); }
+.wsDisconnected { color: var(--text-muted); }
+
+/* Timeline */
 .timeline { position: relative; padding-left: 32px; min-width: 0; max-width: 100%; }
 .timeline::before { content: ''; position: absolute; left: 15px; top: 0; bottom: 0; width: 2px; background: var(--border); }
 .stageCard {
@@ -326,6 +420,20 @@ tbody tr:hover td { background: var(--bg-hover); }
 }
 .artifactItem:hover { background: var(--bg-hover); }
 
+/* Pipeline table */
+.pipelineName { font-weight: 700; }
+.tableActions { display: flex; align-items: center; gap: 6px; }
+.tableActions .iconButton { width: 28px; height: 28px; }
+
+/* YAML editor */
+.yamlEditor {
+  min-height: 280px;
+  font-family: var(--font-mono) !important;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Pipeline grid (legacy) */
 .pipelineGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .pipelineCard {
   border: 1px solid var(--border);
@@ -338,6 +446,7 @@ tbody tr:hover td { background: var(--bg-hover); }
 .pipelineCard p { color: var(--text-secondary); line-height: 1.6; margin-bottom: 14px; }
 .pipelineStats { display: flex; flex-wrap: wrap; gap: 10px; color: var(--text-secondary); font-size: 12px; }
 
+/* Settings */
 .settingsGrid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 18px; align-items: start; }
 .settingsNav {
   border: 1px solid var(--border);
@@ -353,8 +462,10 @@ tbody tr:hover td { background: var(--bg-hover); }
   border-radius: 6px;
   color: var(--text-secondary);
   padding: 7px 10px;
+  cursor: pointer;
 }
-.settingsNav a:first-child { background: var(--accent); color: #fff; }
+.settingsNav a:hover { background: var(--bg-hover); color: var(--text-primary); }
+.settingsNavActive { background: var(--accent) !important; color: #fff !important; }
 .settingGroup { padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
 .settingGroup:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
 .settingGroup h2 { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
@@ -367,16 +478,64 @@ tbody tr:hover td { background: var(--bg-hover); }
   border-top: 1px solid var(--border);
 }
 .settingRow small { display: block; color: var(--text-secondary); margin-top: 3px; }
-.settingRow code {
+.settingControl {
+  min-width: 200px;
+  display: flex;
+  justify-content: flex-end;
+}
+.settingControl input,
+.settingControl select {
+  width: 100%;
+  max-width: 260px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-secondary);
   color: var(--text-primary);
-  padding: 7px 9px;
-  max-width: 320px;
-  overflow-wrap: anywhere;
+  padding: 7px 10px;
+  outline: none;
+}
+.settingControl input:focus,
+.settingControl select:focus { border-color: var(--accent); }
+.settingControl input[type="number"] { max-width: 140px; }
+
+/* Switch toggle */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  cursor: pointer;
+}
+.switch input { display: none; }
+.switchSlider {
+  position: absolute;
+  inset: 0;
+  border-radius: 24px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  transition: .2s;
+}
+.switchSlider::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: .2s;
+}
+.switch input:checked + .switchSlider {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.switch input:checked + .switchSlider::after {
+  transform: translateX(20px);
+  background: #fff;
 }
 
+/* Modal */
 .modalOverlay {
   position: fixed;
   inset: 0;
@@ -409,10 +568,12 @@ tbody tr:hover td { background: var(--bg-hover); }
 .modal input:focus, .modal textarea:focus, .modal select:focus { border-color: var(--accent); }
 .modalActions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
 
+/* Responsive */
 @media (max-width: 1000px) {
   .statsGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .detailGrid, .settingsGrid { grid-template-columns: 1fr; }
   .artifactPanel { position: static; }
+  .settingControl { min-width: 0; }
 }
 
 @media (max-width: 720px) {
@@ -427,4 +588,7 @@ tbody tr:hover td { background: var(--bg-hover); }
   .timeline { padding-left: 22px; }
   .timeline::before { left: 10px; }
   .stageCard::before { left: -18px; }
+  .settingControl { justify-content: flex-start; width: 100%; }
+  .settingControl input,
+  .settingControl select { max-width: 100%; }
 }
