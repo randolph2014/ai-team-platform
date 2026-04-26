@@ -91,6 +91,45 @@ quality_gates:
             self.assertIn("tech-lead-output.md", report.artifacts)
             self.assertTrue((Path(report.output_dir) / "report.json").exists())
 
+    def test_loopback_feedback_injects_output_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+providers:
+  Mock:
+    cli: mock
+    response: "error: compilation failed"
+agents:
+  - name: dev
+    provider: Mock
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: requirement
+    output:
+      dev: tech-lead-output.md
+    loopback_to: develop
+    loopback_trigger: "error:"
+    max_retries: 1
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
+            report = Orchestrator(root).run("ship it", yes=True)
+            self.assertEqual(report.status, "failed")
+            output_dir = Path(report.output_dir)
+            feedback_file = output_dir / "loopback-feedback-develop-1.md"
+            self.assertTrue(feedback_file.exists(), "loopback feedback file should be created")
+            feedback_content = feedback_file.read_text(encoding="utf-8")
+            self.assertIn("error: compilation failed", feedback_content)
+            self.assertIn("Loopback feedback", feedback_content)
+
 
 if __name__ == "__main__":
     unittest.main()

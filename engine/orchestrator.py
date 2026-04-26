@@ -181,7 +181,20 @@ class Orchestrator:
                         to_stage=target,
                         iteration=count + 1,
                     )
-                    extra_feedback = f"## Loopback feedback\n\nStage `{stage_id}` triggered loopback to `{target}`.\n\n"
+                    max_feedback_chars = int(self.config.get("runner", {}).get("max_loopback_feedback_chars") or 20000)
+                    truncated_output = output_content[:max_feedback_chars]
+                    if len(output_content) > max_feedback_chars:
+                        truncated_output += "\n\n[truncated]"
+                    extra_feedback = (
+                        f"## Loopback feedback\n\n"
+                        f"Stage `{stage_id}` (iteration {count}) failed and triggered loopback to `{target}`.\n\n"
+                        f"### {stage_id} output\n\n"
+                        f"```text\n{truncated_output}\n```\n\n"
+                        f"请根据以上输出修复问题，只修改必要的部分。"
+                    )
+                    feedback_file = output_dir / f"loopback-feedback-{stage_id}-{count}.md"
+                    feedback_file.write_text(extra_feedback, encoding="utf-8")
+                    self._write_report(report, output_dir)
                     index = stage_index_by_id[target]
                     continue
 

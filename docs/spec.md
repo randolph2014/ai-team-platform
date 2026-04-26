@@ -322,6 +322,10 @@ quality_gates:
 
 这与现有 loopback 机制类似，但 loopback 是 verify 阶段触发回到 develop，而 quality_gates 是 develop 阶段之后立即触发。两者共存不冲突。
 
+**Loopback 反馈注入**：
+
+qa/review 阶段触发 loopback 时，同样将上一轮的完整输出注入到 developer agent 的 prompt 中（`engine/orchestrator.py` 的 `_render_prompt` 方法）。反馈内容通过 `runner.max_loopback_feedback_chars`（默认 20000）截断，避免 prompt 过长。反馈同时写入 `output_dir/loopback-feedback-{stage}-{iteration}.md` 便于追溯。
+
 #### 4.1.4 Agent Prompt 增强
 
 **问题**：所有 agent 用通用 prompt，没有项目级定制。

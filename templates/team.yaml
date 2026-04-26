@@ -34,7 +34,7 @@ agents:
     prompt: agents/code-reviewer.md
 
 worktree:
-  enabled: false
+  enabled: true
   base_branch: main
   merge_strategy: squash
   auto_cleanup: true
@@ -102,3 +102,29 @@ pipeline:
     name: "人工验收"
     type: human_review
     input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, review-report.md, "git-diff"]
+
+# Quality Gates — develop 阶段完成后自动运行。
+# 项目级 .ai/team.yaml 可覆盖此配置。
+# 示例（Python 项目）：
+#   quality_gates:
+#     - name: python-syntax
+#       type: command
+#       command: "python3 -m py_compile $(git diff --name-only --diff-filter=ACM | grep '\\.py$' | head -20) 2>&1 || true"
+#       required: true
+#     - name: pytest
+#       type: command
+#       command: "python3 -m pytest --tb=short -q 2>&1"
+#       required: true
+#       max_retries: 1
+# 示例（Node 项目）：
+#   quality_gates:
+#     - name: typescript-check
+#       type: command
+#       command: "npx tsc --noEmit 2>&1"
+#       required: true
+#     - name: test
+#       type: command
+#       command: "npm test 2>&1"
+#       required: true
+#       max_retries: 1
+quality_gates: []

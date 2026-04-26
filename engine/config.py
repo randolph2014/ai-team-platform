@@ -59,6 +59,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     ],
     "runner": {
         "max_input_chars_per_file": None,
+        "max_loopback_feedback_chars": 20000,
         "stop_parallel_on_first_error": True,
         "agent_timeout_seconds": 1800,
         "heartbeat_seconds": 60,
