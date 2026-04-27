@@ -1,0 +1,2 @@
+ALTER TABLE agent_run ADD COLUMN IF NOT EXISTS model_requested TEXT;
+ALTER TABLE agent_run ADD COLUMN IF NOT EXISTS model_used TEXT;

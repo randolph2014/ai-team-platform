@@ -51,6 +51,7 @@ class AgentRun(BaseModel):
     agent_name: str
     provider: str
     role: Optional[str] = None
+    model_requested: Optional[str] = None
     model_used: Optional[str] = None
     status: AgentStatus = "pending"
     started_at: Optional[str] = None

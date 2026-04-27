@@ -50,7 +50,7 @@ class FallbackRetryTest(unittest.TestCase):
         attempts: list = []
 
         def tracking_try_model(
-            run_id, stage_id, agent, provider, prompt, cwd, output_file, raw_log_file, model, timeout, heartbeat_seconds
+            run_id, stage_id, agent, provider, prompt, cwd, output_file, raw_log_file, model, model_requested, timeout, heartbeat_seconds
         ):
             attempts.append(model)
             if model == "primary-model":
@@ -84,7 +84,7 @@ class FallbackRetryTest(unittest.TestCase):
         attempts: list = []
 
         def always_fail(
-            run_id, stage_id, agent, provider, prompt, cwd, output_file, raw_log_file, model, timeout, heartbeat_seconds
+            run_id, stage_id, agent, provider, prompt, cwd, output_file, raw_log_file, model, model_requested, timeout, heartbeat_seconds
         ):
             attempts.append(model)
             return AgentRun(

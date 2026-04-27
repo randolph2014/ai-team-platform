@@ -123,6 +123,7 @@ class AgentRunner:
                 output_file=output_file,
                 raw_log_file=raw_log_file,
                 model=model,
+                model_requested=primary_model,
                 timeout=remaining_timeout,
                 heartbeat_seconds=heartbeat_seconds,
             )
@@ -153,6 +154,7 @@ class AgentRunner:
         output_file: Path,
         raw_log_file: Path,
         model: Optional[str],
+        model_requested: Optional[str],
         timeout: int,
         heartbeat_seconds: int,
     ) -> AgentRun:
@@ -161,6 +163,7 @@ class AgentRunner:
             agent_name=agent.name,
             provider=agent.provider,
             role=agent.role,
+            model_requested=model_requested,
             model_used=model,
             status="running",
             started_at=utc_now(),

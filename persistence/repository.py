@@ -204,6 +204,98 @@ class PipelineRunRepo:
         )
         return [dict(row) for row in rows]
 
+    async def list_paginated(
+        self, conn, *, page: int = 1, size: int = 20
+    ) -> List[Dict[str, Any]]:
+        offset = (page - 1) * size
+        rows = await conn.fetch(
+            f"SELECT * FROM {self.TABLE} ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+            size,
+            offset,
+        )
+        return [dict(row) for row in rows]
+
+    async def update_status(
+        self,
+        conn,
+        run_id: str,
+        status: str,
+        error_message: Optional[str] = None,
+        completed_at: Optional[str] = None,
+        duration_seconds: Optional[float] = None,
+    ) -> bool:
+        parts = ["status = $2"]
+        params: list = [run_id, status]
+        idx = 3
+        if error_message is not None:
+            parts.append(f"error_message = ${idx}")
+            params.append(error_message)
+            idx += 1
+        if completed_at is not None:
+            parts.append(f"completed_at = ${idx}")
+            params.append(_to_dt(completed_at))
+            idx += 1
+        if duration_seconds is not None:
+            parts.append(f"duration_seconds = ${idx}")
+            params.append(duration_seconds)
+            idx += 1
+        result = await conn.execute(
+            f"UPDATE {self.TABLE} SET {', '.join(parts)} WHERE id = $1",
+            *params,
+        )
+        return result.endswith("1")
+
+    async def create_pending(
+        self,
+        conn,
+        *,
+        id: str,
+        pipeline_id: Optional[str],
+        project_root: str,
+        main_branch: str,
+        requirement: str,
+        trigger_source: str = "manual",
+        worktree_path: Optional[str] = None,
+        app_run_id: Optional[str] = None,
+    ) -> None:
+        ctx = {"app_run_id": app_run_id} if app_run_id else {}
+        await conn.execute(
+            f"""
+            INSERT INTO {self.TABLE} (id, pipeline_id, status, project_root, main_branch,
+                                       requirement, trigger_source, worktree_path, context)
+            VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7, $8::jsonb)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            id,
+            pipeline_id,
+            project_root,
+            main_branch,
+            requirement,
+            trigger_source,
+            worktree_path,
+            _jsonb(ctx),
+        )
+
+    async def get_run_with_details(self, conn, run_id: str) -> Optional[Dict[str, Any]]:
+        run = await self.get_by_id(conn, run_id)
+        if run is None:
+            return None
+        stage_repo = StageRunRepo()
+        agent_repo = AgentRunRepo()
+        gate_repo = QualityGateRunRepo()
+        stages = await stage_repo.list_by_run(conn, run_id)
+        for stage in stages:
+            stage["agents"] = await agent_repo.list_by_stage(conn, stage["id"])
+            stage["quality_gates"] = await gate_repo.list_by_stage(conn, stage["id"])
+        run["stages"] = stages
+        return run
+
+    async def run_exists(self, conn, run_id: str) -> bool:
+        row = await conn.fetchrow(
+            f"SELECT 1 FROM {self.TABLE} WHERE id = $1", run_id
+        )
+        return row is not None
+
 
 class StageRunRepo:
     """stage_run 表 CRUD 操作"""
@@ -285,6 +377,8 @@ class AgentRunRepo:
         raw_log_file: Optional[str],
         exit_code: Optional[int],
         error_message: Optional[str],
+        model_requested: Optional[str] = None,
+        model_used: Optional[str] = None,
         started_at: Optional[str],
         completed_at: Optional[str],
         duration_seconds: Optional[float],
@@ -292,13 +386,16 @@ class AgentRunRepo:
         await conn.execute(
             f"""
             INSERT INTO {self.TABLE} (id, stage_run_id, agent_name, provider, role,
-                                       status, output_file, raw_log_file, exit_code,
-                                       error_message, started_at, completed_at, duration_seconds)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                                        status, output_file, raw_log_file, exit_code,
+                                        error_message, model_requested, model_used,
+                                        started_at, completed_at, duration_seconds)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             ON CONFLICT (id) DO UPDATE SET
                 status = EXCLUDED.status,
                 exit_code = EXCLUDED.exit_code,
                 error_message = EXCLUDED.error_message,
+                model_requested = COALESCE(EXCLUDED.model_requested, {self.TABLE}.model_requested),
+                model_used = EXCLUDED.model_used,
                 completed_at = COALESCE(EXCLUDED.completed_at, {self.TABLE}.completed_at),
                 duration_seconds = EXCLUDED.duration_seconds,
                 output_file = COALESCE(EXCLUDED.output_file, {self.TABLE}.output_file),
@@ -314,6 +411,8 @@ class AgentRunRepo:
             raw_log_file,
             exit_code,
             error_message,
+            model_requested,
+            model_used,
             _to_dt(started_at),
             _to_dt(completed_at),
             duration_seconds,
@@ -418,6 +517,7 @@ async def save_report(report: RunReport, config: Optional[Dict[str, Any]] = None
             run_db_id = _run_db_id(report.run_id)
 
             ctx: Dict[str, Any] = {
+                "app_run_id": report.run_id,
                 "config_source": report.config_source,
                 "config_path": report.config_path,
                 "artifacts": report.artifacts,
@@ -475,6 +575,8 @@ async def save_report(report: RunReport, config: Optional[Dict[str, Any]] = None
                         raw_log_file=agent.raw_log_file,
                         exit_code=agent.exit_code,
                         error_message=agent.error_message,
+                        model_requested=getattr(agent, "model_requested", None),
+                        model_used=agent.model_used,
                         started_at=agent.started_at,
                         completed_at=agent.completed_at,
                         duration_seconds=agent.duration_seconds,
@@ -528,3 +630,104 @@ def save_report_sync(report: RunReport, config: Optional[Dict[str, Any]] = None)
                 pool.submit(lambda: asyncio.run(save_report(report, config))).result(timeout=30)
     except Exception:
         pass
+
+
+# ——————————————————————————————————————————————————————————————————————————————
+# API 层辅助：从 asyncpg 行记录转为 API 响应格式
+# ——————————————————————————————————————————————————————————————————————————————
+
+
+def _dt_to_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def run_row_to_summary(row: Dict[str, Any]) -> Dict[str, Any]:
+    """将 pipeline_run 行转为 list_runs 的摘要格式。"""
+    ctx = row.get("context") or {}
+    if isinstance(ctx, str):
+        try:
+            import json
+            ctx = json.loads(ctx)
+        except Exception:
+            ctx = {}
+    return {
+        "run_id": ctx.get("app_run_id") or row.get("id"),
+        "status": row.get("status"),
+        "pipeline": ctx.get("config_path"),
+        "output_dir": ctx.get("output_dir"),
+        "started_at": _dt_to_str(row.get("started_at")),
+        "completed_at": _dt_to_str(row.get("completed_at")),
+    }
+
+
+def run_detail_to_response(detail: Dict[str, Any]) -> Dict[str, Any]:
+    """将 get_run_with_details 的结果转为 API 响应格式。"""
+    ctx = detail.get("context") or {}
+    if isinstance(ctx, str):
+        try:
+            import json
+            ctx = json.loads(ctx)
+        except Exception:
+            ctx = {}
+    stages = []
+    for stage in detail.get("stages", []):
+        agents = []
+        for agent in stage.get("agents", []):
+            agents.append({
+                "agent_name": agent.get("agent_name"),
+                "provider": agent.get("provider"),
+                "role": agent.get("role"),
+                "model_requested": agent.get("model_requested"),
+                "model_used": agent.get("model_used"),
+                "status": agent.get("status"),
+                "started_at": _dt_to_str(agent.get("started_at")),
+                "completed_at": _dt_to_str(agent.get("completed_at")),
+                "duration_seconds": agent.get("duration_seconds"),
+                "output_file": agent.get("output_file"),
+                "exit_code": agent.get("exit_code"),
+                "error_message": agent.get("error_message"),
+            })
+        gates = []
+        for gate in stage.get("quality_gates", []):
+            gates.append({
+                "name": gate.get("gate_name"),
+                "type": gate.get("gate_type"),
+                "status": gate.get("status"),
+                "command": gate.get("command"),
+                "exit_code": gate.get("exit_code"),
+                "output": gate.get("output"),
+                "required": gate.get("required"),
+            })
+        stages.append({
+            "stage_id": stage.get("stage_id"),
+            "stage_name": stage.get("stage_name"),
+            "iteration": stage.get("iteration"),
+            "status": stage.get("status"),
+            "is_parallel": stage.get("is_parallel"),
+            "started_at": _dt_to_str(stage.get("started_at")),
+            "completed_at": _dt_to_str(stage.get("completed_at")),
+            "duration_seconds": stage.get("duration_seconds"),
+            "output_dir": stage.get("output_dir"),
+            "error_message": stage.get("error_message"),
+            "agents": agents,
+            "quality_gates": gates,
+        })
+    return {
+        "run_id": ctx.get("app_run_id") or detail.get("id"),
+        "status": detail.get("status"),
+        "project_root": detail.get("project_root"),
+        "requirement": detail.get("requirement"),
+        "worktree_path": detail.get("worktree_path"),
+        "config_source": ctx.get("config_source"),
+        "config_path": ctx.get("config_path"),
+        "started_at": _dt_to_str(detail.get("started_at")),
+        "completed_at": _dt_to_str(detail.get("completed_at")),
+        "duration_seconds": detail.get("duration_seconds"),
+        "error_message": detail.get("error_message"),
+        "artifacts": ctx.get("artifacts", []),
+        "stages": stages,
+    }

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import shutil
+import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from engine.config import (
     DEFAULT_CONFIG,
@@ -22,6 +22,32 @@ except ImportError:  # pragma: no cover
     BaseModel = object
 
 router = APIRouter() if APIRouter else None
+
+SENSITIVE_KEY_PATTERNS: List[re.Pattern] = [
+    re.compile(r"(api[_-]?key|apikey)", re.IGNORECASE),
+    re.compile(r"(secret|token|password|passwd|credential)", re.IGNORECASE),
+    re.compile(r"(auth[_-]?token|access[_-]?token)", re.IGNORECASE),
+    re.compile(r"(jwt[_-]?secret|signing[_-]?key)", re.IGNORECASE),
+]
+
+MASK = "***"
+
+
+def _mask_sensitive(value: Any, depth: int = 0) -> Any:
+    """递归脱敏：对 dict 中匹配敏感 key 模式的值替换为 ***。"""
+    if depth > 10:
+        return value
+    if isinstance(value, dict):
+        masked = {}
+        for k, v in value.items():
+            if isinstance(v, str) and len(v) > 0 and any(p.search(k) for p in SENSITIVE_KEY_PATTERNS):
+                masked[k] = MASK
+            else:
+                masked[k] = _mask_sensitive(v, depth + 1)
+        return masked
+    if isinstance(value, list):
+        return [_mask_sensitive(item, depth + 1) for item in value]
+    return value
 
 
 class SettingsUpdate(BaseModel):
@@ -74,57 +100,67 @@ def _structured_response(config: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _do_update(body: SettingsUpdate, workdir: str) -> Dict[str, Any]:
+    """共享的更新逻辑，POST 和 PUT 共用。"""
+    project_root = find_project_root(workdir)
+    config_path = _project_config_path(project_root)
+
+    if config_path.exists():
+        try:
+            existing = _safe_read_yaml(config_path)
+        except HTTPException:
+            raise
+        existing = normalize_config(existing)
+    else:
+        if DEFAULT_TEAM_FILE.exists():
+            try:
+                existing = _safe_read_yaml(DEFAULT_TEAM_FILE)
+            except HTTPException:
+                raise
+            existing = normalize_config(existing)
+        else:
+            existing = normalize_config(dict(DEFAULT_CONFIG))
+
+    updates = body.model_dump(exclude_none=True)
+    for key, value in updates.items():
+        if value is not None:
+            existing[key] = value
+
+    try:
+        normalize_config(existing)
+    except ConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    _safe_write_yaml(config_path, existing)
+    return {
+        "status": "saved",
+        "path": str(config_path),
+        "config": _mask_sensitive(_structured_response(existing)),
+    }
+
+
 if router:
 
     @router.get("/settings")
     def get_settings(workdir: str = Query(default=".")):
         project_root = find_project_root(workdir)
         loaded = load_config(project_root)
-        config = loaded.config
+        config = _structured_response(loaded.config)
+        config = _mask_sensitive(config)
         return {
             "source": loaded.source,
             "path": loaded.path,
             "warnings": loaded.warnings,
-            "config": _structured_response(config),
+            "config": config,
         }
+
+    @router.put("/settings")
+    def update_settings_put(body: SettingsUpdate, workdir: str = Query(default=".")):
+        return _do_update(body, workdir)
 
     @router.post("/settings")
     def update_settings(body: SettingsUpdate, workdir: str = Query(default=".")):
-        project_root = find_project_root(workdir)
-        config_path = _project_config_path(project_root)
-
-        if config_path.exists():
-            try:
-                existing = _safe_read_yaml(config_path)
-            except HTTPException:
-                raise
-            existing = normalize_config(existing)
-        else:
-            if DEFAULT_TEAM_FILE.exists():
-                try:
-                    existing = _safe_read_yaml(DEFAULT_TEAM_FILE)
-                except HTTPException:
-                    raise
-                existing = normalize_config(existing)
-            else:
-                existing = normalize_config(dict(DEFAULT_CONFIG))
-
-        updates = body.model_dump(exclude_none=True)
-        for key, value in updates.items():
-            if value is not None:
-                existing[key] = value
-
-        try:
-            normalize_config(existing)
-        except ConfigError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-        _safe_write_yaml(config_path, existing)
-        return {
-            "status": "saved",
-            "path": str(config_path),
-            "config": _structured_response(existing),
-        }
+        return _do_update(body, workdir)
 
     @router.post("/settings/reset")
     def reset_settings(workdir: str = Query(default=".")):

@@ -137,6 +137,8 @@ class AgentRunRecord(BaseModel):
     agent_name: str
     provider: str
     role: Optional[str] = None
+    model_requested: Optional[str] = None
+    model_used: Optional[str] = None
     status: str = "pending"
     output_file: Optional[str] = None
     raw_log_file: Optional[str] = None

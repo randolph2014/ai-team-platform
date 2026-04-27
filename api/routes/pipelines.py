@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +13,8 @@ try:
 except ImportError:  # pragma: no cover
     APIRouter = None
     BaseModel = object
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter() if APIRouter else None
 

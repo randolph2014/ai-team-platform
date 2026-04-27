@@ -411,5 +411,174 @@ class TestArtifactsRoutes(BaseRoutesTest):
         self.assertEqual(response.status_code, 404)
 
 
+class TestSettingsDesensitization(BaseRoutesTest):
+    """测试 settings GET 敏感字段脱敏"""
+
+    def test_get_settings_masks_sensitive_fields(self) -> None:
+        """GET /api/settings 对 api_key/secret/token 等字段脱敏"""
+        # 写入包含敏感字段的配置
+        from engine.config import normalize_config
+        config_path = self.project_root / ".ai" / "team.yaml"
+        config = normalize_config({
+            "providers": {
+                "Claude": {"cli": "claude", "api_key": "sk-super-secret-key"},
+                "OpenAI": {"cli": "openai", "secret_token": "tok-abc123"},
+            },
+            "agents": [],
+            "pipeline": [],
+        })
+        import yaml
+        config_path.write_text(yaml.safe_dump(config, allow_unicode=True), encoding="utf-8")
+
+        response = self.client.get("/api/settings", params={"workdir": str(self.project_root)})
+        self.assertEqual(response.status_code, 200)
+        providers = response.json()["config"]["providers"]
+        self.assertEqual(providers["Claude"]["api_key"], "***")
+        self.assertEqual(providers["OpenAI"]["secret_token"], "***")
+        # 非敏感字段不被脱敏
+        self.assertEqual(providers["Claude"]["cli"], "claude")
+
+    def test_get_settings_preserves_empty_sensitive_fields(self) -> None:
+        """GET /api/settings 空字符串的敏感字段不被脱敏为 ***"""
+        from engine.config import normalize_config
+        config_path = self.project_root / ".ai" / "team.yaml"
+        config = normalize_config({
+            "providers": {
+                "Claude": {"cli": "claude", "api_key": ""},
+            },
+            "agents": [],
+            "pipeline": [],
+        })
+        import yaml
+        config_path.write_text(yaml.safe_dump(config, allow_unicode=True), encoding="utf-8")
+
+        response = self.client.get("/api/settings", params={"workdir": str(self.project_root)})
+        self.assertEqual(response.status_code, 200)
+        providers = response.json()["config"]["providers"]
+        self.assertEqual(providers["Claude"]["api_key"], "")
+
+
+class TestSettingsPutEndpoint(BaseRoutesTest):
+    """测试 PUT /api/settings 端点"""
+
+    def test_put_settings_updates_config(self) -> None:
+        """PUT /api/settings 更新配置"""
+        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path.unlink()
+
+        response = self.client.put(
+            "/api/settings",
+            params={"workdir": str(self.project_root)},
+            json={"metadata": {"name": "put-test-project"}},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "saved")
+        self.assertTrue(config_path.exists())
+
+    def test_put_settings_same_as_post(self) -> None:
+        """PUT 和 POST 返回一致的结果"""
+        body = {"metadata": {"version": "3.0"}}
+        put_resp = self.client.put(
+            "/api/settings",
+            params={"workdir": str(self.project_root)},
+            json=body,
+        )
+        post_resp = self.client.post(
+            "/api/settings",
+            params={"workdir": str(self.project_root)},
+            json=body,
+        )
+        self.assertEqual(put_resp.status_code, post_resp.status_code)
+        self.assertEqual(put_resp.json()["status"], post_resp.json()["status"])
+
+    def test_put_response_masks_sensitive_fields(self) -> None:
+        """PUT /api/settings 响应中敏感字段被脱敏"""
+        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path.unlink()
+
+        response = self.client.put(
+            "/api/settings",
+            params={"workdir": str(self.project_root)},
+            json={
+                "providers": {
+                    "Claude": {"cli": "claude", "api_key": "sk-should-be-masked"},
+                },
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        providers = response.json()["config"]["providers"]
+        self.assertEqual(providers["Claude"]["api_key"], "***")
+
+
+class TestRunsPagination(BaseRoutesTest):
+    """测试 runs 分页参数"""
+
+    def test_list_runs_with_pagination_params(self) -> None:
+        """GET /api/runs 支持 page/size 分页参数"""
+        response = self.client.get(
+            "/api/runs",
+            params={"workdir": str(self.project_root), "page": 1, "size": 5},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.json(), list)
+
+
+class TestRunsFallbackToFilesystem(BaseRoutesTest):
+    """测试 runs 在无 DB 环境下的文件系统 fallback"""
+
+    def test_get_run_from_filesystem(self) -> None:
+        """GET /api/runs/{id} 从文件系统读取报告"""
+        import json
+        from engine.models import RunReport, StageRun
+
+        output_dir = self.project_root / ".ai" / "team-output" / "fs-test-run"
+        output_dir.mkdir(parents=True)
+
+        report = RunReport(
+            run_id="fs-test-run",
+            status="completed",
+            requirement="测试需求",
+            project_root=str(self.project_root),
+            output_dir=str(output_dir),
+            config_source="project",
+            stages=[
+                StageRun(stage_id="develop", stage_name="Develop", status="completed", agents=[])
+            ],
+        )
+        report.write(output_dir / "report.json")
+
+        response = self.client.get("/api/runs/fs-test-run", params={"workdir": str(self.project_root)})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["run_id"], "fs-test-run")
+        self.assertEqual(data["status"], "completed")
+        self.assertEqual(len(data["stages"]), 1)
+
+    def test_list_runs_from_filesystem(self) -> None:
+        """GET /api/runs 从文件系统扫描返回列表"""
+        import json
+        from engine.models import RunReport
+
+        output_dir = self.project_root / ".ai" / "team-output" / "list-fs-run"
+        output_dir.mkdir(parents=True)
+
+        report = RunReport(
+            run_id="list-fs-run",
+            status="completed",
+            requirement="测试",
+            project_root=str(self.project_root),
+            output_dir=str(output_dir),
+            config_source="default",
+        )
+        report.write(output_dir / "report.json")
+
+        response = self.client.get("/api/runs", params={"workdir": str(self.project_root)})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        run_ids = [r["run_id"] for r in data]
+        self.assertIn("list-fs-run", run_ids)
+
+
 if __name__ == "__main__":
     unittest.main()
