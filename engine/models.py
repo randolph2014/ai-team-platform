@@ -43,12 +43,15 @@ class AgentDefinition(BaseModel):
     role: Optional[str] = None
     prompt: Optional[str] = None
     timeout: Optional[int] = None
+    model: Optional[str] = None
+    fallback_models: List[str] = Field(default_factory=list)
 
 
 class AgentRun(BaseModel):
     agent_name: str
     provider: str
     role: Optional[str] = None
+    model_used: Optional[str] = None
     status: AgentStatus = "pending"
     started_at: Optional[str] = None
     completed_at: Optional[str] = None

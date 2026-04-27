@@ -38,7 +38,7 @@ def resolve_auto_cli() -> Optional[str]:
     return None
 
 
-def build_command(provider: Dict[str, Any], prompt: str) -> Tuple[List[str], str, str]:
+def build_command(provider: Dict[str, Any], prompt: str, model: Optional[str] = None) -> Tuple[List[str], str, str]:
     cli = provider.get("cli", "auto")
     if cli == "auto":
         cli = resolve_auto_cli()
@@ -49,6 +49,11 @@ def build_command(provider: Dict[str, Any], prompt: str) -> Tuple[List[str], str
     args = list(provider.get("args") or DEFAULT_PROVIDER_ARGS.get(cli, []))
     prompt_mode = provider.get("prompt_mode") or DEFAULT_PROMPT_MODE.get(cli, "stdin")
     command = [cli] + args
+    if model:
+        if cli == "codex":
+            command.extend(["-m", model])
+        else:
+            command.extend(["--model", model])
     if prompt_mode == "arg":
         command.append(prompt)
     return command, cli, prompt_mode
@@ -89,13 +94,74 @@ class AgentRunner:
         raw_log_file: Path,
     ) -> AgentRun:
         self._last_prompt = prompt
-        started = time.monotonic()
+        overall_start = time.monotonic()
         timeout = agent.timeout or self.runner_config.get("agent_timeout_seconds") or 1800
         heartbeat_seconds = int(self.runner_config.get("heartbeat_seconds") or 0)
+
+        primary_model = agent.model or provider.get("default_model")
+        models_to_try: List[Optional[str]] = []
+        if primary_model:
+            models_to_try.append(primary_model)
+        models_to_try.extend(agent.fallback_models)
+        if not models_to_try:
+            models_to_try = [None]
+
+        last_run: Optional[AgentRun] = None
+        remaining_models = list(models_to_try)
+        for model in models_to_try:
+            remaining_models.pop(0)
+            elapsed = time.monotonic() - overall_start
+            remaining_timeout = max(int(timeout - elapsed), 1)
+
+            agent_run = self._try_model(
+                run_id=run_id,
+                stage_id=stage_id,
+                agent=agent,
+                provider=provider,
+                prompt=prompt,
+                cwd=cwd,
+                output_file=output_file,
+                raw_log_file=raw_log_file,
+                model=model,
+                timeout=remaining_timeout,
+                heartbeat_seconds=heartbeat_seconds,
+            )
+            if agent_run.status == "completed":
+                return self._complete(agent_run, overall_start, run_id, stage_id)
+            if remaining_models:
+                self.bus.emit(
+                    "agent:fallback",
+                    run_id,
+                    stage_id=stage_id,
+                    agent_name=agent.name,
+                    failed_model=model,
+                    next_model=remaining_models[0],
+                    error=agent_run.error_message,
+                )
+            last_run = agent_run
+
+        return self._complete(last_run, overall_start, run_id, stage_id)
+
+    def _try_model(
+        self,
+        run_id: str,
+        stage_id: str,
+        agent: AgentDefinition,
+        provider: Dict[str, Any],
+        prompt: str,
+        cwd: Path,
+        output_file: Path,
+        raw_log_file: Path,
+        model: Optional[str],
+        timeout: int,
+        heartbeat_seconds: int,
+    ) -> AgentRun:
+        attempt_start = time.monotonic()
         agent_run = AgentRun(
             agent_name=agent.name,
             provider=agent.provider,
             role=agent.role,
+            model_used=model,
             status="running",
             started_at=utc_now(),
             output_file=str(output_file),
@@ -104,7 +170,7 @@ class AgentRunner:
         self.bus.emit("agent:started", run_id, stage_id=stage_id, agent_name=agent.name, provider=agent.provider)
 
         try:
-            command, cli, prompt_mode = build_command(provider, prompt)
+            command, cli, prompt_mode = build_command(provider, prompt, model=model)
             if cli == "mock":
                 content = provider.get("response") or f"Mock agent `{agent.name}` completed stage `{stage_id}`."
                 output_file.write_text(content + "\n", encoding="utf-8")
@@ -112,7 +178,7 @@ class AgentRunner:
                 agent_run.status = "completed"
                 agent_run.exit_code = 0
                 self.bus.emit("agent:output", run_id, stage_id=stage_id, agent_name=agent.name, text=content)
-                return self._complete(agent_run, started, run_id, stage_id)
+                return agent_run
 
             output_file.parent.mkdir(parents=True, exist_ok=True)
             raw_log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -138,7 +204,7 @@ class AgentRunner:
                     while not heartbeat_stop.wait(heartbeat_seconds):
                         if heartbeat_seconds <= 0:
                             return
-                        elapsed = int(time.monotonic() - started)
+                        elapsed = int(time.monotonic() - attempt_start)
                         idle = int(time.monotonic() - last_output)
                         self.bus.emit(
                             "agent:heartbeat",
@@ -178,7 +244,7 @@ class AgentRunner:
                                     final_output.write(decoded + "\n")
                                     self.bus.emit("agent:output", run_id, stage_id=stage_id, agent_name=agent.name, text=decoded)
                             break
-                        if time.monotonic() - started > timeout:
+                        if time.monotonic() - attempt_start > timeout:
                             timed_out = True
                             process.terminate()
                             try:
@@ -209,7 +275,7 @@ class AgentRunner:
             raw_log_file.parent.mkdir(parents=True, exist_ok=True)
             raw_log_file.write_text(f"ERROR: {exc}\n", encoding="utf-8")
 
-        return self._complete(agent_run, started, run_id, stage_id)
+        return agent_run
 
     def _complete(self, agent_run: AgentRun, started: float, run_id: str, stage_id: str) -> AgentRun:
         agent_run.completed_at = utc_now()
@@ -246,9 +312,7 @@ class AgentRunner:
         completion_tokens = estimate_tokens(output_text)
 
         provider_config = self.config.get("providers", {}).get(agent_run.provider, {})
-        model = provider_config.get("model") if isinstance(provider_config, dict) else "default"
-        if not model:
-            model = "default"
+        model = agent_run.model_used or (provider_config.get("model") if isinstance(provider_config, dict) else None) or "default"
 
         self.cost_tracker.track_usage(
             run_id=run_id,
