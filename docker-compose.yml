@@ -6,6 +6,7 @@ services:
     command: ["ai-team", "serve", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       AI_TEAM_DB_URL: postgresql://ai_team:ai_team@postgres:5432/ai_team
+      AI_TEAM_REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
     volumes:
@@ -13,6 +14,7 @@ services:
       - ai-team-output:/app/.ai/team-output
     depends_on:
       - postgres
+      - redis
 
   web:
     build:
@@ -22,6 +24,21 @@ services:
       - "5173:80"
     depends_on:
       - api
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    command: ["python", "-m", "engine.tasks"]
+    environment:
+      AI_TEAM_DB_URL: postgresql://ai_team:ai_team@postgres:5432/ai_team
+      AI_TEAM_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - .:/app
+      - ai-team-output:/app/.ai/team-output
 
   postgres:
     image: postgres:17
@@ -35,6 +52,12 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./persistence/migrations/001_init.up.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
 
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+
 volumes:
   ai-team-output:
   postgres-data:
+  redis-data:

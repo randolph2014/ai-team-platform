@@ -1,10 +1,9 @@
 import { FileText } from 'lucide-react';
-import { terminalLines } from '../lib/mockData';
 import type { RunReport, StageRun } from '../lib/types';
 import { StatusBadge } from './StatusBadge';
 
 function StageCard({ stage, liveLines }: { stage: StageRun; liveLines: string[] }) {
-  const lines = liveLines.length > 0 ? liveLines : terminalLines;
+  const lines = liveLines;
   return (
     <section className={`stageCard stage-${stage.status}`}>
       <header className="stageHeader">

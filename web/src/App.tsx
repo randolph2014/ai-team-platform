@@ -26,6 +26,7 @@ function navigate(path: string) {
 export function App() {
   const [route, setRoute] = useState(currentRoute());
   const [modalOpen, setModalOpen] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     const listener = () => setRoute(currentRoute());
@@ -67,7 +68,7 @@ export function App() {
         {route.route === 'pipelines' && <Pipelines />}
         {route.route === 'settings' && <Settings />}
       </main>
-      <NewRunModal open={modalOpen} onClose={() => setModalOpen(false)} />
+      <NewRunModal open={modalOpen} onClose={() => setModalOpen(false)} onRefreshNeeded={() => setRefreshKey((k) => k + 1)} />
     </div>
   );
 }
