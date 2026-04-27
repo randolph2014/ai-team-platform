@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from .agent_runner import AgentRunner
+from .code_applier import CodeApplier
 from .config import (
     ConfigError,
     agent_map,
@@ -145,6 +146,9 @@ class Orchestrator:
                 elif stage.get("type") == "human_review":
                     stage_run = self._run_human_review_stage(stage, report, output_dir, yes=yes)
                     stage_runs_to_append = [stage_run]
+                elif stage.get("type") == "code_apply":
+                    stage_run = self._run_code_apply_stage(stage, report, output_dir, worktree_path)
+                    stage_runs_to_append = [stage_run]
                 else:
                     cwd = self._stage_cwd(stage_id, worktree_path)
                     stage_run = self._run_agent_stage(stage, report, output_dir, cwd, extra_feedback)
@@ -182,17 +186,7 @@ class Orchestrator:
                         to_stage=target,
                         iteration=count + 1,
                     )
-                    max_feedback_chars = int(self.config.get("runner", {}).get("max_loopback_feedback_chars") or 20000)
-                    truncated_output = output_content[:max_feedback_chars]
-                    if len(output_content) > max_feedback_chars:
-                        truncated_output += "\n\n[truncated]"
-                    extra_feedback = (
-                        f"## Loopback feedback\n\n"
-                        f"Stage `{stage_id}` (iteration {count}) failed and triggered loopback to `{target}`.\n\n"
-                        f"### {stage_id} output\n\n"
-                        f"```text\n{truncated_output}\n```\n\n"
-                        f"请根据以上输出修复问题，只修改必要的部分。"
-                    )
+                    extra_feedback = self._render_loopback_feedback(stage_id, stage_run, count, target)
                     feedback_file = output_dir / f"loopback-feedback-{stage_id}-{count}.md"
                     feedback_file.write_text(extra_feedback, encoding="utf-8")
                     self._write_report(report, output_dir)
@@ -229,9 +223,39 @@ class Orchestrator:
     def _stage_cwd(self, stage_id: str, worktree_path: Optional[Path]) -> Path:
         if not worktree_path:
             return self.project_root
-        if stage_id in {"plan", "architect", "context"}:
+        if stage_id in {"plan", "architect", "context", "code_apply"}:
             return self.project_root
         return worktree_path
+
+    def _run_code_apply_stage(self, stage: Dict[str, Any], report: RunReport, output_dir: Path, worktree_path: Optional[Path]) -> StageRun:
+        stage_id = stage.get("id", "code_apply")
+        stage_run = StageRun(stage_id=stage_id, stage_name=stage.get("name", stage_id), status="running", type="code_apply", started_at=utc_now())
+        start = time.monotonic()
+        self.bus.emit("stage:started", report.run_id, stage_id=stage_id, stage_name=stage_run.stage_name, iteration=stage_run.iteration)
+        apply_root = worktree_path or self.project_root
+        source_files = stage.get("input") or ["tech-lead-output.md"]
+        source_files = _as_list(source_files)
+        applier = CodeApplier(apply_root)
+        total_changes = 0
+        try:
+            for source_name in source_files:
+                source_path = output_dir / source_name
+                if not source_path.exists():
+                    continue
+                content = source_path.read_text(encoding="utf-8")
+                changes = applier.apply(content)
+                total_changes += len(changes)
+                for change in changes:
+                    self.bus.emit("agent:output", report.run_id, stage_id=stage_id, agent_name="code-applier", text=f"[{change.action}] {change.filepath} ({change.lines} lines)")
+            stage_run.status = "completed"
+            stage_run.output_dir = str(output_dir)
+        except Exception as exc:
+            stage_run.status = "failed"
+            stage_run.error_message = str(exc)
+        stage_run.completed_at = utc_now()
+        stage_run.duration_seconds = _duration(start)
+        self.bus.emit("stage:completed", report.run_id, stage_id=stage_id, status=stage_run.status, duration=stage_run.duration_seconds)
+        return stage_run
 
     def _run_context_stage(self, stage: Dict[str, Any], report: RunReport, output_dir: Path, worktree_path: Optional[Path]) -> StageRun:
         stage_id = stage.get("id", "context")
@@ -328,6 +352,41 @@ class Orchestrator:
         stage_run.duration_seconds = _duration(start)
         self.bus.emit("stage:completed", report.run_id, stage_id=stage_id, status=stage_run.status, duration=stage_run.duration_seconds)
         return stage_run
+
+    def _render_loopback_feedback(self, stage_id: str, stage_run: StageRun, retry_count: int, target: str) -> str:
+        max_chars = int(self.config.get("runner", {}).get("max_loopback_feedback_chars") or 20000)
+        lines = [f"## Loopback 反馈（第 {retry_count} 次重试）", ""]
+        lines.append(f"Stage `{stage_id}` 触发了回退到 `{target}`。以下是该 stage 各 agent 的详细输出：")
+        used_chars = 0
+        for agent in stage_run.agents:
+            lines.extend([
+                "",
+                f"### Agent: {agent.agent_name}",
+                f"- Provider: {agent.provider}",
+                f"- 状态: {agent.status}",
+            ])
+            if agent.error_message:
+                lines.append(f"- 错误: {agent.error_message}")
+            if agent.output_file:
+                path = Path(agent.output_file)
+                if path.exists():
+                    remaining = max_chars - used_chars
+                    if remaining <= 0:
+                        lines.append("\n[...达到反馈上限，后续 agent 输出已省略]")
+                        break
+                    content = path.read_text(encoding="utf-8", errors="replace")
+                    if len(content) > remaining:
+                        content = content[:remaining] + "\n\n[...truncated]"
+                    used_chars += len(content)
+                    lines.extend(["", "```text", content, "```"])
+        if not stage_run.agents:
+            fallback = self._stage_output_text(stage_run)
+            if fallback:
+                if len(fallback) > max_chars:
+                    fallback = fallback[:max_chars] + "\n\n[...truncated]"
+                lines.extend(["", "```text", fallback, "```"])
+        lines.extend(["", "请根据以上反馈修复问题，只修改必要的部分，不要改动已通过的文件。"])
+        return "\n".join(lines)
 
     def _run_develop_quality_loop(
         self,

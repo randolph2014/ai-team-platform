@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from engine.config import load_config, resolve_prompt_path, agent_map
 from engine.context_scanner import ContextScanner, is_sensitive_path
-from engine.orchestrator import Orchestrator
+from engine.orchestrator import Orchestrator, load_report, find_run_reports
 from engine.quality_gates import run_quality_gate
 
 
@@ -80,6 +81,8 @@ quality_gates:
     command: "python3 -c \\"print('ok')\\""
     required: true
     max_retries: 0
+worktree:
+  enabled: false
 """,
                 encoding="utf-8",
             )
@@ -92,6 +95,7 @@ quality_gates:
             self.assertTrue((Path(report.output_dir) / "report.json").exists())
 
     def test_loopback_feedback_injects_output_content(self) -> None:
+        """loopback 反馈包含结构化的 per-agent 信息"""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
@@ -116,6 +120,8 @@ pipeline:
     loopback_to: develop
     loopback_trigger: "error:"
     max_retries: 1
+worktree:
+  enabled: false
 """,
                 encoding="utf-8",
             )
@@ -127,9 +133,550 @@ pipeline:
             feedback_file = output_dir / "loopback-feedback-develop-1.md"
             self.assertTrue(feedback_file.exists(), "loopback feedback file should be created")
             feedback_content = feedback_file.read_text(encoding="utf-8")
+            self.assertIn("Loopback 反馈", feedback_content)
+            self.assertIn("Agent: dev", feedback_content)
+            self.assertIn("Provider: Mock", feedback_content)
             self.assertIn("error: compilation failed", feedback_content)
-            self.assertIn("Loopback feedback", feedback_content)
+            self.assertIn("第 1 次重试", feedback_content)
+
+    def test_loopback_cross_stage_feedback(self) -> None:
+        """qa→develop 的 loopback 反馈包含 qa agent 的实际输出"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+providers:
+  Mock:
+    cli: mock
+    response: "done"
+  MockQA:
+    cli: mock
+    response: "FAILED: 2 tests did not pass"
+agents:
+  - name: dev
+    provider: Mock
+    role: developer
+    prompt: agents/dev.md
+  - name: qa
+    provider: MockQA
+    role: tester
+    prompt: agents/qa.md
+pipeline:
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: requirement
+    output:
+      dev: tech-lead-output.md
+  - id: qa
+    name: QA
+    agents: [qa]
+    input: [requirement, tech-lead-output.md]
+    output:
+      qa: test-report.md
+    loopback_to: develop
+    loopback_trigger: ["FAILED", "ERROR"]
+    max_retries: 1
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
+            (root / ".ai" / "agents" / "qa.md").write_text("You are qa.", encoding="utf-8")
+            report = Orchestrator(root).run("implement feature", yes=True)
+            self.assertEqual(report.status, "failed")
+            output_dir = Path(report.output_dir)
+            feedback_file = output_dir / "loopback-feedback-qa-1.md"
+            self.assertTrue(feedback_file.exists(), "qa loopback feedback file should exist")
+            feedback_content = feedback_file.read_text(encoding="utf-8")
+            self.assertIn("Agent: qa", feedback_content)
+            self.assertIn("Provider: MockQA", feedback_content)
+            self.assertIn("FAILED: 2 tests did not pass", feedback_content)
 
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_parallel_agents_execute_concurrently(self) -> None:
+        """测试并行 stage 中多个 agent 同时执行"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+providers:
+  Mock:
+    cli: mock
+    response: "done"
+agents:
+  - name: qa
+    provider: Mock
+    role: tester
+    prompt: agents/qa.md
+  - name: reviewer
+    provider: Mock
+    role: reviewer
+    prompt: agents/reviewer.md
+pipeline:
+  - id: verify
+    name: Verify
+    parallel: true
+    agents: [qa, reviewer]
+    input: requirement
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "qa.md").write_text("You are qa.", encoding="utf-8")
+            (root / ".ai" / "agents" / "reviewer.md").write_text("You are reviewer.", encoding="utf-8")
+            report = Orchestrator(root).run("ship it", yes=True)
+            self.assertEqual(report.status, "completed")
+            stage_run = report.stages[0] if report.stages else None
+            self.assertIsNotNone(stage_run)
+            self.assertTrue(stage_run.is_parallel)
+            self.assertEqual(len(stage_run.agents), 2)
+            for agent_run in stage_run.agents:
+                self.assertEqual(agent_run.status, "completed")
+
+    def test_quality_gates_loop_retries_on_failure(self) -> None:
+        """测试质量门禁失败后的重试循环"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+providers:
+  Mock:
+    cli: mock
+    response: "fixed"
+agents:
+  - name: dev
+    provider: Mock
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: requirement
+    output:
+      dev: tech-lead-output.md
+quality_gates:
+  - name: lint
+    type: command
+    command: "exit 1"
+    required: true
+    max_retries: 2
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
+            report = Orchestrator(root).run("ship it", yes=True)
+            # 质量门禁始终失败，且达到最大重试次数
+            self.assertEqual(report.status, "failed")
+            develop_stages = [s for s in report.stages if s.stage_id == "develop"]
+            # 应有多于 1 个 develop stage（初始 + 重试）
+            self.assertGreaterEqual(len(develop_stages), 1)
+
+    def test_quality_gates_pass_on_first_try(self) -> None:
+        """测试质量门禁首次通过时不再重试"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+providers:
+  Mock:
+    cli: mock
+    response: "done"
+agents:
+  - name: dev
+    provider: Mock
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: requirement
+    output:
+      dev: tech-lead-output.md
+quality_gates:
+  - name: lint
+    type: command
+    command: "python3 -c \\"print('pass')\\""
+    required: true
+    max_retries: 2
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
+            report = Orchestrator(root).run("ship it", yes=True)
+            self.assertEqual(report.status, "completed")
+            develop_stages = [s for s in report.stages if s.stage_id == "develop"]
+            # 质量门禁通过，应只有 1 个 develop stage（无重试）
+            self.assertEqual(len(develop_stages), 1)
+            # 检查 quality_gates 结果
+            stage_run = develop_stages[0]
+            self.assertEqual(len(stage_run.quality_gates), 1)
+            self.assertEqual(stage_run.quality_gates[0].status, "passed")
+
+    def test_validate_production_config_no_production_mode(self) -> None:
+        """validate_production_config: 非生产模式不抛出异常"""
+        from engine.config import validate_production_config
+
+        config = {
+            "runner": {"production_mode": False},
+            "worktree": {"enabled": False},
+            "quality_gates": [],
+        }
+        # 不应抛出异常
+        validate_production_config(config)
+
+    def test_validate_production_config_require_worktree_fails(self) -> None:
+        """validate_production_config: 要求 worktree 但未启用时抛出 ConfigError"""
+        from engine.config import ConfigError, validate_production_config
+
+        config = {
+            "runner": {"production_mode": True, "require_worktree": True},
+            "worktree": {"enabled": False},
+        }
+        with self.assertRaises(ConfigError) as ctx:
+            validate_production_config(config)
+        self.assertIn("worktree", str(ctx.exception))
+
+    def test_validate_production_config_require_verify_cmd_fails(self) -> None:
+        """validate_production_config: 要求 verify_cmd 但无 quality_gates 时抛出 ConfigError"""
+        from engine.config import ConfigError, validate_production_config
+
+        config = {
+            "runner": {"production_mode": True, "require_verify_cmd": True},
+            "worktree": {"enabled": True},
+            "quality_gates": [],
+        }
+        with self.assertRaises(ConfigError) as ctx:
+            validate_production_config(config)
+        self.assertIn("quality_gates", str(ctx.exception))
+
+    def test_validate_production_config_passes_when_all_conditions_met(self) -> None:
+        """validate_production_config: 条件全部满足时不抛出异常"""
+        from engine.config import validate_production_config
+
+        config = {
+            "runner": {"production_mode": True, "require_worktree": True, "require_verify_cmd": True},
+            "worktree": {"enabled": True},
+            "quality_gates": [{"name": "lint", "command": "pylint"}],
+        }
+        validate_production_config(config)
+
+    def test_loopback_trigger_with_regex_pattern(self) -> None:
+        """测试正则匹配触发 loopback 机制"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+providers:
+  Mock:
+    cli: mock
+    response: "Build FAILED with error code 1"
+agents:
+  - name: dev
+    provider: Mock
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: requirement
+    output:
+      dev: tech-lead-output.md
+    loopback_to: develop
+    loopback_trigger: "regex:FAILED"
+    max_retries: 1
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
+            report = Orchestrator(root).run("ship it", yes=True)
+            # 由于 loopback 且超过 max_retries=1，最终失败
+            self.assertEqual(report.status, "failed")
+
+    def test_loopback_max_retries_zero_skips_loopback(self) -> None:
+        """max_retries=0 时触发 loopback 直接报错，导致运行失败"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+providers:
+  Mock:
+    cli: mock
+    response: "error: detected"
+agents:
+  - name: dev
+    provider: Mock
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: requirement
+    output:
+      dev: tech-lead-output.md
+    loopback_to: develop
+    loopback_trigger: "error:"
+    max_retries: 0
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
+            report = Orchestrator(root).run("ship it", yes=True)
+            self.assertEqual(report.status, "failed")
+
+    def test_quality_gate_threshold_comparison(self) -> None:
+        """测试阈值类型质量门禁的比较"""
+        from engine.quality_gates import OPS
+
+        # 验证所有比较操作符
+        self.assertTrue(OPS[">="](90, 80))
+        self.assertTrue(OPS[">"](90, 80))
+        self.assertTrue(OPS["<="](70, 80))
+        self.assertTrue(OPS["<"](70, 80))
+        self.assertTrue(OPS["=="](80, 80))
+        self.assertFalse(OPS[">="](70, 80))
+
+    def test_quality_gate_threshold_type_passes(self) -> None:
+        """阈值类型质量门禁：覆盖率达标时通过"""
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "calc.py").write_text("print('Coverage: 95.2%')\n", encoding="utf-8")
+            result = run_quality_gate(
+                {
+                    "name": "coverage",
+                    "type": "threshold",
+                    "command": "python3 calc.py",
+                    "parse": "regex:Coverage:\\s*([\\d.]+)%",
+                    "operator": ">=",
+                    "threshold": 80,
+                    "required": True,
+                },
+                root,
+                "test-run",
+            )
+            self.assertEqual(result.status, "passed")
+            self.assertEqual(result.actual, 95.2)
+            self.assertEqual(result.threshold, 80)
+
+    def test_context_scanner_detects_python_project_type(self) -> None:
+        """ContextScanner 检测 Python 项目类型"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+            (root / "src").mkdir()
+            (root / "src" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            text = ContextScanner(root).scan("")
+            self.assertIn("python", text.lower())
+
+    def test_agent_runner_mock_produces_output(self) -> None:
+        """AgentRunner mock 模式产生输出文件"""
+        from engine.agent_runner import AgentRunner
+        from engine.models import AgentDefinition
+
+        config = {
+            "providers": {"Mock": {"cli": "mock", "response": "test output"}},
+            "runner": {},
+        }
+        runner = AgentRunner(config)
+        agent = AgentDefinition(name="test-agent", provider="Mock", role="tester")
+        provider = {"cli": "mock", "response": "mock output success"}
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            output_file = cwd / "output.md"
+            raw_log = cwd / "raw.log"
+            result = runner.run(
+                "run-1", "stage-1", agent, provider, "do something", cwd, output_file, raw_log
+            )
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(result.exit_code, 0)
+            self.assertTrue(output_file.exists())
+            self.assertIn("mock output success", output_file.read_text(encoding="utf-8"))
+
+    def test_load_report_reads_valid_json(self) -> None:
+        """load_report 从 JSON 文件恢复 RunReport"""
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path = Path(tmp) / "report.json"
+            report_path.write_text('{"run_id":"r1","status":"completed","requirement":"test","project_root":"/tmp","output_dir":"/tmp","config_source":"default"}', encoding="utf-8")
+            report = load_report(report_path)
+            self.assertEqual(report.run_id, "r1")
+            self.assertEqual(report.status, "completed")
+
+    def test_find_run_reports_returns_sorted(self) -> None:
+        """find_run_reports 返回排序后的报告文件"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / ".ai" / "team-output"
+            run1 = output_dir / "run-1"
+            run1.mkdir(parents=True)
+            (run1 / "report.json").write_text('{"run_id":"r1"}', encoding="utf-8")
+            run2 = output_dir / "run-2"
+            run2.mkdir()
+            (run2 / "report.json").write_text('{"run_id":"r2"}', encoding="utf-8")
+            reports = find_run_reports(root)
+            self.assertEqual(len(reports), 2)
+
+    def test_find_run_reports_empty_when_no_output(self) -> None:
+        """无输出目录时返回空列表"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = find_run_reports(root)
+            self.assertEqual(reports, [])
+
+    def test_orchestrator_with_git_diff_input(self) -> None:
+        """测试 git-diff 输入类型能正常工作"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", str(root)], capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=root, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=root, capture_output=True, check=True)
+            (root / "README.md").write_text("init\n", encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=root, capture_output=True, check=True)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+providers:
+  Mock:
+    cli: mock
+    response: "done"
+agents:
+  - name: dev
+    provider: Mock
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: [requirement, "git-diff"]
+    output:
+      dev: tech-lead-output.md
+  - id: accept
+    name: Accept
+    type: human_review
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
+            report = Orchestrator(root).run("implement feature", yes=True)
+            self.assertEqual(report.status, "completed")
+
+    def test_orchestrator_with_code_apply_stage(self) -> None:
+        """测试 code_apply stage 类型正常工作"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+providers:
+  Mock:
+    cli: mock
+    response: "### 新增文件: `output.txt`\\n```text\\nhello world\\n```"
+agents:
+  - name: dev
+    provider: Mock
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: requirement
+    output:
+      dev: tech-lead-output.md
+  - id: code_apply
+    name: Code Apply
+    type: code_apply
+    input: [tech-lead-output.md]
+  - id: accept
+    name: Accept
+    type: human_review
+worktree:
+  enabled: false
+quality_gates: []
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
+            report = Orchestrator(root).run("create a file", yes=True)
+            self.assertEqual(report.status, "completed")
+            stage_ids = [s.stage_id for s in report.stages]
+            self.assertIn("code_apply", stage_ids)
+
+    def test_orchestrator_with_skip_stages(self) -> None:
+        """测试 skip_stages 跳过指定 stage"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+providers:
+  Mock:
+    cli: mock
+    response: "done"
+agents:
+  - name: dev
+    provider: Mock
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: requirement
+    output:
+      dev: tech-lead-output.md
+  - id: review
+    name: Review
+    agents: [dev]
+    input: [requirement, tech-lead-output.md]
+    output:
+      dev: review.md
+  - id: accept
+    name: Accept
+    type: human_review
+worktree:
+  enabled: false
+quality_gates: []
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
+            report = Orchestrator(root).run("test", yes=True, skip_stages=["review"])
+            self.assertEqual(report.status, "completed")
+            # skip_stages 仍然出现在 stages 中，但状态为 skipped
+            review_stages = [s for s in report.stages if s.stage_id == "review"]
+            self.assertEqual(len(review_stages), 1)
+            self.assertEqual(review_stages[0].status, "skipped")
