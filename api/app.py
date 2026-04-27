@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from .runtime import active_runs, event_store, run_projects
+from .runtime import event_store
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,11 @@ def create_app():
         raise RuntimeError("FastAPI is not installed. Install project dependencies first.") from exc
 
     from .routes.artifacts import router as artifacts_router
+    from .routes.config import router as config_router
+    from .routes.costs import router as costs_router
+    from .routes.pipelines import router as pipelines_router
     from .routes.runs import router as runs_router
+    from .routes.settings import router as settings_router
     from .ws import router as ws_router
 
     app = FastAPI(title="AI Team Platform", version="0.1.0", lifespan=_lifespan)
@@ -46,10 +50,22 @@ def create_app():
         allow_headers=["*"],
     )
     app.state.event_store = event_store
-    app.state.active_runs = active_runs
-    app.state.run_projects = run_projects
+
+    # ---- Auth routes (must be registered before auth-dependent routes) ----
+    from .auth import auth_enabled, handle_login
+
+    @app.post("/api/auth/login")
+    async def login(api_key: str):
+        """Exchange an API key for a JWT access token."""
+        return await handle_login(api_key)
+
+    # ---- Application routes ----
     app.include_router(runs_router, prefix="/api")
     app.include_router(artifacts_router, prefix="/api")
+    app.include_router(config_router, prefix="/api")
+    app.include_router(costs_router, prefix="/api")
+    app.include_router(pipelines_router, prefix="/api")
+    app.include_router(settings_router, prefix="/api")
     app.include_router(ws_router)
 
     @app.get("/health")

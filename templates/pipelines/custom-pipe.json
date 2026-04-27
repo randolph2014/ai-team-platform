@@ -1,0 +1,8 @@
+{
+  "id": "custom-pipe",
+  "name": "自定义流水线",
+  "description": "测试用流水线",
+  "yaml_config": {
+    "stages": []
+  }
+}

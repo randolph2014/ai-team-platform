@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Optional
 
 from .runtime import event_store
 
@@ -9,21 +10,35 @@ try:
 except ImportError:  # pragma: no cover
     APIRouter = None
 
-
 router = APIRouter() if APIRouter else None
 
 
 if router:
 
     @router.websocket("/ws/runs/{run_id}")
-    async def run_events(websocket: WebSocket, run_id: str):
+    async def run_events(websocket: WebSocket, run_id: str, token: Optional[str] = None):
+        # Authenticate WebSocket via query param ?token=xxx
+        try:
+            from ..auth import verify_ws_token
+
+            await verify_ws_token(token)
+        except Exception:
+            await websocket.accept()
+            await websocket.close(code=4001, reason="Unauthorized")
+            return
+
         await websocket.accept()
         for event in event_store.history(run_id):
-            await websocket.send_json(event.model_dump(mode="json"))
+            try:
+                await websocket.send_json(event.model_dump(mode="json"))
+            except Exception:
+                break
         queue = event_store.subscribe(run_id)
         try:
             while True:
                 event = await asyncio.to_thread(queue.get)
                 await websocket.send_json(event.model_dump(mode="json"))
         except WebSocketDisconnect:
+            event_store.unsubscribe(run_id, queue)
+        except Exception:
             event_store.unsubscribe(run_id, queue)
