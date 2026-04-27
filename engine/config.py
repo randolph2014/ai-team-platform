@@ -44,6 +44,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "input": ["requirement", "solution-draft.md", "codebase-context.md"],
             "output": {"tech-lead": "tech-lead-output.md"},
         },
+        {"id": "code_apply", "name": "代码应用", "type": "code_apply", "input": ["tech-lead-output.md"]},
         {
             "id": "verify",
             "name": "测试与审查",
@@ -136,7 +137,7 @@ def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     normalized.setdefault("agents", [])
     normalized.setdefault("pipeline", [])
     normalized.setdefault("runner", {})
-    normalized.setdefault("worktree", {"enabled": False})
+    normalized.setdefault("worktree", {"enabled": True})
     normalized.setdefault("quality_gates", [])
     return normalized
 

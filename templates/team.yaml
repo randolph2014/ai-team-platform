@@ -5,6 +5,8 @@ providers:
 agents:
   - name: solution-architect
     provider: Auto
+    model: claude-opus-4-7
+    fallback_models: [claude-sonnet-4-20250514]
     role: architect
     prompt: agents/solution-architect.md
 
@@ -74,6 +76,11 @@ pipeline:
     loopback_to: develop
     loopback_trigger: "error:"
     max_retries: 3
+
+  - id: code_apply
+    name: "代码应用"
+    type: code_apply
+    input: [tech-lead-output.md]
 
   - id: qa
     name: "测试"
