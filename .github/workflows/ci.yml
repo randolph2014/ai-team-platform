@@ -10,34 +10,24 @@ on:
 
 jobs:
   # ——————————————————————————————————————————————————————————————————————
-  # Python 后端测试（矩阵测试 Python 3.11+）
+  # Python 后端测试
   # ——————————————————————————————————————————————————————————————————————
   test-backend:
-    name: Python ${{ matrix.python-version }}
+    name: Python Tests
     runs-on: self-hosted
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          python3.12 -m pip install --upgrade pip
+          python3.12 -m pip install -e ".[dev]"
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short
+        run: python3.12 -m pytest tests/ -v --tb=short
 
   # ——————————————————————————————————————————————————————————————————————
-  # 前端构建测试（Node 18+）
+  # 前端构建测试
   # ——————————————————————————————————————————————————————————————————————
   test-frontend:
     name: Frontend Build
@@ -45,23 +35,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-
       - name: Install dependencies
-        run: |
-          if [ -f "web/package.json" ]; then
-            cd web && npm ci
-          else
-            echo "No web/package.json found, skipping"
-          fi
+        run: cd web && npm ci
 
       - name: Build
-        run: |
-          if [ -f "web/package.json" ]; then
-            cd web && npm run build
-          else
-            echo "No web/package.json found, skipping"
-          fi
+        run: cd web && npm run build
