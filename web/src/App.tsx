@@ -1,16 +1,19 @@
-import { Activity, Boxes, Gauge, History, Settings2 } from 'lucide-react';
+import { Activity, Boxes, History, LogOut, Settings2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { clearToken, isLoggedIn } from './lib/api';
 import { NewRunModal } from './components/NewRunModal';
 import { Dashboard } from './pages/Dashboard';
+import { Login } from './pages/Login';
 import { Pipelines } from './pages/Pipelines';
 import { RunDetail } from './pages/RunDetail';
 import { Runs } from './pages/Runs';
 import { Settings } from './pages/Settings';
 
-type Route = 'dashboard' | 'runs' | 'run-detail' | 'pipelines' | 'settings';
+type Route = 'dashboard' | 'runs' | 'run-detail' | 'pipelines' | 'settings' | 'login';
 
 function currentRoute(): { route: Route; runId?: string } {
   const path = window.location.pathname;
+  if (path === '/login') return { route: 'login' };
   if (path.startsWith('/runs/')) return { route: 'run-detail', runId: path.split('/')[2] };
   if (path === '/runs') return { route: 'runs' };
   if (path === '/pipelines') return { route: 'pipelines' };
@@ -26,13 +29,33 @@ function navigate(path: string) {
 export function App() {
   const [route, setRoute] = useState(currentRoute());
   const [modalOpen, setModalOpen] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [authenticated, setAuthenticated] = useState(isLoggedIn());
 
   useEffect(() => {
-    const listener = () => setRoute(currentRoute());
+    const listener = () => {
+      setRoute(currentRoute());
+      setAuthenticated(isLoggedIn());
+    };
+    const authListener = () => {
+      setAuthenticated(false);
+    };
     window.addEventListener('popstate', listener);
-    return () => window.removeEventListener('popstate', listener);
+    window.addEventListener('auth:expired', authListener);
+    return () => {
+      window.removeEventListener('popstate', listener);
+      window.removeEventListener('auth:expired', authListener);
+    };
   }, []);
+
+  useEffect(() => {
+    if (!authenticated && route.route !== 'login') {
+      navigate('/login');
+    }
+  }, [authenticated, route.route]);
+
+  if (route.route === 'login' || !authenticated) {
+    return <Login />;
+  }
 
   const nav = [
     ['dashboard', '/dashboard', Activity, '仪表盘'],
@@ -40,6 +63,12 @@ export function App() {
     ['pipelines', '/pipelines', Boxes, 'Pipeline 模板'],
     ['settings', '/settings', Settings2, '设置'],
   ] as const;
+
+  function handleLogout() {
+    clearToken();
+    setAuthenticated(false);
+    navigate('/login');
+  }
 
   return (
     <div className="shell">
@@ -59,16 +88,20 @@ export function App() {
             </button>
           ))}
         </nav>
-        <footer><Gauge size={16} /> filesystem mode</footer>
+        <footer>
+          <button className="logoutButton" onClick={handleLogout}>
+            <LogOut size={16} /> 退出登录
+          </button>
+        </footer>
       </aside>
       <main>
         {route.route === 'dashboard' && <Dashboard onNewRun={() => setModalOpen(true)} />}
         {route.route === 'runs' && <Runs onNewRun={() => setModalOpen(true)} />}
-        {route.route === 'run-detail' && <RunDetail runId={route.runId ?? '42'} />}
+        {route.route === 'run-detail' && <RunDetail runId={route.runId ?? ''} />}
         {route.route === 'pipelines' && <Pipelines />}
         {route.route === 'settings' && <Settings />}
       </main>
-      <NewRunModal open={modalOpen} onClose={() => setModalOpen(false)} onRefreshNeeded={() => setRefreshKey((k) => k + 1)} />
+      <NewRunModal open={modalOpen} onClose={() => setModalOpen(false)} onRefreshNeeded={() => {}} />
     </div>
   );
 }

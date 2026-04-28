@@ -1,4 +1,4 @@
-import { Activity, Bot, Clock, Loader2, Plus, TrendingUp } from 'lucide-react';
+import { Activity, AlertTriangle, Bot, Clock, Loader2, Plus, TrendingUp } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { fetchRuns, rememberedWorkdir } from '../lib/api';
 import type { RunListItem } from '../lib/types';
@@ -12,12 +12,14 @@ function openRun(run: RunListItem) {
 export function Dashboard({ onNewRun }: { onNewRun: () => void }) {
   const [runs, setRuns] = useState<RunListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     setLoading(true);
+    setError('');
     fetchRuns(rememberedWorkdir())
       .then(setRuns)
-      .catch(() => setRuns([]))
+      .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
 
@@ -29,6 +31,26 @@ export function Dashboard({ onNewRun }: { onNewRun: () => void }) {
   const successRate = completedRuns.length > 0 ? Math.round((successCount / completedRuns.length) * 100) : 0;
   const avgDuration = completedRuns.reduce((sum, r) => sum + (r.duration_seconds || 0), 0) / Math.max(completedRuns.length, 1);
   const avgMin = avgDuration > 0 ? `${Math.round(avgDuration / 60)}min` : '—';
+
+  if (error) {
+    return (
+      <div className="page">
+        <header className="pageHeader"><h1>仪表盘</h1></header>
+        <div className="errorPanel">
+          <h2><AlertTriangle size={20} /> 加载失败</h2>
+          <p>{error}</p>
+          <button className="button primary" onClick={() => {
+            setError('');
+            setLoading(true);
+            fetchRuns(rememberedWorkdir())
+              .then(setRuns)
+              .catch((err: Error) => setError(err.message))
+              .finally(() => setLoading(false));
+          }}>重试</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page">

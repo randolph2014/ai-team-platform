@@ -1,4 +1,4 @@
-import { Loader2, Plus } from 'lucide-react';
+import { AlertTriangle, Loader2, Plus } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { fetchRuns, rememberedWorkdir } from '../lib/api';
 import { StatusBadge } from '../components/StatusBadge';
@@ -7,14 +7,39 @@ import type { RunListItem } from '../lib/types';
 export function Runs({ onNewRun }: { onNewRun: () => void }) {
   const [runs, setRuns] = useState<RunListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     setLoading(true);
+    setError('');
     fetchRuns(rememberedWorkdir())
       .then(setRuns)
-      .catch(() => setRuns([]))
+      .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
+
+  if (error) {
+    return (
+      <div className="page">
+        <header className="pageHeader">
+          <h1>执行记录</h1>
+          <button className="button primary" onClick={onNewRun}><Plus size={15} /> 新建运行</button>
+        </header>
+        <div className="errorPanel">
+          <h2><AlertTriangle size={20} /> 加载失败</h2>
+          <p>{error}</p>
+          <button className="button primary" onClick={() => {
+            setError('');
+            setLoading(true);
+            fetchRuns(rememberedWorkdir())
+              .then(setRuns)
+              .catch((err: Error) => setError(err.message))
+              .finally(() => setLoading(false));
+          }}>重试</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page">

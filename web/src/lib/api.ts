@@ -1,7 +1,66 @@
-import type { Pipeline, RunListItem, RunReport, Settings } from './types';
+import type { Pipeline, PipelineTemplate, RunListItem, RunReport, SettingsResponse } from './types';
 
+const API_BASE = '/api';
+const TOKEN_KEY = 'ai-team.token';
 const RUN_WORKDIR_KEY = 'ai-team.runWorkdirs';
 const LAST_WORKDIR_KEY = 'ai-team.lastWorkdir';
+
+// --- Auth ---
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+export function isLoggedIn(): boolean {
+  return !!getToken();
+}
+
+export async function login(apiKey: string): Promise<string> {
+  const response = await fetch(`${API_BASE}/auth/login?api_key=${encodeURIComponent(apiKey)}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({ detail: '登录失败' }));
+    throw new Error(body.detail || `登录失败: ${response.status}`);
+  }
+  const data: { access_token: string; token_type: string } = await response.json();
+  setToken(data.access_token);
+  return data.access_token;
+}
+
+// --- Core fetch with auth ---
+
+export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (init?.headers) {
+    if (init.headers instanceof Headers) {
+      init.headers.forEach((v, k) => { headers[k] = v; });
+    } else if (Array.isArray(init.headers)) {
+      for (const [k, v] of init.headers) { headers[k] = v; }
+    } else {
+      Object.assign(headers, init.headers);
+    }
+  }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const response = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  if (response.status === 401) {
+    clearToken();
+    window.dispatchEvent(new CustomEvent('auth:expired'));
+    throw new Error('认证已过期，请重新登录');
+  }
+  return response;
+}
+
+// --- Workdir helpers ---
 
 function readJsonMap(): Record<string, string> {
   try {
@@ -30,123 +89,142 @@ export function runQuery(workdir: string): string {
   return workdir ? `?workdir=${encodeURIComponent(workdir)}` : '';
 }
 
+// --- Runs ---
+
 export async function fetchRuns(workdir?: string): Promise<RunListItem[]> {
   const wd = workdir || rememberedWorkdir();
-  const response = await fetch(`/api/runs${runQuery(wd)}`);
-  if (!response.ok) throw new Error(`Failed to fetch runs: ${response.status}`);
+  const response = await apiFetch(`/runs${runQuery(wd)}`);
+  if (!response.ok) throw new Error(`获取运行列表失败: ${response.status}`);
   return response.json();
 }
 
 export async function fetchRun(runId: string, workdir?: string): Promise<RunReport> {
   const wd = workdir || rememberedWorkdir(runId);
-  const response = await fetch(`/api/runs/${runId}${runQuery(wd)}`);
-  if (!response.ok) throw new Error(`Failed to fetch run: ${response.status}`);
+  const response = await apiFetch(`/runs/${runId}${runQuery(wd)}`);
+  if (!response.ok) throw new Error(`获取运行详情失败: ${response.status}`);
   return response.json();
 }
 
 export function runWebSocketUrl(runId: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.host}/ws/runs/${runId}`;
+  const token = getToken();
+  const base = `${protocol}//${window.location.host}/ws/runs/${runId}`;
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
 }
 
 export async function createRun(workdir: string, requirement: string, configPath?: string): Promise<{ run_id: string; status: string }> {
-  const response = await fetch('/api/runs', {
+  const response = await apiFetch('/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ workdir, requirement, yes: false, config_path: configPath }),
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-    throw new Error(error.detail || `Failed to create run: ${response.status}`);
+    throw new Error(error.detail || `创建运行失败: ${response.status}`);
   }
   return response.json();
 }
 
-export async function fetchSettings(workdir?: string): Promise<Settings> {
+// --- Settings ---
+
+export async function fetchSettings(workdir?: string): Promise<SettingsResponse> {
   const wd = workdir || rememberedWorkdir();
-  const response = await fetch(`/api/settings${runQuery(wd)}`);
-  if (!response.ok) throw new Error(`Failed to fetch settings: ${response.status}`);
+  const response = await apiFetch(`/settings${runQuery(wd)}`);
+  if (!response.ok) throw new Error(`获取设置失败: ${response.status}`);
   return response.json();
 }
 
-export async function updateSettings(settings: Partial<Settings>, workdir?: string): Promise<void> {
+export async function updateSettings(config: Record<string, unknown>, workdir?: string): Promise<SettingsResponse> {
   const wd = workdir || rememberedWorkdir();
-  const response = await fetch('/api/settings', {
-    method: 'POST',
+  const response = await apiFetch(`/settings${runQuery(wd)}`, {
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workdir: wd, ...settings }),
+    body: JSON.stringify(config),
   });
-  if (!response.ok) throw new Error(`Failed to save settings: ${response.status}`);
+  if (!response.ok) throw new Error(`保存设置失败: ${response.status}`);
+  return response.json();
 }
 
-export async function resetSettings(workdir?: string): Promise<void> {
+export async function resetSettings(workdir?: string): Promise<SettingsResponse> {
   const wd = workdir || rememberedWorkdir();
-  const response = await fetch('/api/settings/reset', {
+  const response = await apiFetch(`/settings/reset${runQuery(wd)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workdir: wd }),
   });
-  if (!response.ok) throw new Error(`Failed to reset settings: ${response.status}`);
+  if (!response.ok) throw new Error(`重置设置失败: ${response.status}`);
+  return response.json();
 }
+
+// --- Pipelines ---
 
 export async function fetchPipelines(workdir?: string): Promise<Pipeline[]> {
   const wd = workdir || rememberedWorkdir();
-  const response = await fetch(`/api/pipelines${runQuery(wd)}`);
-  if (!response.ok) throw new Error(`Failed to fetch pipelines: ${response.status}`);
+  const response = await apiFetch(`/pipelines${runQuery(wd)}`);
+  if (!response.ok) throw new Error(`获取 Pipeline 列表失败: ${response.status}`);
+  return response.json();
+}
+
+export async function fetchPipelineTemplates(): Promise<PipelineTemplate[]> {
+  const response = await apiFetch('/pipelines/templates');
+  if (!response.ok) throw new Error(`获取模板列表失败: ${response.status}`);
   return response.json();
 }
 
 export async function fetchPipeline(id: string): Promise<Pipeline> {
-  const response = await fetch(`/api/pipelines/${id}`);
-  if (!response.ok) throw new Error(`Failed to fetch pipeline: ${response.status}`);
+  const response = await apiFetch(`/pipelines/${id}`);
+  if (!response.ok) throw new Error(`获取 Pipeline 失败: ${response.status}`);
   return response.json();
 }
 
-export async function createPipeline(pipeline: { name: string; description: string; yaml: string }): Promise<Pipeline> {
-  const response = await fetch('/api/pipelines', {
+export async function createPipeline(pipeline: { id: string; name: string; description: string; yaml: string }): Promise<Pipeline> {
+  const response = await apiFetch('/pipelines', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(pipeline),
   });
-  if (!response.ok) throw new Error(`Failed to create pipeline: ${response.status}`);
+  if (!response.ok) throw new Error(`创建 Pipeline 失败: ${response.status}`);
   return response.json();
 }
 
 export async function updatePipeline(id: string, pipeline: Partial<Pipeline>): Promise<Pipeline> {
-  const response = await fetch(`/api/pipelines/${id}`, {
+  const response = await apiFetch(`/pipelines/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(pipeline),
   });
-  if (!response.ok) throw new Error(`Failed to update pipeline: ${response.status}`);
+  if (!response.ok) throw new Error(`更新 Pipeline 失败: ${response.status}`);
   return response.json();
 }
 
 export async function deletePipeline(id: string): Promise<void> {
-  const response = await fetch(`/api/pipelines/${id}`, { method: 'DELETE' });
-  if (!response.ok) throw new Error(`Failed to delete pipeline: ${response.status}`);
+  const response = await apiFetch(`/pipelines/${id}`, { method: 'DELETE' });
+  if (!response.ok) throw new Error(`删除 Pipeline 失败: ${response.status}`);
 }
 
-export async function fetchProviders(): Promise<{ available: string[] }> {
-  const response = await fetch('/api/config/providers');
-  if (!response.ok) throw new Error(`Failed to fetch providers: ${response.status}`);
+// --- Config ---
+
+export async function fetchProviders(): Promise<{ providers: Record<string, { cli: string; available: boolean }> }> {
+  const response = await apiFetch('/config/providers');
+  if (!response.ok) throw new Error(`获取 Provider 列表失败: ${response.status}`);
   return response.json();
 }
 
 export async function validateConfig(workdir: string): Promise<{ valid: boolean; warnings: string[]; errors: string[] }> {
-  const response = await fetch(`/api/config/validate${runQuery(workdir)}`);
-  if (!response.ok) throw new Error(`Failed to validate config: ${response.status}`);
+  const response = await apiFetch(`/config/validate${runQuery(workdir)}`);
+  if (!response.ok) throw new Error(`验证配置失败: ${response.status}`);
   return response.json();
 }
 
+// --- Costs ---
+
 export async function fetchRunCosts(runId: string): Promise<{ run_id: string; entries: Array<{ agent_name: string; model: string; total_tokens: number; cost_usd: number }> }> {
-  const response = await fetch(`/api/costs?run_id=${runId}`);
-  if (!response.ok) throw new Error(`Failed to fetch costs: ${response.status}`);
+  const response = await apiFetch(`/costs?run_id=${runId}`);
+  if (!response.ok) throw new Error(`获取成本数据失败: ${response.status}`);
   return response.json();
 }
 
 export async function fetchCostSummary(period: string = 'daily'): Promise<{ period: string; total_cost_usd: number; total_tokens: number; runs: number }> {
-  const response = await fetch(`/api/costs/summary?period=${period}`);
-  if (!response.ok) throw new Error(`Failed to fetch cost summary: ${response.status}`);
+  const response = await apiFetch(`/costs/summary?period=${period}`);
+  if (!response.ok) throw new Error(`获取成本摘要失败: ${response.status}`);
   return response.json();
 }

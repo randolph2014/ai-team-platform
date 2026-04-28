@@ -568,6 +568,99 @@ tbody tr:hover td { background: var(--bg-hover); }
 .modal input:focus, .modal textarea:focus, .modal select:focus { border-color: var(--accent); }
 .modalActions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
 
+/* Login */
+.loginPage {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  background: var(--bg-primary);
+}
+.loginCard {
+  width: min(400px, 100%);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-card);
+  padding: 32px;
+}
+.loginCard .brand { justify-content: center; margin-bottom: 20px; }
+.loginHint { color: var(--text-secondary); text-align: center; margin-bottom: 20px; }
+.inputWithIcon {
+  position: relative;
+}
+.inputWithIcon svg {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+}
+.inputWithIcon input {
+  width: 100%;
+  padding-left: 36px;
+}
+.loginButton {
+  width: 100%;
+  margin-top: 16px;
+}
+
+/* Logout */
+.logoutButton {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 600;
+  cursor: pointer;
+}
+.logoutButton:hover { color: var(--red); }
+
+/* Config source indicator */
+.configSource {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* Config entries */
+.configEntries { display: flex; flex-direction: column; gap: 0; }
+.configEntry {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.configEntry:last-child { border-bottom: none; }
+.configKey {
+  color: var(--text-secondary);
+  font-weight: 600;
+  min-width: 120px;
+  word-break: break-all;
+}
+.configValue {
+  color: var(--text-primary);
+  word-break: break-all;
+  text-align: right;
+  max-width: 60%;
+}
+
+/* Template grid */
+.templateGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
 /* Responsive */
 @media (max-width: 1000px) {
   .statsGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -578,7 +671,9 @@ tbody tr:hover td { background: var(--bg-hover); }
 
 @media (max-width: 720px) {
   .sidebar { width: 64px; min-width: 64px; }
-  .brand span, .sidebar button span, .navSection, .sidebar footer { display: none; }
+  .brand span, .sidebar nav button span, .navSection { display: none; }
+  .sidebar footer { padding: 8px; }
+  .sidebar footer span { display: none; }
   .brand { justify-content: center; padding: 0; }
   .sidebar button { justify-content: center; }
   .page { padding: 20px 16px 32px; }

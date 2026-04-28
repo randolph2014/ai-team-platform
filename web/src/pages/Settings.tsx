@@ -1,232 +1,167 @@
-import { Bot, CheckCircle2, FolderGit2, Gauge, RadioTower, RotateCcw, Save, Settings2 } from 'lucide-react';
+import { AlertTriangle, FileText, Loader2, RotateCcw } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { fetchSettings, updateSettings } from '../lib/api';
-import type { Settings as SettingsType } from '../lib/types';
+import { fetchSettings, resetSettings } from '../lib/api';
+import type { SettingsResponse } from '../lib/types';
 
-const DEFAULT_SETTINGS: SettingsType = {
-  provider: {
-    default_provider: 'Auto',
-    claude_params: '-p --output-format stream-json',
-    codex_params: 'exec',
-  },
-  context_scanner: {
-    enabled: true,
-    max_file_size: 50000,
-    exclude_dirs: 'node_modules, .git, build',
-  },
-  worktree: {
-    isolation_mode: 'per-run',
-    base_branch: 'main',
-    merge_strategy: 'squash',
-  },
-  quality_gates: {
-    build_gate: 'required',
-    test_gate: 'required',
-    coverage_gate: 'warning',
-  },
-  runner: {
-    agent_timeout: '1800s',
-    heartbeat: '60s',
-    log_mode: 'interleaved',
-  },
-};
-
-const PROVIDER_OPTIONS = ['Auto', 'Claude', 'Codex', 'OpenAI'];
-const ISOLATION_OPTIONS = ['per-run', 'shared', 'none'];
-const MERGE_OPTIONS = ['squash', 'merge', 'rebase'];
-const GATE_OPTIONS = ['required', 'warning', 'optional'];
-const LOG_MODE_OPTIONS = ['interleaved', 'sequential', 'agent-only'];
-
-interface SettingRowProps {
-  label: string;
-  description: string;
-  children: React.ReactNode;
+function renderValue(value: unknown): React.ReactNode {
+  if (value === null || value === undefined) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+  if (typeof value === 'boolean') return <span style={{ color: value ? 'var(--green)' : 'var(--red)' }}>{value ? 'true' : 'false'}</span>;
+  if (typeof value === 'number') return <span style={{ color: 'var(--blue)' }}>{value}</span>;
+  if (typeof value === 'string') {
+    if (value === '***') return <span style={{ color: 'var(--yellow)' }}>•••••••</span>;
+    return value || <span style={{ color: 'var(--text-muted)' }}>—</span>;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span style={{ color: 'var(--text-muted)' }}>[]</span>;
+    return (
+      <div style={{ marginTop: 4 }}>
+        {value.map((item, i) => (
+          <div key={i} style={{ padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
+            {typeof item === 'object' && item !== null ? renderObject(item as Record<string, unknown>) : renderValue(item)}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (typeof value === 'object') return renderObject(value as Record<string, unknown>);
+  return String(value);
 }
 
-function SettingRow({ label, description, children }: SettingRowProps) {
+function renderObject(obj: Record<string, unknown>): React.ReactNode {
   return (
-    <div className="settingRow">
-      <div>
-        <strong>{label}</strong>
-        <small>{description}</small>
-      </div>
-      <div className="settingControl">{children}</div>
+    <div className="configEntries">
+      {Object.entries(obj).map(([key, val]) => (
+        <div key={key} className="configEntry">
+          <span className="configKey">{key}</span>
+          <span className="configValue">{renderValue(val)}</span>
+        </div>
+      ))}
     </div>
   );
 }
 
+const SECTION_LABELS: Record<string, string> = {
+  providers: 'Provider',
+  agents: 'Agent 配置',
+  pipeline: 'Pipeline',
+  runner: 'Runner',
+  worktree: 'Worktree',
+  quality_gates: '质量门禁',
+  context_scanner: '上下文扫描',
+  metadata: '元数据',
+};
+
 export function Settings() {
-  const [settings, setSettings] = useState<SettingsType>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [activeSection, setActiveSection] = useState(0);
 
   useEffect(() => {
+    setLoading(true);
+    setError('');
     fetchSettings()
       .then(setSettings)
-      .catch(() => undefined)
+      .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
 
-  function update<K extends keyof SettingsType>(section: K, key: keyof SettingsType[K], value: unknown) {
-    setSettings((prev) => ({
-      ...prev,
-      [section]: { ...prev[section], [key]: value },
-    }));
+  function getSections(): Array<{ key: string; value: unknown }> {
+    if (!settings?.config) return [];
+    return Object.entries(settings.config)
+      .filter(([_, v]) => v !== null && v !== undefined)
+      .map(([key, value]) => ({ key, value }));
   }
 
-  async function handleSave() {
+  async function handleReset() {
     setSaving(true);
     setSaveMessage('');
     try {
-      await updateSettings(settings);
-      setSaveMessage('设置已保存');
+      const result = await resetSettings();
+      setSettings(result);
+      setSaveMessage('设置已重置');
     } catch (e: unknown) {
-      setSaveMessage(e instanceof Error ? e.message : '保存失败');
+      setSaveMessage(e instanceof Error ? e.message : '重置失败');
     } finally {
       setSaving(false);
     }
   }
 
-  function handleReset() {
-    setSettings(DEFAULT_SETTINGS);
-    setSaveMessage('已恢复默认值（未保存）');
-  }
-
-  const sections: Array<{ name: string; icon: typeof Settings2 }> = [
-    { name: 'Provider', icon: Bot },
-    { name: '上下文扫描', icon: RadioTower },
-    { name: 'Worktree', icon: FolderGit2 },
-    { name: '质量门禁', icon: CheckCircle2 },
-    { name: 'Runner', icon: Gauge },
-  ];
-
   if (loading) {
     return (
       <div className="page">
         <header className="pageHeader"><h1>设置</h1></header>
-        <div className="emptyState">加载中...</div>
+        <div className="emptyState"><Loader2 size={24} className="spinner" /> 加载中...</div>
       </div>
     );
   }
+
+  if (error) {
+    return (
+      <div className="page">
+        <header className="pageHeader"><h1>设置</h1></header>
+        <div className="errorPanel">
+          <h2><AlertTriangle size={20} /> 加载失败</h2>
+          <p>{error}</p>
+          <button className="button primary" onClick={() => {
+            setError('');
+            setLoading(true);
+            fetchSettings()
+              .then(setSettings)
+              .catch((err: Error) => setError(err.message))
+              .finally(() => setLoading(false));
+          }}>重试</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!settings) return null;
+
+  const sections = getSections();
+  const currentSection = sections[activeSection];
 
   return (
     <div className="page">
       <header className="pageHeader">
         <h1>设置</h1>
         <div className="pageActions">
-          <button className="button" onClick={handleReset}><RotateCcw size={14} /> 恢复默认</button>
-          <button className="button primary" onClick={handleSave} disabled={saving}><Save size={14} /> {saving ? '保存中...' : '保存'}</button>
+          <span className="configSource">
+            <FileText size={13} /> {settings.source}{settings.path ? ` · ${settings.path}` : ''}
+          </span>
+          <button className="button" onClick={handleReset} disabled={saving}><RotateCcw size={14} /> 重置为默认</button>
         </div>
       </header>
       {saveMessage && <div className={`saveBanner ${saveMessage.includes('失败') ? 'saveBannerError' : ''}`}>{saveMessage}</div>}
+      {settings.warnings.length > 0 && (
+        <div className="saveBanner saveBannerError" style={{ marginBottom: 18 }}>
+          {settings.warnings.map((w, i) => <p key={i}>{w}</p>)}
+        </div>
+      )}
       <div className="settingsGrid">
         <aside className="settingsNav">
-          {sections.map((section, index) => {
-            const Icon = section.icon;
-            return (
-              <a
-                key={section.name}
-                className={activeSection === index ? 'settingsNavActive' : ''}
-                onClick={() => setActiveSection(index)}
-              >
-                <Icon size={14} /> {section.name}
-              </a>
-            );
-          })}
+          {sections.map((section, index) => (
+            <a
+              key={section.key}
+              className={activeSection === index ? 'settingsNavActive' : ''}
+              onClick={() => setActiveSection(index)}
+            >
+              {SECTION_LABELS[section.key] || section.key}
+            </a>
+          ))}
         </aside>
         <section className="panel">
-          {activeSection === 0 && (
+          {currentSection ? (
             <div className="settingGroup">
-              <h2><Bot size={16} /> Provider</h2>
-              <SettingRow label="默认 Provider" description="默认使用的 AI Provider，可通过命令参数覆盖">
-                <select value={settings.provider.default_provider} onChange={(e) => update('provider', 'default_provider', e.target.value)}>
-                  {PROVIDER_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              </SettingRow>
-              <SettingRow label="Claude 参数" description="传递给 Claude CLI 的额外参数">
-                <input value={settings.provider.claude_params} onChange={(e) => update('provider', 'claude_params', e.target.value)} />
-              </SettingRow>
-              <SettingRow label="Codex 参数" description="传递给 Codex CLI 的额外参数">
-                <input value={settings.provider.codex_params} onChange={(e) => update('provider', 'codex_params', e.target.value)} />
-              </SettingRow>
+              <h2>{SECTION_LABELS[currentSection.key] || currentSection.key}</h2>
+              {typeof currentSection.value === 'object' && currentSection.value !== null && !Array.isArray(currentSection.value)
+                ? renderObject(currentSection.value as Record<string, unknown>)
+                : renderValue(currentSection.value)}
             </div>
-          )}
-
-          {activeSection === 1 && (
-            <div className="settingGroup">
-              <h2><RadioTower size={16} /> 上下文扫描</h2>
-              <SettingRow label="启用扫描" description="在运行前自动扫描项目上下文">
-                <label className="switch">
-                  <input type="checkbox" checked={settings.context_scanner.enabled} onChange={(e) => update('context_scanner', 'enabled', e.target.checked)} />
-                  <span className="switchSlider" />
-                </label>
-              </SettingRow>
-              <SettingRow label="最大文件大小" description="扫描时忽略超过此字节数的文件">
-                <input type="number" value={settings.context_scanner.max_file_size} onChange={(e) => update('context_scanner', 'max_file_size', Number(e.target.value))} />
-              </SettingRow>
-              <SettingRow label="排除目录" description="逗号分隔的目录列表，扫描时跳过">
-                <input value={settings.context_scanner.exclude_dirs} onChange={(e) => update('context_scanner', 'exclude_dirs', e.target.value)} />
-              </SettingRow>
-            </div>
-          )}
-
-          {activeSection === 2 && (
-            <div className="settingGroup">
-              <h2><FolderGit2 size={16} /> Worktree</h2>
-              <SettingRow label="隔离模式" description="如何为每个运行创建隔离的工作区">
-                <select value={settings.worktree.isolation_mode} onChange={(e) => update('worktree', 'isolation_mode', e.target.value)}>
-                  {ISOLATION_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              </SettingRow>
-              <SettingRow label="基础分支" description="创建 worktree 时基于的分支">
-                <input value={settings.worktree.base_branch} onChange={(e) => update('worktree', 'base_branch', e.target.value)} />
-              </SettingRow>
-              <SettingRow label="合并策略" description="代码合并时使用的策略">
-                <select value={settings.worktree.merge_strategy} onChange={(e) => update('worktree', 'merge_strategy', e.target.value)}>
-                  {MERGE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              </SettingRow>
-            </div>
-          )}
-
-          {activeSection === 3 && (
-            <div className="settingGroup">
-              <h2><CheckCircle2 size={16} /> 质量门禁</h2>
-              <SettingRow label="编译门禁" description="编译检查的要求级别">
-                <select value={settings.quality_gates.build_gate} onChange={(e) => update('quality_gates', 'build_gate', e.target.value)}>
-                  {GATE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              </SettingRow>
-              <SettingRow label="测试门禁" description="测试通过的要求级别">
-                <select value={settings.quality_gates.test_gate} onChange={(e) => update('quality_gates', 'test_gate', e.target.value)}>
-                  {GATE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              </SettingRow>
-              <SettingRow label="覆盖率门禁" description="代码覆盖率的要求级别">
-                <select value={settings.quality_gates.coverage_gate} onChange={(e) => update('quality_gates', 'coverage_gate', e.target.value)}>
-                  {GATE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              </SettingRow>
-            </div>
-          )}
-
-          {activeSection === 4 && (
-            <div className="settingGroup">
-              <h2><Gauge size={16} /> Runner</h2>
-              <SettingRow label="Agent 超时" description="单个 Agent 的最大运行时间">
-                <input value={settings.runner.agent_timeout} onChange={(e) => update('runner', 'agent_timeout', e.target.value)} />
-              </SettingRow>
-              <SettingRow label="Heartbeat" description="Agent 心跳间隔">
-                <input value={settings.runner.heartbeat} onChange={(e) => update('runner', 'heartbeat', e.target.value)} />
-              </SettingRow>
-              <SettingRow label="并行日志" description="多 Agent 并发时日志输出模式">
-                <select value={settings.runner.log_mode} onChange={(e) => update('runner', 'log_mode', e.target.value)}>
-                  {LOG_MODE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              </SettingRow>
-            </div>
+          ) : (
+            <div className="emptyState">无配置数据</div>
           )}
         </section>
       </div>

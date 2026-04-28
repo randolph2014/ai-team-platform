@@ -1,6 +1,6 @@
 import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { fetchPipelines, rememberRunWorkdir, runQuery } from '../lib/api';
+import { apiFetch, fetchPipelines, rememberRunWorkdir, runQuery } from '../lib/api';
 import type { Pipeline } from '../lib/types';
 
 interface Props {
@@ -10,7 +10,7 @@ interface Props {
 }
 
 export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
-  const [workdir, setWorkdir] = useState('/Users/wurui/IdeaProjects/LifeRhythm');
+  const [workdir, setWorkdir] = useState('');
   const [requirement, setRequirement] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -20,10 +20,11 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
 
   useEffect(() => {
     if (open) {
+      setSelectedPipeline('');
       fetchPipelines()
         .then((list) => {
           setPipelines(list);
-          if (list.length > 0 && !selectedPipeline) {
+          if (list.length > 0) {
             setSelectedPipeline(list[0].name);
           }
         })
@@ -37,7 +38,6 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
     const errors: Record<string, string> = {};
     if (!workdir.trim()) errors.workdir = '项目路径不能为空';
     if (!requirement.trim()) errors.requirement = '需求描述不能为空';
-    if (pipelines.length > 0 && !selectedPipeline) errors.pipeline = '请选择 Pipeline 模板';
     setValidationErrors(errors);
     return Object.keys(errors).length === 0;
   }
@@ -47,7 +47,7 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
     setSubmitting(true);
     setError('');
     try {
-      const response = await fetch('/api/runs', {
+      const response = await apiFetch('/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workdir: workdir.trim(), requirement: requirement.trim(), pipeline: selectedPipeline || undefined, yes: false }),

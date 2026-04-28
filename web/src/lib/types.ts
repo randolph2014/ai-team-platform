@@ -72,30 +72,16 @@ export interface Pipeline {
   updated_at?: string;
 }
 
-export interface Settings {
-  provider: {
-    default_provider: string;
-    claude_params: string;
-    codex_params: string;
-  };
-  context_scanner: {
-    enabled: boolean;
-    max_file_size: number;
-    exclude_dirs: string;
-  };
-  worktree: {
-    isolation_mode: string;
-    base_branch: string;
-    merge_strategy: string;
-  };
-  quality_gates: {
-    build_gate: string;
-    test_gate: string;
-    coverage_gate: string;
-  };
-  runner: {
-    agent_timeout: string;
-    heartbeat: string;
-    log_mode: string;
-  };
+export interface SettingsResponse {
+  source: string;
+  path: string | null;
+  warnings: string[];
+  config: Record<string, unknown>;
+}
+
+export interface PipelineTemplate {
+  id: string;
+  name: string;
+  description: string;
+  stages: string[];
 }
