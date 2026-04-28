@@ -12,11 +12,14 @@ from .models import (
 )
 from .repository import (
     AgentRunRepo,
+    EvalResultRepo,
+    EvalSuiteRepo,
     PipelineRepo,
     PipelineRunRepo,
     PipelineVersionRepo,
     QualityGateRunRepo,
     StageRunRepo,
+    WebhookRepo,
     save_report,
     save_report_sync,
 )
@@ -36,6 +39,9 @@ __all__ = [
     "QualityGateRunRepo",
     "PipelineRepo",
     "PipelineVersionRepo",
+    "WebhookRepo",
+    "EvalSuiteRepo",
+    "EvalResultRepo",
     # Connection & migration
     "run_migrations",
     "get_connection",

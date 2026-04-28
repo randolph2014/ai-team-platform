@@ -218,6 +218,8 @@ class Orchestrator:
                         report.merge_result = {"status": "skipped", "reason": "merge_on_success disabled"}
                     if self.config.get("worktree", {}).get("auto_cleanup") and report.merge_result.get("status") in {"merged", "no_changes"}:
                         worktree_manager.cleanup(worktree_path)
+                if report.status == "completed" and worktree_path:
+                    self._run_ci_cd_hook(worktree_path, report, output_dir)
             report.completed_at = utc_now()
             report.duration_seconds = _duration(start)
             record_run(report.status)
@@ -508,6 +510,29 @@ class Orchestrator:
             if path.is_file():
                 artifacts.append(path.name)
         report.artifacts = sorted(artifacts)
+
+    def _run_ci_cd_hook(self, worktree_path: Path, report: RunReport, output_dir: Path) -> None:
+        ci_cd_config = self.config.get("ci_cd", {})
+        if not ci_cd_config.get("create_pr"):
+            return
+        logger = get_logger("orchestrator", run_id=report.run_id)
+        try:
+            from .ci_cd import run_ci_cd_hook
+            summary = {
+                "run_id": report.run_id,
+                "requirement": report.requirement,
+                "duration_seconds": report.duration_seconds,
+                "stages": [s.model_dump(mode="json") for s in report.stages],
+            }
+            result = run_ci_cd_hook(self.config, str(worktree_path), summary)
+            report.merge_result = report.merge_result or {}
+            report.merge_result["ci_cd"] = result
+            self._write_report(report, output_dir)
+            if result.get("status") == "created":
+                logger.info("CI/CD PR created: %s", result.get("url", ""))
+                self.bus.emit("ci_cd:pr_created", report.run_id, url=result.get("url"), number=result.get("number"))
+        except Exception as exc:
+            logger.warning("CI/CD hook failed (non-blocking): %s", exc)
 
     def _write_report(self, report: RunReport, output_dir: Path) -> None:
         self._refresh_artifacts(report, output_dir)

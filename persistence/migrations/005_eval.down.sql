@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS eval_result;
+DROP TABLE IF EXISTS eval_suite;

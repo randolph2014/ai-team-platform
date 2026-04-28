@@ -36,6 +36,7 @@ def create_app():
     from .routes.artifacts import router as artifacts_router
     from .routes.config import router as config_router
     from .routes.costs import router as costs_router
+    from .routes.eval import router as eval_router
     from .routes.pipelines import router as pipelines_router
     from .routes.runs import router as runs_router
     from .routes.settings import router as settings_router
@@ -69,6 +70,7 @@ def create_app():
     app.include_router(artifacts_router, prefix="/api")
     app.include_router(config_router, prefix="/api")
     app.include_router(costs_router, prefix="/api")
+    app.include_router(eval_router, prefix="/api")
     app.include_router(pipelines_router, prefix="/api")
     app.include_router(settings_router, prefix="/api")
     app.include_router(webhooks_router, prefix="/api")

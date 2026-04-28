@@ -734,6 +734,101 @@ class WebhookRepo:
         return result.endswith("1")
 
 
+class EvalSuiteRepo:
+    """eval_suite 表 CRUD 操作"""
+
+    TABLE = "eval_suite"
+
+    async def create(self, conn, *, name: str, tasks: List[Dict[str, Any]]) -> str:
+        rows = await conn.fetch(
+            f"""
+            INSERT INTO {self.TABLE} (id, name, tasks)
+            VALUES (gen_random_uuid(), $1, $2::jsonb)
+            RETURNING id
+            """,
+            name,
+            _jsonb(tasks),
+        )
+        return str(rows[0]["id"])
+
+    async def get_by_id(self, conn, id: str) -> Optional[Dict[str, Any]]:
+        row = await conn.fetchrow(f"SELECT * FROM {self.TABLE} WHERE id = $1", id)
+        return dict(row) if row else None
+
+    async def list_all(self, conn) -> List[Dict[str, Any]]:
+        rows = await conn.fetch(f"SELECT * FROM {self.TABLE} ORDER BY created_at DESC")
+        return [dict(row) for row in rows]
+
+
+class EvalResultRepo:
+    """eval_result 表 CRUD 操作"""
+
+    TABLE = "eval_result"
+
+    async def create(
+        self,
+        conn,
+        *,
+        suite_name: str,
+        agent_name: str,
+        model: Optional[str] = None,
+        scores: Dict[str, Any],
+        suite_id: Optional[str] = None,
+    ) -> str:
+        rows = await conn.fetch(
+            f"""
+            INSERT INTO {self.TABLE} (id, suite_id, agent_name, model, scores)
+            VALUES (gen_random_uuid(), $1, $2, $3, $4::jsonb)
+            RETURNING id
+            """,
+            suite_id,
+            agent_name,
+            model,
+            _jsonb(scores),
+        )
+        return str(rows[0]["id"])
+
+    async def get_by_id(self, conn, id: str) -> Optional[Dict[str, Any]]:
+        row = await conn.fetchrow(f"SELECT * FROM {self.TABLE} WHERE id = $1", id)
+        return dict(row) if row else None
+
+    async def list_all(
+        self,
+        conn,
+        *,
+        agent_name: Optional[str] = None,
+        suite_name: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        query = f"SELECT * FROM {self.TABLE} WHERE 1=1"
+        params: list = []
+        idx = 1
+
+        if agent_name:
+            query += f" AND agent_name = ${idx}"
+            params.append(agent_name)
+            idx += 1
+
+        if suite_name:
+            query += f" AND scores->>'suite_name' = ${idx}"
+            params.append(suite_name)
+            idx += 1
+
+        query += f" ORDER BY created_at DESC LIMIT ${idx}"
+        params.append(limit)
+
+        rows = await conn.fetch(query, *params)
+        results = []
+        for row in rows:
+            r = dict(row)
+            r["id"] = str(r["id"])
+            if r.get("suite_id"):
+                r["suite_id"] = str(r["suite_id"])
+            r["created_at"] = _dt_to_str(r.get("created_at"))
+            results.append(r)
+        return results
+
+
 # ——————————————————————————————————————————————————————————————————————————————
 # API 层辅助：从 asyncpg 行记录转为 API 响应格式
 # ——————————————————————————————————————————————————————————————————————————————

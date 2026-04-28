@@ -166,3 +166,18 @@ class WorktreeManager:
                 shutil.rmtree(path, ignore_errors=True)
                 cleaned.append(orphan["name"])
         return cleaned
+
+    def push_branch(self, worktree_path: Path, remote: str = "origin", force: bool = False) -> Dict[str, Any]:
+        branch_result = self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=worktree_path, check=False)
+        branch_name = branch_result.stdout.strip() if branch_result.returncode == 0 else None
+        if not branch_name:
+            raise WorktreeError("Cannot determine current branch in worktree")
+
+        args = ["push", remote, branch_name]
+        if force:
+            args.append("--force")
+        result = self._run_git(args, cwd=worktree_path, check=False)
+        if result.returncode != 0:
+            stderr = result.stderr.strip() or result.stdout.strip()
+            raise WorktreeError(f"git push {branch_name} failed: {stderr}")
+        return {"status": "pushed", "branch": branch_name, "remote": remote}
