@@ -1,4 +1,4 @@
-import type { Pipeline, PipelineTemplate, RunListItem, RunReport, SettingsResponse, Webhook } from './types';
+import type { AppConfig, Pipeline, PipelineTemplate, RunListItem, RunReport, SettingsResponse, Webhook } from './types';
 
 const API_BASE = '/api';
 const TOKEN_KEY = 'ai-team.token';
@@ -147,7 +147,7 @@ export async function fetchSettings(workdir?: string): Promise<SettingsResponse>
   return response.json();
 }
 
-export async function updateSettings(config: Record<string, unknown>, workdir?: string): Promise<SettingsResponse> {
+export async function updateSettings(config: AppConfig, workdir?: string): Promise<SettingsResponse> {
   const wd = workdir || rememberedWorkdir();
   const response = await apiFetch(`/settings${runQuery(wd)}`, {
     method: 'PUT',
@@ -189,7 +189,7 @@ export async function fetchPipeline(id: string): Promise<Pipeline> {
   return response.json();
 }
 
-export async function createPipeline(pipeline: { id: string; name: string; description: string; yaml: string }): Promise<Pipeline> {
+export async function createPipeline(pipeline: { id: string; name: string; description: string; yaml_config: Record<string, unknown> }): Promise<Pipeline> {
   const response = await apiFetch('/pipelines', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -215,12 +215,6 @@ export async function deletePipeline(id: string): Promise<void> {
 }
 
 // --- Config ---
-
-export async function fetchProviders(): Promise<{ providers: Record<string, { cli: string; available: boolean }> }> {
-  const response = await apiFetch('/config/providers');
-  if (!response.ok) throw new Error(`获取 Provider 列表失败: ${response.status}`);
-  return response.json();
-}
 
 export async function validateConfig(workdir: string): Promise<{ valid: boolean; warnings: string[]; errors: string[] }> {
   const response = await apiFetch(`/config/validate${runQuery(workdir)}`);

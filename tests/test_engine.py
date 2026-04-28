@@ -56,13 +56,13 @@ class EngineTests(unittest.TestCase):
             (root / ".ai").mkdir()
             (root / ".ai" / "team.yaml").write_text(
                 """
-providers:
+runtimes:
   Mock:
     cli: mock
     response: "Approve"
 agents:
   - name: dev
-    provider: Mock
+    runtime_id: Mock
     role: developer
     prompt: agents/dev.md
 pipeline:
@@ -101,13 +101,13 @@ worktree:
             (root / ".ai").mkdir()
             (root / ".ai" / "team.yaml").write_text(
                 """
-providers:
+runtimes:
   Mock:
     cli: mock
     response: "error: compilation failed"
 agents:
   - name: dev
-    provider: Mock
+    runtime_id: Mock
     role: developer
     prompt: agents/dev.md
 pipeline:
@@ -135,7 +135,7 @@ worktree:
             feedback_content = feedback_file.read_text(encoding="utf-8")
             self.assertIn("Loopback 反馈", feedback_content)
             self.assertIn("Agent: dev", feedback_content)
-            self.assertIn("Provider: Mock", feedback_content)
+            self.assertIn("Runtime: Mock", feedback_content)
             self.assertIn("error: compilation failed", feedback_content)
             self.assertIn("第 1 次重试", feedback_content)
 
@@ -146,7 +146,7 @@ worktree:
             (root / ".ai").mkdir()
             (root / ".ai" / "team.yaml").write_text(
                 """
-providers:
+runtimes:
   Mock:
     cli: mock
     response: "done"
@@ -155,11 +155,11 @@ providers:
     response: "FAILED: 2 tests did not pass"
 agents:
   - name: dev
-    provider: Mock
+    runtime_id: Mock
     role: developer
     prompt: agents/dev.md
   - name: qa
-    provider: MockQA
+    runtime_id: MockQA
     role: tester
     prompt: agents/qa.md
 pipeline:
@@ -193,7 +193,7 @@ worktree:
             self.assertTrue(feedback_file.exists(), "qa loopback feedback file should exist")
             feedback_content = feedback_file.read_text(encoding="utf-8")
             self.assertIn("Agent: qa", feedback_content)
-            self.assertIn("Provider: MockQA", feedback_content)
+            self.assertIn("Runtime: MockQA", feedback_content)
             self.assertIn("FAILED: 2 tests did not pass", feedback_content)
 
 
@@ -204,17 +204,17 @@ worktree:
             (root / ".ai").mkdir()
             (root / ".ai" / "team.yaml").write_text(
                 """
-providers:
+runtimes:
   Mock:
     cli: mock
     response: "done"
 agents:
   - name: qa
-    provider: Mock
+    runtime_id: Mock
     role: tester
     prompt: agents/qa.md
   - name: reviewer
-    provider: Mock
+    runtime_id: Mock
     role: reviewer
     prompt: agents/reviewer.md
 pipeline:
@@ -247,13 +247,13 @@ worktree:
             (root / ".ai").mkdir()
             (root / ".ai" / "team.yaml").write_text(
                 """
-providers:
+runtimes:
   Mock:
     cli: mock
     response: "fixed"
 agents:
   - name: dev
-    provider: Mock
+    runtime_id: Mock
     role: developer
     prompt: agents/dev.md
 pipeline:
@@ -290,13 +290,13 @@ worktree:
             (root / ".ai").mkdir()
             (root / ".ai" / "team.yaml").write_text(
                 """
-providers:
+runtimes:
   Mock:
     cli: mock
     response: "done"
 agents:
   - name: dev
-    provider: Mock
+    runtime_id: Mock
     role: developer
     prompt: agents/dev.md
 pipeline:
@@ -384,13 +384,13 @@ worktree:
             (root / ".ai").mkdir()
             (root / ".ai" / "team.yaml").write_text(
                 """
-providers:
+runtimes:
   Mock:
     cli: mock
     response: "Build FAILED with error code 1"
 agents:
   - name: dev
-    provider: Mock
+    runtime_id: Mock
     role: developer
     prompt: agents/dev.md
 pipeline:
@@ -421,13 +421,13 @@ worktree:
             (root / ".ai").mkdir()
             (root / ".ai" / "team.yaml").write_text(
                 """
-providers:
+runtimes:
   Mock:
     cli: mock
     response: "error: detected"
 agents:
   - name: dev
-    provider: Mock
+    runtime_id: Mock
     role: developer
     prompt: agents/dev.md
 pipeline:
@@ -501,18 +501,18 @@ worktree:
         from engine.models import AgentDefinition
 
         config = {
-            "providers": {"Mock": {"cli": "mock", "response": "test output"}},
+            "runtimes": {"Mock": {"cli": "mock", "response": "test output"}},
             "runner": {},
         }
         runner = AgentRunner(config)
-        agent = AgentDefinition(name="test-agent", provider="Mock", role="tester")
-        provider = {"cli": "mock", "response": "mock output success"}
+        agent = AgentDefinition(name="test-agent", runtime_id="Mock", role="tester")
+        runtime = {"cli": "mock", "response": "mock output success"}
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp)
             output_file = cwd / "output.md"
             raw_log = cwd / "raw.log"
             result = runner.run(
-                "run-1", "stage-1", agent, provider, "do something", cwd, output_file, raw_log
+                "run-1", "stage-1", agent, runtime, "do something", cwd, output_file, raw_log
             )
             self.assertEqual(result.status, "completed")
             self.assertEqual(result.exit_code, 0)
@@ -562,13 +562,13 @@ worktree:
             (root / ".ai").mkdir()
             (root / ".ai" / "team.yaml").write_text(
                 """
-providers:
+runtimes:
   Mock:
     cli: mock
     response: "done"
 agents:
   - name: dev
-    provider: Mock
+    runtime_id: Mock
     role: developer
     prompt: agents/dev.md
 pipeline:
@@ -598,13 +598,13 @@ worktree:
             (root / ".ai").mkdir()
             (root / ".ai" / "team.yaml").write_text(
                 """
-providers:
+runtimes:
   Mock:
     cli: mock
     response: "### 新增文件: `output.txt`\\n```text\\nhello world\\n```"
 agents:
   - name: dev
-    provider: Mock
+    runtime_id: Mock
     role: developer
     prompt: agents/dev.md
 pipeline:
@@ -641,13 +641,13 @@ quality_gates: []
             (root / ".ai").mkdir()
             (root / ".ai" / "team.yaml").write_text(
                 """
-providers:
+runtimes:
   Mock:
     cli: mock
     response: "done"
 agents:
   - name: dev
-    provider: Mock
+    runtime_id: Mock
     role: developer
     prompt: agents/dev.md
 pipeline:

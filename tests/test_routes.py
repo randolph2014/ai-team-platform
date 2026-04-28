@@ -5,7 +5,7 @@ API 路由集成测试。
 - settings GET/POST/reset
 - pipelines CRUD（list, templates, get, create, update, delete）
 - costs 查询（按 run_id 查询、按周期汇总）
-- config providers 和 validate 端点
+- config runtimes 和 validate 端点
 - runs CRUD（create, list, get）
 
 使用 FastAPI TestClient，通过临时目录和 mock 隔离文件操作。
@@ -47,12 +47,13 @@ class BaseRoutesTest(unittest.TestCase):
         (root / ".ai" / "agents" / "dev.md").write_text("You are a dev agent.", encoding="utf-8")
         (root / ".ai" / "team.yaml").write_text(
             """
-providers:
-  Mock:
+runtimes:
+  mock:
+    name: Mock
     cli: mock
 agents:
   - name: dev
-    provider: Mock
+    runtime_id: mock
     role: developer
     prompt: agents/dev.md
 pipeline:
@@ -96,7 +97,8 @@ class TestSettingsRoutes(BaseRoutesTest):
         data = response.json()
         self.assertIn("config", data)
         self.assertIn("source", data)
-        self.assertIn("providers", data["config"])
+        self.assertIn("runtimes", data["config"])
+        self.assertNotIn("providers", data["config"])
         self.assertIn("agents", data["config"])
 
     def test_get_settings_default_workdir(self) -> None:
@@ -116,7 +118,7 @@ class TestSettingsRoutes(BaseRoutesTest):
             params={"workdir": str(self.project_root)},
             json={
                 "agents": [
-                    {"name": "custom-agent", "provider": "Auto", "role": "custom", "prompt": "custom.md"}
+                    {"name": "custom-agent", "runtime_id": "auto", "role": "custom", "prompt": "custom.md"}
                 ],
                 "metadata": {"name": "custom-project"},
             },
@@ -296,13 +298,34 @@ class TestCostsRoutes(BaseRoutesTest):
 class TestConfigRoutes(BaseRoutesTest):
     """测试 config 相关端点"""
 
-    def test_get_providers_returns_list(self) -> None:
-        """GET /api/config/providers 返回提供者列表"""
-        response = self.client.get("/api/config/providers")
+    def test_get_runtimes_returns_list(self) -> None:
+        """GET /api/config/runtimes 返回 runtime 列表"""
+        response = self.client.get("/api/config/runtimes", params={"workdir": str(self.project_root)})
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertIn("providers", data)
-        self.assertIsInstance(data["providers"], dict)
+        self.assertIn("runtimes", data)
+        self.assertIsInstance(data["runtimes"], dict)
+        self.assertIn("mock", data["runtimes"])
+
+    def test_get_runtimes_masks_sensitive_fields(self) -> None:
+        """GET /api/config/runtimes 不泄露 runtime 敏感字段"""
+        from engine.config import normalize_config
+        config_path = self.project_root / ".ai" / "team.yaml"
+        config = normalize_config({
+            "runtimes": {
+                "Claude": {"cli": "claude", "api_key": "sk-secret"},
+            },
+            "agents": [],
+            "pipeline": [],
+        })
+        import yaml
+        config_path.write_text(yaml.safe_dump(config, allow_unicode=True), encoding="utf-8")
+
+        response = self.client.get("/api/config/runtimes", params={"workdir": str(self.project_root)})
+        self.assertEqual(response.status_code, 200)
+        runtime = response.json()["runtimes"]["Claude"]
+        self.assertEqual(runtime["api_key"], "***")
+        self.assertEqual(runtime["cli"], "claude")
 
     def test_validate_config_returns_result(self) -> None:
         """GET /api/config/validate 返回验证结果"""
@@ -313,16 +336,42 @@ class TestConfigRoutes(BaseRoutesTest):
         self.assertIn("errors", data)
         self.assertIn("warnings", data)
 
+    def test_validate_unknown_runtime_reference_returns_error(self) -> None:
+        """GET /api/config/validate 校验 agent.runtime_id 引用"""
+        (self.project_root / ".ai" / "team.yaml").write_text(
+            """
+runtimes:
+  mock:
+    cli: mock
+agents:
+  - name: dev
+    runtime_id: missing
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: develop
+    name: Develop
+    agents: [dev]
+""",
+            encoding="utf-8",
+        )
+        response = self.client.get("/api/config/validate", params={"workdir": str(self.project_root)})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertFalse(data["valid"])
+        self.assertTrue(any("Unknown runtime" in error for error in data["errors"]))
+
     def test_validate_with_worktree_enabled(self) -> None:
         """验证配置启用 worktree 但无 git 时报错"""
         (self.project_root / ".ai" / "team.yaml").write_text(
             """
-providers:
-  Mock:
+runtimes:
+  mock:
+    name: Mock
     cli: mock
 agents:
   - name: dev
-    provider: Mock
+    runtime_id: mock
     role: developer
     prompt: agents/dev.md
 pipeline:
@@ -420,7 +469,7 @@ class TestSettingsDesensitization(BaseRoutesTest):
         from engine.config import normalize_config
         config_path = self.project_root / ".ai" / "team.yaml"
         config = normalize_config({
-            "providers": {
+            "runtimes": {
                 "Claude": {"cli": "claude", "api_key": "sk-super-secret-key"},
                 "OpenAI": {"cli": "openai", "secret_token": "tok-abc123"},
             },
@@ -432,18 +481,18 @@ class TestSettingsDesensitization(BaseRoutesTest):
 
         response = self.client.get("/api/settings", params={"workdir": str(self.project_root)})
         self.assertEqual(response.status_code, 200)
-        providers = response.json()["config"]["providers"]
-        self.assertEqual(providers["Claude"]["api_key"], "***")
-        self.assertEqual(providers["OpenAI"]["secret_token"], "***")
+        runtimes = response.json()["config"]["runtimes"]
+        self.assertEqual(runtimes["Claude"]["api_key"], "***")
+        self.assertEqual(runtimes["OpenAI"]["secret_token"], "***")
         # 非敏感字段不被脱敏
-        self.assertEqual(providers["Claude"]["cli"], "claude")
+        self.assertEqual(runtimes["Claude"]["cli"], "claude")
 
     def test_get_settings_preserves_empty_sensitive_fields(self) -> None:
         """GET /api/settings 空字符串的敏感字段不被脱敏为 ***"""
         from engine.config import normalize_config
         config_path = self.project_root / ".ai" / "team.yaml"
         config = normalize_config({
-            "providers": {
+            "runtimes": {
                 "Claude": {"cli": "claude", "api_key": ""},
             },
             "agents": [],
@@ -454,8 +503,8 @@ class TestSettingsDesensitization(BaseRoutesTest):
 
         response = self.client.get("/api/settings", params={"workdir": str(self.project_root)})
         self.assertEqual(response.status_code, 200)
-        providers = response.json()["config"]["providers"]
-        self.assertEqual(providers["Claude"]["api_key"], "")
+        runtimes = response.json()["config"]["runtimes"]
+        self.assertEqual(runtimes["Claude"]["api_key"], "")
 
 
 class TestSettingsPutEndpoint(BaseRoutesTest):
@@ -501,14 +550,48 @@ class TestSettingsPutEndpoint(BaseRoutesTest):
             "/api/settings",
             params={"workdir": str(self.project_root)},
             json={
-                "providers": {
+                "runtimes": {
                     "Claude": {"cli": "claude", "api_key": "sk-should-be-masked"},
                 },
+                "agents": [
+                    {"name": "dev", "runtime_id": "Claude", "role": "developer", "prompt": "agents/dev.md"}
+                ],
             },
         )
         self.assertEqual(response.status_code, 200)
-        providers = response.json()["config"]["providers"]
-        self.assertEqual(providers["Claude"]["api_key"], "***")
+        runtimes = response.json()["config"]["runtimes"]
+        self.assertEqual(runtimes["Claude"]["api_key"], "***")
+
+    def test_put_settings_preserves_masked_runtime_secret(self) -> None:
+        """把 GET 脱敏结果原样保存时，不应把真实密钥覆盖成 ***"""
+        from engine.config import normalize_config
+        config_path = self.project_root / ".ai" / "team.yaml"
+        config = normalize_config({
+            "runtimes": {
+                "Claude": {"cli": "claude", "api_key": "sk-real-secret"},
+            },
+            "agents": [
+                {"name": "dev", "runtime_id": "Claude", "role": "developer", "prompt": "agents/dev.md"}
+            ],
+            "pipeline": [],
+        })
+        import yaml
+        config_path.write_text(yaml.safe_dump(config, allow_unicode=True), encoding="utf-8")
+
+        get_response = self.client.get("/api/settings", params={"workdir": str(self.project_root)})
+        self.assertEqual(get_response.status_code, 200)
+        masked_config = get_response.json()["config"]
+        self.assertEqual(masked_config["runtimes"]["Claude"]["api_key"], "***")
+
+        put_response = self.client.put(
+            "/api/settings",
+            params={"workdir": str(self.project_root)},
+            json=masked_config,
+        )
+        self.assertEqual(put_response.status_code, 200)
+
+        saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["runtimes"]["Claude"]["api_key"], "sk-real-secret")
 
 
 class TestRunsPagination(BaseRoutesTest):

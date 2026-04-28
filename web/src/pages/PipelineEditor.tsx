@@ -37,6 +37,32 @@ const STAGE_COLORS = [
 ];
 
 type ViewMode = 'canvas' | 'yaml';
+type AgentDefWithRuntime = NonNullable<StageConfig['agent_defs']>[number];
+
+function agentRuntime(agent: AgentDefWithRuntime): string {
+  return agent.runtime_id || 'auto';
+}
+
+function normalizeAgentRuntime(agent: AgentDefWithRuntime): AgentDefWithRuntime {
+  return {
+    ...agent,
+    runtime_id: agentRuntime(agent),
+  };
+}
+
+function normalizeStagesForRuntime(stages: StageConfig[]): StageConfig[] {
+  return stages.map((stage) => {
+    const agentDefs = (stage.agent_defs || []).map((agent) => normalizeAgentRuntime(agent as AgentDefWithRuntime));
+    return agentDefs.length > 0 ? { ...stage, agent_defs: agentDefs } : stage;
+  }) as unknown as StageConfig[];
+}
+
+function stagesForSave(stages: StageConfig[]): StageConfig[] {
+  return stages.map((stage) => ({
+    ...stage,
+    agent_defs: stage.agent_defs?.map((agent) => normalizeAgentRuntime(agent as AgentDefWithRuntime)),
+  })) as unknown as StageConfig[];
+}
 
 function navigate(path: string) {
   window.history.pushState({}, '', path);
@@ -53,6 +79,14 @@ function defaultPipeline(): PipelineConfig {
       { id: 'develop', name: '代码实现', agents: [], is_parallel: false },
     ],
   };
+}
+
+function pipelineConfigData(pipeline: Pipeline): Record<string, unknown> {
+  return pipeline.yaml_config || {};
+}
+
+function stringValue(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback;
 }
 
 function configToYaml(config: PipelineConfig): string {
@@ -93,8 +127,9 @@ function configToYaml(config: PipelineConfig): string {
     if (stage.agent_defs && stage.agent_defs.length > 0) {
       lines.push(`    agent_defs:`);
       for (const agent of stage.agent_defs) {
+        const runtimeId = agentRuntime(agent as AgentDefWithRuntime);
         lines.push(`      - name: ${agent.name}`);
-        lines.push(`        provider: ${agent.provider}`);
+        lines.push(`        runtime_id: ${runtimeId}`);
         if (agent.model) lines.push(`        model: ${agent.model}`);
       }
     }
@@ -133,7 +168,7 @@ function stageToNodes(
         position: { x: x + 220, y: y + ai * 60 - ((stage.agent_defs?.length || 1) - 1) * 30 },
         data: {
           name: agent.name,
-          provider: agent.provider,
+          runtime_id: agentRuntime(agent as AgentDefWithRuntime),
           model: agent.model,
           role: agent.role,
           status: 'pending',
@@ -275,14 +310,14 @@ export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
           const found = pipelines.find((p: Pipeline) => p.id === pipelineId);
           if (found) {
             try {
-              const parsed = JSON.parse(found.yaml || '{}');
+              const parsed = pipelineConfigData(found);
               const result = StageSchema.array().safeParse(parsed.stages || []);
               if (result.success) {
                 setConfig({
-                  name: found.name || parsed.name || 'Pipeline',
-                  description: found.description || parsed.description || '',
-                  version: parsed.version || '1.0',
-                  stages: result.data,
+                  name: found.name || stringValue(parsed.name, 'Pipeline'),
+                  description: found.description || stringValue(parsed.description, ''),
+                  version: stringValue(parsed.version, '1.0'),
+                  stages: normalizeStagesForRuntime(result.data),
                 });
               } else {
                 setConfig({
@@ -364,7 +399,7 @@ export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
     const agentDefs = selectedStage.agent_defs || [];
     const newAgent = {
       name: `agent-${agentDefs.length + 1}`,
-      provider: 'Auto',
+      runtime_id: 'auto',
     };
     const updatedDefs = [...agentDefs, newAgent];
     handleStageUpdate('agent_defs', updatedDefs);
@@ -414,7 +449,7 @@ export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
     setSaving(true);
     setError('');
     try {
-      const yaml = configToYaml(config);
+      const stages = stagesForSave(config.stages);
       const id = config.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
       const response = await fetch('/api/pipelines', {
         method: 'POST',
@@ -423,7 +458,12 @@ export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
           id,
           name: config.name,
           description: config.description,
-          yaml_config: { stages: config.stages },
+          yaml_config: {
+            name: config.name,
+            description: config.description,
+            version: config.version,
+            stages,
+          },
         }),
       });
       if (!response.ok) {
@@ -656,7 +696,7 @@ export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
                         <div key={agent.name} className="pipeline-editor-list-item">
                           <div>
                             <strong>{agent.name}</strong>
-                            <span className="flow-node-tag">{agent.provider}</span>
+                            <span className="flow-node-tag">{agentRuntime(agent as AgentDefWithRuntime)}</span>
                             {agent.model && <span className="flow-node-tag">{agent.model}</span>}
                           </div>
                           <button className="iconButton" onClick={() => handleRemoveAgent(agent.name)}>×</button>

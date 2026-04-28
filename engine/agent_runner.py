@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 import threading
 import time
@@ -14,51 +13,11 @@ from .events import EventBus
 from .logging_config import get_logger, log_agent_complete, log_agent_start
 from .metrics import record_agent_duration
 from .models import AgentDefinition, AgentRun, utc_now
-
-
-DEFAULT_PROVIDER_ARGS = {
-    "claude": ["-p", "--output-format", "stream-json"],
-    "codex": ["exec"],
-    "opencode": ["run"],
-}
-
-DEFAULT_PROMPT_MODE = {
-    "claude": "arg",
-    "codex": "arg",
-    "opencode": "arg",
-}
+from .runtimes import build_runtime_command, resolve_auto_cli
 
 
 class AgentExecutionError(RuntimeError):
     pass
-
-
-def resolve_auto_cli() -> Optional[str]:
-    for name in ("claude", "codex", "opencode"):
-        if shutil.which(name):
-            return name
-    return None
-
-
-def build_command(provider: Dict[str, Any], prompt: str, model: Optional[str] = None) -> Tuple[List[str], str, str]:
-    cli = provider.get("cli", "auto")
-    if cli == "auto":
-        cli = resolve_auto_cli()
-        if not cli:
-            raise ConfigError("No supported agent CLI found. Install claude, codex, or opencode, or configure a provider.")
-    if cli == "mock":
-        return ["mock"], "mock", "arg"
-    args = list(provider.get("args") or DEFAULT_PROVIDER_ARGS.get(cli, []))
-    prompt_mode = provider.get("prompt_mode") or DEFAULT_PROMPT_MODE.get(cli, "stdin")
-    command = [cli] + args
-    if model:
-        if cli == "codex":
-            command.extend(["-m", model])
-        else:
-            command.extend(["--model", model])
-    if prompt_mode == "arg":
-        command.append(prompt)
-    return command, cli, prompt_mode
 
 
 def _decode_claude_stream_line(line: str) -> str:
@@ -89,7 +48,7 @@ class AgentRunner:
         run_id: str,
         stage_id: str,
         agent: AgentDefinition,
-        provider: Dict[str, Any],
+        runtime: Dict[str, Any],
         prompt: str,
         cwd: Path,
         output_file: Path,
@@ -100,7 +59,7 @@ class AgentRunner:
         timeout = agent.timeout or self.runner_config.get("agent_timeout_seconds") or 1800
         heartbeat_seconds = int(self.runner_config.get("heartbeat_seconds") or 0)
 
-        primary_model = agent.model or provider.get("default_model")
+        primary_model = agent.model or runtime.get("default_model")
         models_to_try: List[Optional[str]] = []
         if primary_model:
             models_to_try.append(primary_model)
@@ -119,7 +78,7 @@ class AgentRunner:
                 run_id=run_id,
                 stage_id=stage_id,
                 agent=agent,
-                provider=provider,
+                runtime=runtime,
                 prompt=prompt,
                 cwd=cwd,
                 output_file=output_file,
@@ -150,7 +109,7 @@ class AgentRunner:
         run_id: str,
         stage_id: str,
         agent: AgentDefinition,
-        provider: Dict[str, Any],
+        runtime: Dict[str, Any],
         prompt: str,
         cwd: Path,
         output_file: Path,
@@ -163,7 +122,8 @@ class AgentRunner:
         attempt_start = time.monotonic()
         agent_run = AgentRun(
             agent_name=agent.name,
-            provider=agent.provider,
+            runtime_id=agent.runtime_id,
+            runtime_cli=runtime.get("cli"),
             role=agent.role,
             model_requested=model_requested,
             model_used=model,
@@ -172,13 +132,14 @@ class AgentRunner:
             output_file=str(output_file),
             raw_log_file=str(raw_log_file),
         )
-        self.bus.emit("agent:started", run_id, stage_id=stage_id, agent_name=agent.name, provider=agent.provider)
-        log_agent_start(run_id, agent.name, agent.provider)
+        self.bus.emit("agent:started", run_id, stage_id=stage_id, agent_name=agent.name, runtime_id=agent.runtime_id)
+        log_agent_start(run_id, agent.name, agent.runtime_id)
 
         try:
-            command, cli, prompt_mode = build_command(provider, prompt, model=model)
+            command, cli, prompt_mode = build_runtime_command(runtime, prompt, model=model)
+            agent_run.runtime_cli = cli
             if cli == "mock":
-                content = provider.get("response") or f"Mock agent `{agent.name}` completed stage `{stage_id}`."
+                content = runtime.get("response") or f"Mock agent `{agent.name}` completed stage `{stage_id}`."
                 output_file.write_text(content + "\n", encoding="utf-8")
                 raw_log_file.write_text(content + "\n", encoding="utf-8")
                 agent_run.status = "completed"
@@ -321,8 +282,8 @@ class AgentRunner:
         prompt_tokens = estimate_tokens(getattr(self, "_last_prompt", ""))
         completion_tokens = estimate_tokens(output_text)
 
-        provider_config = self.config.get("providers", {}).get(agent_run.provider, {})
-        model = agent_run.model_used or (provider_config.get("model") if isinstance(provider_config, dict) else None) or "default"
+        runtime_config = self.config.get("runtimes", {}).get(agent_run.runtime_id, {})
+        model = agent_run.model_used or (runtime_config.get("model") if isinstance(runtime_config, dict) else None) or "default"
 
         self.cost_tracker.track_usage(
             run_id=run_id,

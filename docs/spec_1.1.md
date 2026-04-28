@@ -13,7 +13,7 @@
 ```
 迭代 1 (loopback 反馈注入) ──┐
 迭代 2 (worktree 默认启用)  ──┤
-迭代 3 (Provider 多模型)    ──┤         ┌─ M1 集成验证 ─┐
+迭代 3 (Runtime 多模型)     ──┤         ┌─ M1 集成验证 ─┐
 迭代 4 (持久化 ORM + 鉴权) ──┼── 迭代 5 (RQ + Redis) ── 迭代 7 (前端接真实 API)
                               │         │                     │
                               │         └─ M2 持久化验证 ──┐  │
@@ -46,7 +46,7 @@
 |---|------|------|------|--------|------|
 | 1 | Loopback 反馈注入 | 修复 orchestrator loopback 只写 marker 不注入实际输出的问题 | ✅ 已完成 | ~50 行 | 0.5 天 |
 | 2 | Worktree 默认启用 + 测试补全 | 默认 worktree.enabled=true + 自动检测回退 + engine 测试补全 | ✅ 已完成 | ~200 行 | 1 天 |
-| 3 | Provider 多模型 + Fallback | AgentDefinition 加 model 字段、build_command 支持 --model、fallback 链 | ✅ 已完成 | ~150 行 | 1 天 |
+| 3 | Runtime 多模型 + Fallback | AgentDefinition 加 model 字段、build_runtime_command 支持 --model、fallback 链 | ✅ 已完成 | ~150 行 | 1 天 |
 | 4 | 持久化 ORM + API 鉴权 | asyncpg CRUD 6 表 + JWT/API Key auth + model_used 迁移 | 🟡 部分完成 | ~450 行 | 2.5 天 |
 | 5 | RQ 任务队列 + Docker | 替换 threading 为 RQ、docker-compose 加 Redis+Worker、Worker 镜像 CLI 依赖 | 🟡 部分完成 | ~250 行 | 1.5 天 |
 | 6 | API 层切换持久化 | runtime.py 从内存切 DB、routes 从文件切 DB | ⬜ 未开始 | ~300 行 | 2 天 |
@@ -75,7 +75,7 @@
 核心改动：
 1. 新增 `_render_loopback_feedback` 方法，与 `render_gate_feedback` 保持格式一致（均用 `## xxx 反馈（第 N 次重试）` 标题）
 2. **截断长度配置化**：从 `runner.max_loopback_feedback_chars` 读取上限（默认 20000），而非硬编码 5000
-3. 反馈包含 agent 的 provider、状态、错误信息、输出内容；超过上限时自动截断并注明
+3. 反馈包含 agent 的 runtime、状态、错误信息、输出内容；超过上限时自动截断并注明
 4. 无 agent 时回退到 `_stage_output_text` 取整体 stage 输出
 
 ```python
@@ -130,7 +130,7 @@ runner:
 - `tests/test_worktree.py`：create→路径存在+分支名正确；cleanup→目录+分支清除；非 git 仓库→WorktreeError；base_branch 不存在→错误提示
 - `tests/test_quality_gates.py`：command 成功/失败；threshold 成功/失败；required=false→warning；max_retries 循环
 - `tests/test_context_scanner.py`：实施清单解析；max_file_size 截断
-- `tests/test_config.py`：项目级 .ai/agents/ 覆盖 prompt；normalize_config string provider；validate_production_config 错误
+- `tests/test_config.py`：项目级 .ai/agents/ 覆盖 prompt；normalize_config legacy provider；validate_production_config 错误
 - `tests/test_events.py`：subscribe/emit 传递；unsubscribe 后不收到
 
 ### 验收标准
@@ -140,10 +140,10 @@ runner:
 
 ---
 
-## 迭代 3：Provider 多模型 + Fallback — ✅ 已完成
+## 迭代 3：Runtime 多模型 + Fallback — ✅ 已完成
 
 ### 背景
-当前所有 agent 默认 `provider: Auto`（`engine/agent_runner.py:33-37` 按 claude→codex→opencode 顺序选第一个可用 CLI），没有模型级配置（不能指定 claude-opus vs claude-sonnet），没有 fallback（一种 CLI 挂了整个流水线挂）。
+当前所有 agent 默认 `runtime_id: auto`，由 runtime 配置中的 CLI 按 claude→codex→opencode 顺序选择第一个可用工具。agent 可配置模型级参数（如 claude-opus vs claude-sonnet）和 fallback 模型，避免一种模型失败后整个流水线直接失败。
 
 ### CLI 参数验证（已确认）
 
@@ -153,7 +153,7 @@ runner:
 | codex | `-m <MODEL>` |
 | opencode | `-m, --model` |
 
-`build_command` (`engine/agent_runner.py:41-59`) 实现：codex 用 `-m`，其他用 `--model`，与 CLI 实际参数一致。
+`build_runtime_command` 实现：codex 用 `-m`，其他 CLI 用 `--model`，与 CLI 实际参数一致。
 
 ### 实际实现
 
@@ -162,21 +162,21 @@ runner:
    - `fallback_models: List[str] = Field(default_factory=list)`
 2. `engine/models.py` AgentRun（第 54 行）：
    - `model_used: Optional[str] = None`
-3. `engine/agent_runner.py` `build_command(provider, prompt, model=None)`：
+3. `engine/runtimes.py` `build_runtime_command(runtime, prompt, model=None)`：
    - codex: `["-m", model]`，其他 CLI: `["--model", model]`
 4. `engine/agent_runner.py` `AgentRunner.run`（第 85-143 行）：
-   - 先用 `agent.model` 或 `provider.default_model` 执行
+   - 先用 `agent.model` 或 `runtime.default_model` 执行
    - 失败时按 `agent.fallback_models` 顺序重试
    - 记录 `agent_run.model_used`
    - 发送 `agent:fallback` 事件
 5. `templates/team.yaml` 示例已更新
 
 ### 测试方案
-- `tests/test_provider_models.py`：指定 model 时 build_command 输出含 `--model claude-opus-4-7`；mock 主模型失败→fallback 到下一个→记录 model_used；所有 fallback 都失败→返回最后错误
+- `tests/test_provider_models.py`：指定 model 时 build_runtime_command 输出含 `--model claude-opus-4-7`；mock 主模型失败→fallback 到下一个→记录 model_used；所有 fallback 都失败→返回最后错误
 
 ### 验收标准
 - 测试全通过
-- `build_command(provider_config, prompt, model="claude-opus-4-7")` 返回含 `--model` 的命令
+- `build_runtime_command(runtime_config, prompt, model="claude-opus-4-7")` 返回含 `--model` 的命令
 
 ---
 
@@ -447,7 +447,7 @@ Phase 2 核心：可视化编辑 Pipeline、模板管理、外部触发。
 
 **功能**：
 - React Flow v12 DAG 渲染
-- 自定义节点：StageNode（名称+状态）、AgentNode（provider+model）、GateNode
+- 自定义节点：StageNode（名称+状态）、AgentNode（runtime+model）、GateNode
 - LoopbackEdge：带 trigger 标签的回环连线
 - 右侧面板：属性编辑器
 - 底部：YAML 源码预览（只读或可编辑）

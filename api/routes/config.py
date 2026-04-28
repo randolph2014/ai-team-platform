@@ -6,10 +6,13 @@ from typing import Any, Dict, List
 from engine.config import (
     TEMPLATES_ROOT,
     _read_yaml,
+    ConfigError,
     find_project_root,
     load_config,
     validate_production_config,
 )
+from engine.runtimes import runtime_available
+from .settings import _mask_sensitive
 
 try:
     from fastapi import APIRouter, HTTPException, Query
@@ -19,7 +22,7 @@ except ImportError:  # pragma: no cover
 router = APIRouter() if APIRouter else None
 
 
-KNOWN_PROVIDERS = ["claude", "codex", "opencode"]
+KNOWN_RUNTIMES = ["claude", "codex", "opencode"]
 
 
 def _load_default_yaml() -> Dict[str, Any]:
@@ -30,30 +33,41 @@ def _load_default_yaml() -> Dict[str, Any]:
 
 if router:
 
-    @router.get("/config/providers")
-    def get_providers():
-        result: Dict[str, Any] = {"providers": {}}
-        for name in KNOWN_PROVIDERS:
-            result["providers"][name] = {"cli": name, "available": shutil.which(name) is not None}
+    @router.get("/config/runtimes")
+    def get_runtimes(workdir: str = Query(default=".")):
+        result: Dict[str, Any] = {"runtimes": {}}
+        for name in KNOWN_RUNTIMES:
+            result["runtimes"][name] = {"name": name, "cli": name, "available": shutil.which(name) is not None}
 
-        config = _load_default_yaml()
-        configured = config.get("providers", {})
-        for pname, pcfg in configured.items():
-            if pname not in result["providers"]:
-                cli = pcfg if isinstance(pcfg, str) else pcfg.get("cli", "")
-                result["providers"][pname] = {
-                    "cli": cli,
-                    "available": shutil.which(cli) is not None if cli and cli != "auto" else True,
-                }
+        try:
+            loaded = load_config(find_project_root(workdir))
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        configured = loaded.config.get("runtimes", {})
+        for runtime_id, runtime in configured.items():
+            item = dict(runtime)
+            item["available"] = runtime_available(item)
+            result["runtimes"][runtime_id] = _mask_sensitive(item)
 
         return result
 
     @router.get("/config/validate")
     def validate_config(workdir: str = Query(default=".")):
         project_root = find_project_root(workdir)
-        loaded = load_config(project_root)
         errors: List[str] = []
-        warnings: List[str] = list(loaded.warnings or [])
+        warnings: List[str] = []
+        try:
+            loaded = load_config(project_root)
+        except ConfigError as exc:
+            return {
+                "valid": False,
+                "errors": [str(exc)],
+                "warnings": warnings,
+                "source": None,
+                "path": None,
+            }
+        warnings.extend(loaded.warnings or [])
 
         try:
             validate_production_config(loaded.config)
@@ -66,6 +80,9 @@ if router:
         else:
             for agent in agents:
                 name = agent.get("name", "unknown")
+                runtime_id = agent.get("runtime_id")
+                if runtime_id not in loaded.config.get("runtimes", {}):
+                    errors.append(f"Unknown runtime referenced by agent '{name}': {runtime_id}")
                 prompt = agent.get("prompt", "")
                 if not prompt:
                     warnings.append(f"Agent '{name}' has no prompt configured")

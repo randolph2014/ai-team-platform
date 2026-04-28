@@ -497,7 +497,8 @@ CREATE TABLE agent_run (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     stage_run_id UUID NOT NULL REFERENCES stage_run(id) ON DELETE CASCADE,
     agent_name TEXT NOT NULL,
-    provider TEXT NOT NULL,
+    runtime_id TEXT NOT NULL,
+    runtime_cli TEXT,
     role TEXT,
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'running', 'completed', 'failed', 'timeout', 'cancelled')),
@@ -558,7 +559,7 @@ docs/prototypes/ai-team-dashboard/index.html
 - 页面骨架：必须包含原型中的 `仪表盘`、`执行记录`、`Pipeline 模板`、`设置` 四个一级入口，以及核心 `Run Detail` 页面。
 - Dashboard：保留今日运行、成功率、平均耗时、活跃 Agent 四个指标卡，以及最近运行表格。
 - Run Detail：必须以时间线为核心，展示 run header、需求描述、阶段卡、agent 行、实时 terminal、loopback 提示、quality_gates、verify、accept。
-- 设置页：保留 provider、context scanner、worktree、quality gates、runner 这些配置分区。
+- 设置页：保留 runtime、agent、context scanner、worktree、quality gates、runner 这些配置分区。
 - 新建运行：保留从模板、项目路径、需求文本创建 run 的 modal 交互。
 - 实时性：agent 输出必须像原型一样以 terminal/log 流方式增量展示，不能只显示最终摘要。
 - 任何视觉或交互偏离都必须在 PR/评审说明中解释原因，并提供截图对比。
@@ -576,7 +577,7 @@ docs/prototypes/ai-team-dashboard/index.html
   ├── 质量门禁结果
   ├── 产物文件列表（可查看/下载）
   └── loopback 回流记录
-/settings                      # 全局设置（provider 配置等）
+/settings                      # 全局设置（runtime 配置等）
 ```
 
 **核心页面：Run Detail**
@@ -656,9 +657,9 @@ Phase 1 前端完成时，除了功能可用，还必须通过原型对齐验收
 每次 pipeline 运行记录：
 - 总耗时
 - 各 agent 耗时
-- 总 token 消耗（从 agent 输出中解析，如果 provider 支持）
+- 总 token 消耗（从 agent 输出中解析，如果 runtime/CLI 支持）
 
-用于优化 prompt 和选择 provider。
+用于优化 prompt 和选择 runtime。
 
 ---
 
@@ -690,8 +691,8 @@ Phase 1 前端完成时，除了功能可用，还必须通过原型对齐验收
    - 支持逐步修改（先改一个文件，测试通过，再改下一个）
 
 6. **Agent 能力评估**
-   - 记录每个 agent/provider 在不同项目上的交付质量
-   - 为 provider 选择提供数据支撑
+   - 记录每个 agent/runtime 在不同项目上的交付质量
+   - 为 runtime 选择提供数据支撑
 
 ---
 
@@ -704,32 +705,32 @@ metadata:
   name: "LifeRhythm 标准交付"
   version: "1.0"
 
-# Provider 配置（兼容现有 team.yaml 字段）
-providers:
+# Runtime 配置（CLI 工具是一等抽象，agent 通过 runtime_id 引用）
+runtimes:
   Claude:
     cli: claude
     args: ["-p", "--output-format", "stream-json"]
     output_format: claude-stream-json
 
-# Agent 定义（兼容现有 team.yaml 字段）
+# Agent 定义
 agents:
   - name: architect
-    provider: Claude
+    runtime_id: Claude
     role: architect
     prompt: agents/solution-architect.md
 
   - name: developer
-    provider: Claude
+    runtime_id: Claude
     role: developer
     prompt: agents/tech-lead.md
 
   - name: qa
-    provider: Claude
+    runtime_id: Claude
     role: tester
     prompt: agents/qa-automation.md
 
   - name: reviewer
-    provider: Claude
+    runtime_id: Claude
     role: reviewer
     prompt: agents/code-reviewer.md
 

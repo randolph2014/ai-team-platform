@@ -21,12 +21,12 @@ SKILL_ROOT = Path.home() / ".agents" / "skills" / "ai-team"
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "providers": {"Auto": {"cli": "auto"}},
+    "runtimes": {"auto": {"name": "Auto", "cli": "auto"}},
     "agents": [
-        {"name": "solution-architect", "provider": "Auto", "role": "architect", "prompt": "agents/solution-architect.md"},
-        {"name": "tech-lead", "provider": "Auto", "role": "lead", "prompt": "agents/tech-lead.md"},
-        {"name": "qa-automation", "provider": "Auto", "role": "tester", "prompt": "agents/qa-automation.md"},
-        {"name": "code-reviewer", "provider": "Auto", "role": "reviewer", "prompt": "agents/code-reviewer.md"},
+        {"name": "solution-architect", "runtime_id": "auto", "role": "architect", "prompt": "agents/solution-architect.md"},
+        {"name": "tech-lead", "runtime_id": "auto", "role": "lead", "prompt": "agents/tech-lead.md"},
+        {"name": "qa-automation", "runtime_id": "auto", "role": "tester", "prompt": "agents/qa-automation.md"},
+        {"name": "code-reviewer", "runtime_id": "auto", "role": "reviewer", "prompt": "agents/code-reviewer.md"},
     ],
     "pipeline": [
         {
@@ -114,31 +114,73 @@ def load_config(project_root: Path, explicit_config: Optional[str] = None) -> Lo
             config = _read_yaml(path)
             if source == "platform":
                 warnings.append(f"未找到项目级 .ai/team.yaml，使用平台模板: {path}")
-            return LoadedConfig(config=normalize_config(config), source=source, path=str(path), warnings=warnings)
+            if "providers" in config or any(isinstance(agent, dict) and "provider" in agent for agent in config.get("agents", [])):
+                warnings.append("DEPRECATED: providers/agent.provider 已迁移为 runtimes/agent.runtime_id，请保存配置以写回新结构。")
+            return LoadedConfig(config=normalize_config(config, project_root), source=source, path=str(path), warnings=warnings)
 
     warnings.append("未找到项目级配置或平台模板，使用内置默认配置")
-    return LoadedConfig(config=normalize_config(DEFAULT_CONFIG), source="default", warnings=warnings)
+    return LoadedConfig(config=normalize_config(DEFAULT_CONFIG, project_root), source="default", warnings=warnings)
 
 
-def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_config(config: Dict[str, Any], project_root: Optional[Path] = None) -> Dict[str, Any]:
     normalized = dict(config)
-    providers = normalized.get("providers") or {}
-    normalized_providers: Dict[str, Dict[str, Any]] = {}
-    for name, provider in providers.items():
-        if isinstance(provider, str):
-            normalized_providers[name] = {"cli": provider}
-        elif isinstance(provider, dict):
-            normalized_providers[name] = dict(provider)
-        else:
-            raise ConfigError(f"Invalid provider config for {name}")
-    if "Auto" not in normalized_providers:
-        normalized_providers["Auto"] = {"cli": "auto"}
-    normalized["providers"] = normalized_providers
-    normalized.setdefault("agents", [])
+    legacy_providers = normalized.pop("providers", None)
+    if legacy_providers is not None and normalized.get("runtimes"):
+        raise ConfigError("Config cannot contain both runtimes and legacy providers")
+
+    runtime_source = normalized.get("runtimes")
+    if runtime_source is None:
+        runtime_source = legacy_providers or {"auto": {"name": "Auto", "cli": "auto"}}
+    if not runtime_source:
+        runtime_source = {"auto": {"name": "Auto", "cli": "auto"}}
+
+    normalized_runtimes: Dict[str, Dict[str, Any]] = {}
+    if isinstance(runtime_source, list):
+        for runtime in runtime_source:
+            if not isinstance(runtime, dict) or not runtime.get("id"):
+                raise ConfigError("Runtime list entries must be mappings with an id")
+            runtime_id = str(runtime["id"])
+            runtime_config = dict(runtime)
+            runtime_config.pop("id", None)
+            normalized_runtimes[runtime_id] = runtime_config
+    elif isinstance(runtime_source, dict):
+        for runtime_id, runtime in runtime_source.items():
+            if isinstance(runtime, str):
+                normalized_runtimes[str(runtime_id)] = {"cli": runtime}
+            elif isinstance(runtime, dict):
+                normalized_runtimes[str(runtime_id)] = dict(runtime)
+            else:
+                raise ConfigError(f"Invalid runtime config for {runtime_id}")
+    else:
+        raise ConfigError("runtimes must be a mapping or a list")
+
+    if not normalized_runtimes:
+        normalized_runtimes["auto"] = {"name": "Auto", "cli": "auto"}
+    for runtime_id, runtime in normalized_runtimes.items():
+        runtime.setdefault("name", runtime_id)
+        runtime.setdefault("cli", "auto")
+    normalized["runtimes"] = normalized_runtimes
+
+    normalized_agents: List[Dict[str, Any]] = []
+    default_runtime_id = next(iter(normalized_runtimes))
+    for item in normalized.get("agents", []) or []:
+        if not isinstance(item, dict):
+            raise ConfigError("Agent config entries must be mappings")
+        agent = dict(item)
+        legacy_provider = agent.pop("provider", None)
+        if "runtime_id" not in agent:
+            agent["runtime_id"] = legacy_provider or default_runtime_id
+        elif legacy_provider and legacy_provider != agent["runtime_id"]:
+            raise ConfigError(f"Agent {agent.get('name', '<unknown>')} cannot contain both provider and a different runtime_id")
+        if agent["runtime_id"] not in normalized_runtimes:
+            raise ConfigError(f"Unknown runtime referenced by agent {agent.get('name', '<unknown>')}: {agent['runtime_id']}")
+        normalized_agents.append(agent)
+    normalized["agents"] = normalized_agents
     normalized.setdefault("pipeline", [])
     normalized.setdefault("runner", {})
     normalized.setdefault("worktree", {"enabled": True})
     normalized.setdefault("quality_gates", [])
+
     return normalized
 
 
@@ -148,14 +190,6 @@ def agent_map(config: Dict[str, Any]) -> Dict[str, AgentDefinition]:
         agent = AgentDefinition(**item)
         agents[agent.name] = agent
     return agents
-
-
-def provider_config(config: Dict[str, Any], provider_name: str) -> Dict[str, Any]:
-    providers = config.get("providers", {})
-    provider = providers.get(provider_name)
-    if provider is None:
-        raise ConfigError(f"Unknown provider: {provider_name}")
-    return dict(provider)
 
 
 def resolve_prompt_path(

@@ -17,6 +17,116 @@ stages:
     agents: [qa, reviewer]
 `;
 
+function cleanScalar(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function parseInlineList(value: string): string[] {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) {
+    return trimmed ? [cleanScalar(trimmed)] : [];
+  }
+  return trimmed
+    .slice(1, -1)
+    .split(',')
+    .map((item) => cleanScalar(item))
+    .filter(Boolean);
+}
+
+function parsePipelineYaml(text: string): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  const stages: Array<Record<string, unknown>> = [];
+  let currentStage: Record<string, unknown> | null = null;
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.replace(/\s+$/, '');
+    const topLevel = line.match(/^([a-zA-Z_][\w-]*):\s*(.*)$/);
+    if (topLevel && !line.startsWith(' ')) {
+      const [, key, value] = topLevel;
+      if (key === 'stages') continue;
+      config[key] = cleanScalar(value);
+      continue;
+    }
+
+    const stageStart = line.match(/^\s{2}-\s+id:\s*(.+)$/);
+    if (stageStart) {
+      currentStage = { id: cleanScalar(stageStart[1]), agents: [] };
+      stages.push(currentStage);
+      continue;
+    }
+
+    const stageField = line.match(/^\s{4}([a-zA-Z_][\w-]*):\s*(.*)$/);
+    if (stageField && currentStage) {
+      const [, key, value] = stageField;
+      if (key === 'agents' || key === 'input') {
+        currentStage[key] = parseInlineList(value);
+      } else if (key === 'is_parallel' || key === 'parallel') {
+        currentStage[key === 'parallel' ? 'is_parallel' : key] = value.trim() === 'true';
+      } else {
+        currentStage[key] = cleanScalar(value);
+      }
+    }
+  }
+
+  config.stages = stages;
+  if (stages.length === 0) {
+    throw new Error('YAML 配置至少需要一个 stages 条目');
+  }
+  return config;
+}
+
+function pipelineConfigToYaml(config: Record<string, unknown>, fallbackName: string, fallbackDescription: string): string {
+  const lines: string[] = [];
+  const name = typeof config.name === 'string' ? config.name : fallbackName;
+  const description = typeof config.description === 'string' ? config.description : fallbackDescription;
+  lines.push(`name: ${name}`);
+  if (description) lines.push(`description: ${description}`);
+  lines.push('stages:');
+  const stages = Array.isArray(config.stages) ? config.stages : [];
+  for (const stage of stages) {
+    if (!stage || typeof stage !== 'object') continue;
+    const record = stage as Record<string, unknown>;
+    const id = typeof record.id === 'string' ? record.id : '';
+    if (!id) continue;
+    lines.push(`  - id: ${id}`);
+    if (typeof record.name === 'string') lines.push(`    name: ${record.name}`);
+    if (Array.isArray(record.agents) && record.agents.length > 0) {
+      lines.push(`    agents: [${record.agents.join(', ')}]`);
+    }
+    if (record.is_parallel === true) lines.push('    is_parallel: true');
+    if (Array.isArray(record.input) && record.input.length > 0) {
+      lines.push(`    input: [${record.input.join(', ')}]`);
+    } else if (typeof record.input === 'string') {
+      lines.push(`    input: ${record.input}`);
+    }
+  }
+  return lines.length > 2 ? `${lines.join('\n')}\n` : DEFAULT_YAML;
+}
+
+function pipelineToYaml(pipeline: Pipeline | null): string {
+  if (!pipeline) return DEFAULT_YAML;
+  return pipelineConfigToYaml(pipeline.yaml_config || {}, pipeline.name, pipeline.description);
+}
+
+function templateToYaml(template: PipelineTemplate): string {
+  return pipelineConfigToYaml(
+    {
+      name: template.name,
+      description: template.description,
+      stages: template.stages.map((stage) => ({ id: stage, name: stage })),
+    },
+    template.name,
+    template.description,
+  );
+}
+
 function PipelineEditorModal({
   pipeline,
   onClose,
@@ -28,7 +138,7 @@ function PipelineEditorModal({
 }) {
   const [name, setName] = useState(pipeline?.name ?? '');
   const [description, setDescription] = useState(pipeline?.description ?? '');
-  const [yaml, setYaml] = useState(pipeline?.yaml ?? DEFAULT_YAML);
+  const [yaml, setYaml] = useState(pipelineToYaml(pipeline));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -40,7 +150,13 @@ function PipelineEditorModal({
     setSaving(true);
     setError('');
     try {
-      const payload = { id: name.trim().toLowerCase().replace(/\s+/g, '-'), name: name.trim(), description: description.trim(), yaml: yaml.trim() };
+      const yamlConfig = parsePipelineYaml(yaml.trim());
+      const payload = {
+        id: name.trim().toLowerCase().replace(/\s+/g, '-'),
+        name: name.trim(),
+        description: description.trim(),
+        yaml_config: yamlConfig,
+      };
       if (pipeline) {
         await updatePipeline(pipeline.id, payload);
       } else {
@@ -118,7 +234,7 @@ export function Pipelines() {
       id: template.id,
       name: template.name,
       description: template.description,
-      yaml: `name: ${template.name}\ndescription: ${template.description}\nstages:\n${template.stages.map((s) => `  - id: ${s}\n    name: ${s}`).join('\n')}\n`,
+      yaml_config: parsePipelineYaml(templateToYaml(template)),
       stage_count: template.stages.length,
     };
     setEditingPipeline(pipelineFromTemplate);

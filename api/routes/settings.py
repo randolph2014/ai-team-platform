@@ -16,10 +16,11 @@ from engine.config import (
 
 try:
     from fastapi import APIRouter, HTTPException, Query
-    from pydantic import BaseModel
+    from pydantic import BaseModel, ConfigDict
 except ImportError:  # pragma: no cover
     APIRouter = None
     BaseModel = object
+    ConfigDict = dict
 
 router = APIRouter() if APIRouter else None
 
@@ -33,6 +34,10 @@ SENSITIVE_KEY_PATTERNS: List[re.Pattern] = [
 MASK = "***"
 
 
+def _is_sensitive_key(key: str) -> bool:
+    return any(pattern.search(key) for pattern in SENSITIVE_KEY_PATTERNS)
+
+
 def _mask_sensitive(value: Any, depth: int = 0) -> Any:
     """递归脱敏：对 dict 中匹配敏感 key 模式的值替换为 ***。"""
     if depth > 10:
@@ -40,7 +45,7 @@ def _mask_sensitive(value: Any, depth: int = 0) -> Any:
     if isinstance(value, dict):
         masked = {}
         for k, v in value.items():
-            if isinstance(v, str) and len(v) > 0 and any(p.search(k) for p in SENSITIVE_KEY_PATTERNS):
+            if isinstance(v, str) and len(v) > 0 and _is_sensitive_key(k):
                 masked[k] = MASK
             else:
                 masked[k] = _mask_sensitive(v, depth + 1)
@@ -50,8 +55,35 @@ def _mask_sensitive(value: Any, depth: int = 0) -> Any:
     return value
 
 
+def _merge_runtime_updates(existing: Any, updates: Any) -> Any:
+    if not isinstance(existing, dict) or not isinstance(updates, dict):
+        return updates
+
+    merged: Dict[str, Any] = {}
+    for runtime_id, runtime_update in updates.items():
+        existing_runtime = existing.get(runtime_id)
+        merged[runtime_id] = _merge_preserving_masks(existing_runtime, runtime_update)
+    return merged
+
+
+def _merge_preserving_masks(existing: Any, updates: Any) -> Any:
+    if isinstance(existing, dict) and isinstance(updates, dict):
+        merged = dict(existing)
+        for key, value in updates.items():
+            if isinstance(value, str) and value == MASK and _is_sensitive_key(key):
+                if key in existing:
+                    continue
+                merged.pop(key, None)
+                continue
+            merged[key] = _merge_preserving_masks(existing.get(key), value)
+        return merged
+    return updates
+
+
 class SettingsUpdate(BaseModel):
-    providers: Optional[Dict[str, Any]] = None
+    model_config = ConfigDict(extra="forbid")
+
+    runtimes: Optional[Dict[str, Any]] = None
     agents: Optional[list] = None
     pipeline: Optional[list] = None
     runner: Optional[Dict[str, Any]] = None
@@ -89,7 +121,7 @@ def _safe_write_yaml(path: Path, data: Dict[str, Any]):
 
 def _structured_response(config: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "providers": config.get("providers", {}),
+        "runtimes": config.get("runtimes", {}),
         "agents": config.get("agents", []),
         "pipeline": config.get("pipeline", []),
         "runner": config.get("runner", {}),
@@ -110,24 +142,29 @@ def _do_update(body: SettingsUpdate, workdir: str) -> Dict[str, Any]:
             existing = _safe_read_yaml(config_path)
         except HTTPException:
             raise
-        existing = normalize_config(existing)
+        existing = normalize_config(existing, project_root)
     else:
         if DEFAULT_TEAM_FILE.exists():
             try:
                 existing = _safe_read_yaml(DEFAULT_TEAM_FILE)
             except HTTPException:
                 raise
-            existing = normalize_config(existing)
+            existing = normalize_config(existing, project_root)
         else:
-            existing = normalize_config(dict(DEFAULT_CONFIG))
+            existing = normalize_config(dict(DEFAULT_CONFIG), project_root)
 
     updates = body.model_dump(exclude_none=True)
     for key, value in updates.items():
         if value is not None:
-            existing[key] = value
+            if key == "runtimes":
+                existing[key] = _merge_runtime_updates(existing.get(key), value)
+            elif isinstance(existing.get(key), dict) and isinstance(value, dict):
+                existing[key] = _merge_preserving_masks(existing.get(key), value)
+            else:
+                existing[key] = value
 
     try:
-        normalize_config(existing)
+        existing = normalize_config(existing, project_root)
     except ConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

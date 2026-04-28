@@ -896,16 +896,16 @@ tr:last-child td { border-bottom: none; }
   </div>
   <div class="settings-grid">
     <div class="settings-nav">
-      <div class="settings-nav-item active" onclick="switchSettingsTab(this, 'settings-providers')">Provider 配置</div>
+      <div class="settings-nav-item active" onclick="switchSettingsTab(this, 'settings-runtimes')">Runtime 配置</div>
       <div class="settings-nav-item" onclick="switchSettingsTab(this, 'settings-context')">上下文扫描</div>
       <div class="settings-nav-item" onclick="switchSettingsTab(this, 'settings-worktree')">Worktree</div>
       <div class="settings-nav-item" onclick="switchSettingsTab(this, 'settings-gates')">质量门禁</div>
       <div class="settings-nav-item" onclick="switchSettingsTab(this, 'settings-runner')">Runner</div>
     </div>
     <div class="settings-content">
-      <div id="settings-providers" class="settings-panel card">
+      <div id="settings-runtimes" class="settings-panel card">
         <div class="setting-group">
-          <h3>Agent Provider</h3>
+          <h3>Agent Runtime</h3>
           <div class="setting-row">
             <div><div class="setting-label">Claude (Anthropic)</div><div class="setting-desc">使用 Claude Code CLI 作为 agent 执行引擎</div></div>
             <div class="toggle on" onclick="this.classList.toggle('on')"></div>
@@ -920,9 +920,9 @@ tr:last-child td { border-bottom: none; }
           </div>
         </div>
         <div class="setting-group">
-          <h3>默认 Provider</h3>
+          <h3>默认 Runtime</h3>
           <div class="setting-row">
-            <div><div class="setting-label">首选 Provider</div><div class="setting-desc">未指定时使用此 provider</div></div>
+            <div><div class="setting-label">首选 Runtime</div><div class="setting-desc">未指定时使用此 runtime</div></div>
             <select class="input-field" style="width:160px;">
               <option>Claude</option>
               <option>Hermes</option>

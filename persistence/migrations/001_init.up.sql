@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS agent_run (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     stage_run_id UUID NOT NULL REFERENCES stage_run(id) ON DELETE CASCADE,
     agent_name TEXT NOT NULL,
-    provider TEXT NOT NULL,
+    runtime_id TEXT NOT NULL,
+    runtime_cli TEXT,
     role TEXT,
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'running', 'completed', 'failed', 'timeout', 'cancelled')),

@@ -6,60 +6,76 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from engine.agent_runner import AgentRunner, build_command, _decode_claude_stream_line, resolve_auto_cli
+from engine.agent_runner import AgentRunner, _decode_claude_stream_line, resolve_auto_cli
 from engine.config import ConfigError
 from engine.cost_tracker import CostTracker
 from engine.models import AgentDefinition
 
 
 class TestBuildCommand(unittest.TestCase):
-    def test_mock_provider(self) -> None:
-        """mock provider 返回 mock 命令"""
-        cmd, cli, mode = build_command({"cli": "mock"}, "test prompt")
+    def test_mock_runtime(self) -> None:
+        """mock runtime 返回 mock 命令"""
+        from engine.runtimes import build_runtime_command
+
+        cmd, cli, mode = build_runtime_command({"cli": "mock"}, "test prompt")
         self.assertEqual(cmd, ["mock"])
         self.assertEqual(cli, "mock")
 
-    def test_claude_provider(self) -> None:
-        """claude provider 构建 claude 命令"""
-        cmd, cli, mode = build_command({"cli": "claude"}, "do something")
+    def test_claude_runtime(self) -> None:
+        """claude runtime 构建 claude 命令"""
+        from engine.runtimes import build_runtime_command
+
+        cmd, cli, mode = build_runtime_command({"cli": "claude"}, "do something")
         self.assertEqual(cmd[0], "claude")
         self.assertIn("do something", cmd)
         self.assertEqual(mode, "arg")
 
-    def test_codex_provider(self) -> None:
-        """codex provider 构建 codex exec 命令"""
-        cmd, cli, mode = build_command({"cli": "codex"}, "do something")
+    def test_codex_runtime(self) -> None:
+        """codex runtime 构建 codex exec 命令"""
+        from engine.runtimes import build_runtime_command
+
+        cmd, cli, mode = build_runtime_command({"cli": "codex"}, "do something")
         self.assertEqual(cmd[0], "codex")
         self.assertIn("exec", cmd)
         self.assertEqual(mode, "arg")
 
-    def test_opencode_provider(self) -> None:
-        """opencode provider 构建 opencode run 命令"""
-        cmd, cli, mode = build_command({"cli": "opencode"}, "do something")
+    def test_opencode_runtime(self) -> None:
+        """opencode runtime 构建 opencode run 命令"""
+        from engine.runtimes import build_runtime_command
+
+        cmd, cli, mode = build_runtime_command({"cli": "opencode"}, "do something")
         self.assertEqual(cmd[0], "opencode")
         self.assertIn("run", cmd)
 
     def test_claude_with_model(self) -> None:
         """claude 带 model 参数"""
-        cmd, _, _ = build_command({"cli": "claude"}, "prompt", model="claude-opus-4-7")
+        from engine.runtimes import build_runtime_command
+
+        cmd, _, _ = build_runtime_command({"cli": "claude"}, "prompt", model="claude-opus-4-7")
         self.assertIn("--model", cmd)
         self.assertIn("claude-opus-4-7", cmd)
 
     def test_codex_with_model(self) -> None:
         """codex 带 model 参数"""
-        cmd, _, _ = build_command({"cli": "codex"}, "prompt", model="gpt-4")
+        from engine.runtimes import build_runtime_command
+
+        cmd, _, _ = build_runtime_command({"cli": "codex"}, "prompt", model="gpt-4")
         self.assertIn("-m", cmd)
         self.assertIn("gpt-4", cmd)
 
-    @patch("engine.agent_runner.resolve_auto_cli", return_value=None)
+    @patch("engine.runtimes.resolve_auto_cli", return_value=None)
     def test_auto_no_cli_raises(self, mock_resolve) -> None:
         """auto 但无可用 CLI 时抛出 ConfigError"""
+        from engine.runtimes import build_runtime_command
+
         with self.assertRaises(ConfigError):
-            build_command({"cli": "auto"}, "prompt")
+            build_runtime_command({"cli": "auto"}, "prompt")
 
     def test_custom_args_override(self) -> None:
         """自定义 args 覆盖默认"""
-        cmd, _, _ = build_command({"cli": "claude", "args": ["--custom"]}, "prompt")
+        from engine.runtimes import build_runtime_command
+
+        cmd, _, _ = build_runtime_command({"cli": "claude", "args": ["--custom"]}, "prompt")
         self.assertIn("--custom", cmd)
         self.assertNotIn("--output-format", " ".join(cmd))
 
@@ -100,20 +116,20 @@ class TestAgentRunnerMock(unittest.TestCase):
     def test_mock_agent_with_fallback_models(self) -> None:
         """mock agent 带 fallback_models 字段时，主模型 mock 成功直接返回"""
         config = {
-            "providers": {"Mock": {"cli": "mock", "response": "done"}},
+            "runtimes": {"Mock": {"cli": "mock", "response": "done"}},
             "runner": {},
         }
         runner = AgentRunner(config)
         agent = AgentDefinition(
-            name="test-agent", provider="Mock", role="tester",
+            name="test-agent", runtime_id="Mock", role="tester",
             model="primary-model", fallback_models=["fallback-1"],
         )
-        provider = {"cli": "mock", "response": "mock output success"}
+        runtime = {"cli": "mock", "response": "mock output success"}
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp)
             output_file = cwd / "output.md"
             raw_log = cwd / "raw.log"
-            result = runner.run("run-1", "stage-1", agent, provider, "do something", cwd, output_file, raw_log)
+            result = runner.run("run-1", "stage-1", agent, runtime, "do something", cwd, output_file, raw_log)
             self.assertEqual(result.status, "completed")
             self.assertEqual(result.model_used, "primary-model")
 
@@ -124,16 +140,16 @@ class TestAgentRunnerCostTracking(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cost_tracker = CostTracker(Path(tmp))
             config = {
-                "providers": {"Mock": {"cli": "mock", "response": "test output"}},
+                "runtimes": {"Mock": {"cli": "mock", "response": "test output"}},
                 "runner": {},
             }
             runner = AgentRunner(config, cost_tracker=cost_tracker)
-            agent = AgentDefinition(name="dev", provider="Mock")
-            provider = {"cli": "mock", "response": "hello world"}
+            agent = AgentDefinition(name="dev", runtime_id="Mock")
+            runtime = {"cli": "mock", "response": "hello world"}
             cwd = Path(tmp)
             output_file = cwd / "out.md"
             raw_log = cwd / "raw.log"
-            result = runner.run("r1", "s1", agent, provider, "do something", cwd, output_file, raw_log)
+            result = runner.run("r1", "s1", agent, runtime, "do something", cwd, output_file, raw_log)
             self.assertEqual(result.status, "completed")
             # cost_tracker should have tracked usage
             costs = cost_tracker.get_run_costs("r1")
@@ -179,8 +195,10 @@ class TestDecodeClaudeStreamLineExtended(unittest.TestCase):
 
 class TestBuildCommandOpencode(unittest.TestCase):
     def test_opencode_with_model(self) -> None:
-        """opencode provider 带 model 参数"""
-        cmd, cli, mode = build_command({"cli": "opencode"}, "prompt", model="deepseek-v3")
+        """opencode runtime 带 model 参数"""
+        from engine.runtimes import build_runtime_command
+
+        cmd, cli, mode = build_runtime_command({"cli": "opencode"}, "prompt", model="deepseek-v3")
         self.assertEqual(cmd[0], "opencode")
         self.assertIn("run", cmd)
         self.assertIn("--model", cmd)
@@ -189,8 +207,10 @@ class TestBuildCommandOpencode(unittest.TestCase):
         self.assertEqual(cli, "opencode")
 
     def test_opencode_without_model(self) -> None:
-        """opencode provider 不带 model"""
-        cmd, cli, mode = build_command({"cli": "opencode"}, "hello")
+        """opencode runtime 不带 model"""
+        from engine.runtimes import build_runtime_command
+
+        cmd, cli, mode = build_runtime_command({"cli": "opencode"}, "hello")
         self.assertEqual(cmd, ["opencode", "run", "hello"])
 
 
@@ -205,16 +225,16 @@ class TestAgentRunnerSubprocessFailure(unittest.TestCase):
         mock_proc.wait.return_value = 1
         mock_popen_cls.return_value = mock_proc
 
-        config = {"providers": {"P": {"cli": "claude"}}, "runner": {}}
+        config = {"runtimes": {"P": {"cli": "claude"}}, "runner": {}}
         runner = AgentRunner(config)
-        agent = AgentDefinition(name="a1", provider="P", model="m1")
-        provider = {"cli": "claude"}
+        agent = AgentDefinition(name="a1", runtime_id="P", model="m1")
+        runtime = {"cli": "claude"}
 
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp)
             output_file = cwd / "out.md"
             raw_log = cwd / "raw.log"
-            result = runner.run("r1", "s1", agent, provider, "prompt", cwd, output_file, raw_log)
+            result = runner.run("r1", "s1", agent, runtime, "prompt", cwd, output_file, raw_log)
             self.assertEqual(result.status, "failed")
             self.assertEqual(result.exit_code, 1)
             self.assertIn("exited with code 1", result.error_message)
@@ -224,16 +244,16 @@ class TestAgentRunnerSubprocessFailure(unittest.TestCase):
         """subprocess.Popen 抛出 FileNotFoundError 时，状态为 failed"""
         mock_popen_cls.side_effect = FileNotFoundError("claude not found")
 
-        config = {"providers": {"P": {"cli": "claude"}}, "runner": {}}
+        config = {"runtimes": {"P": {"cli": "claude"}}, "runner": {}}
         runner = AgentRunner(config)
-        agent = AgentDefinition(name="a1", provider="P", model="m1")
-        provider = {"cli": "claude"}
+        agent = AgentDefinition(name="a1", runtime_id="P", model="m1")
+        runtime = {"cli": "claude"}
 
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp)
             output_file = cwd / "out.md"
             raw_log = cwd / "raw.log"
-            result = runner.run("r1", "s1", agent, provider, "prompt", cwd, output_file, raw_log)
+            result = runner.run("r1", "s1", agent, runtime, "prompt", cwd, output_file, raw_log)
             self.assertEqual(result.status, "failed")
             self.assertIn("claude not found", result.error_message)
             self.assertTrue(output_file.exists())
@@ -258,16 +278,16 @@ class TestAgentRunnerSubprocessFailure(unittest.TestCase):
 
         mock_monotonic.side_effect = advance
 
-        config = {"providers": {"P": {"cli": "claude"}}, "runner": {}}
+        config = {"runtimes": {"P": {"cli": "claude"}}, "runner": {}}
         runner = AgentRunner(config)
-        agent = AgentDefinition(name="a1", provider="P", model="m1", timeout=1)
-        provider = {"cli": "claude"}
+        agent = AgentDefinition(name="a1", runtime_id="P", model="m1", timeout=1)
+        runtime = {"cli": "claude"}
 
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp)
             output_file = cwd / "out.md"
             raw_log = cwd / "raw.log"
-            result = runner.run("r1", "s1", agent, provider, "prompt", cwd, output_file, raw_log)
+            result = runner.run("r1", "s1", agent, runtime, "prompt", cwd, output_file, raw_log)
             self.assertEqual(result.status, "timeout")
             self.assertIn("timed out", result.error_message)
 
@@ -275,7 +295,7 @@ class TestAgentRunnerSubprocessFailure(unittest.TestCase):
 class TestAgentRunnerComplete(unittest.TestCase):
     def test_complete_records_duration_and_emits_event(self) -> None:
         """_complete 设置 completed_at、duration_seconds 并发射 agent:completed 事件"""
-        config = {"providers": {}, "runner": {}}
+        config = {"runtimes": {}, "runner": {}}
         bus = MagicMock()
         runner = AgentRunner(config, bus=bus)
         agent_run = MagicMock()
@@ -300,7 +320,7 @@ class TestAgentRunnerComplete(unittest.TestCase):
         """_complete 在有 cost_tracker 时调用 _track_cost"""
         with tempfile.TemporaryDirectory() as tmp:
             cost_tracker = CostTracker(Path(tmp))
-            config = {"providers": {"P": {"model": "test-model"}}, "runner": {}}
+            config = {"runtimes": {"P": {"model": "test-model"}}, "runner": {}}
             runner = AgentRunner(config, cost_tracker=cost_tracker)
             output_path = Path(tmp) / "out.md"
             output_path.write_text("agent output text", encoding="utf-8")
@@ -311,7 +331,7 @@ class TestAgentRunnerComplete(unittest.TestCase):
             agent_run.status = "completed"
             agent_run.exit_code = 0
             agent_run.output_file = str(output_path)
-            agent_run.provider = "P"
+            agent_run.runtime_id = "P"
 
             runner._last_prompt = "test prompt content"
             import time as _time
@@ -336,16 +356,16 @@ class TestAgentRunnerHeartbeat(unittest.TestCase):
         mock_popen_cls.return_value = mock_proc
 
         bus = MagicMock()
-        config = {"providers": {"P": {"cli": "claude"}}, "runner": {"heartbeat_seconds": 1}}
+        config = {"runtimes": {"P": {"cli": "claude"}}, "runner": {"heartbeat_seconds": 1}}
         runner = AgentRunner(config, bus=bus)
-        agent = AgentDefinition(name="a1", provider="P", model="m1")
-        provider = {"cli": "claude"}
+        agent = AgentDefinition(name="a1", runtime_id="P", model="m1")
+        runtime = {"cli": "claude"}
 
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp)
             output_file = cwd / "out.md"
             raw_log = cwd / "raw.log"
-            result = runner.run("r1", "s1", agent, provider, "prompt", cwd, output_file, raw_log)
+            result = runner.run("r1", "s1", agent, runtime, "prompt", cwd, output_file, raw_log)
             self.assertEqual(result.status, "completed")
 
 

@@ -135,7 +135,8 @@ class AgentRunRecord(BaseModel):
     id: str
     stage_run_id: str
     agent_name: str
-    provider: str
+    runtime_id: str
+    runtime_cli: Optional[str] = None
     role: Optional[str] = None
     model_requested: Optional[str] = None
     model_used: Optional[str] = None

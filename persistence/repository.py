@@ -370,7 +370,8 @@ class AgentRunRepo:
         id: str,
         stage_run_id: str,
         agent_name: str,
-        provider: str,
+        runtime_id: str,
+        runtime_cli: Optional[str],
         role: Optional[str],
         status: str,
         output_file: Optional[str],
@@ -385,12 +386,14 @@ class AgentRunRepo:
     ) -> None:
         await conn.execute(
             f"""
-            INSERT INTO {self.TABLE} (id, stage_run_id, agent_name, provider, role,
+            INSERT INTO {self.TABLE} (id, stage_run_id, agent_name, runtime_id, runtime_cli, role,
                                         status, output_file, raw_log_file, exit_code,
                                         error_message, model_requested, model_used,
                                         started_at, completed_at, duration_seconds)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             ON CONFLICT (id) DO UPDATE SET
+                runtime_id = EXCLUDED.runtime_id,
+                runtime_cli = EXCLUDED.runtime_cli,
                 status = EXCLUDED.status,
                 exit_code = EXCLUDED.exit_code,
                 error_message = EXCLUDED.error_message,
@@ -404,7 +407,8 @@ class AgentRunRepo:
             id,
             stage_run_id,
             agent_name,
-            provider,
+            runtime_id,
+            runtime_cli,
             role,
             status,
             output_file,
@@ -568,7 +572,8 @@ async def save_report(report: RunReport, config: Optional[Dict[str, Any]] = None
                         id=agent_db_id,
                         stage_run_id=stage_db_id,
                         agent_name=agent.agent_name,
-                        provider=agent.provider,
+                        runtime_id=agent.runtime_id,
+                        runtime_cli=agent.runtime_cli,
                         role=agent.role,
                         status=agent.status,
                         output_file=agent.output_file,
@@ -876,7 +881,8 @@ def run_detail_to_response(detail: Dict[str, Any]) -> Dict[str, Any]:
         for agent in stage.get("agents", []):
             agents.append({
                 "agent_name": agent.get("agent_name"),
-                "provider": agent.get("provider"),
+                "runtime_id": agent.get("runtime_id"),
+                "runtime_cli": agent.get("runtime_cli"),
                 "role": agent.get("role"),
                 "model_requested": agent.get("model_requested"),
                 "model_used": agent.get("model_used"),

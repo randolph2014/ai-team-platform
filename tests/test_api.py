@@ -31,13 +31,14 @@ class ApiTests(unittest.TestCase):
             (root / ".ai" / "agents" / "dev.md").write_text("You are a test agent.", encoding="utf-8")
             (root / ".ai" / "team.yaml").write_text(
                 """
-providers:
-  Mock:
+runtimes:
+  mock:
+    name: Mock
     cli: mock
     response: "done"
 agents:
   - name: dev
-    provider: Mock
+    runtime_id: mock
     role: developer
     prompt: agents/dev.md
 pipeline:

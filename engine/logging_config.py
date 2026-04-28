@@ -221,9 +221,9 @@ def log_stage_complete(run_id: str, stage_id: str, status: str, duration: float)
     )
 
 
-def log_agent_start(run_id: str, agent_name: str, provider: str) -> None:
+def log_agent_start(run_id: str, agent_name: str, runtime_id: str) -> None:
     get_logger("agent", run_id=run_id, agent_name=agent_name).info(
-        "agent start: %s (provider=%s)", agent_name, provider
+        "agent start: %s (runtime=%s)", agent_name, runtime_id
     )
 
 

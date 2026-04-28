@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const AgentDefSchema = z.object({
   name: z.string().min(1, 'Agent名不能为空'),
-  provider: z.string().default('Auto'),
+  runtime_id: z.string().default('auto'),
   model: z.string().optional(),
   role: z.string().optional(),
   prompt: z.string().optional(),

@@ -1,37 +1,38 @@
-providers:
-  Auto:
+runtimes:
+  auto:
+    name: Auto
     cli: auto
 
 agents:
   - name: solution-architect
-    provider: Auto
+    runtime_id: auto
     model: claude-opus-4-7
     fallback_models: [claude-sonnet-4-20250514]
     role: architect
     prompt: agents/solution-architect.md
 
   - name: brainstormer
-    provider: Auto
+    runtime_id: auto
     role: brainstormer
     prompt: agents/brainstormer.md
 
   - name: devils-advocate
-    provider: Auto
+    runtime_id: auto
     role: reviewer
     prompt: agents/devils-advocate.md
 
   - name: tech-lead
-    provider: Auto
+    runtime_id: auto
     role: lead
     prompt: agents/tech-lead.md
 
   - name: qa-automation
-    provider: Auto
+    runtime_id: auto
     role: tester
     prompt: agents/qa-automation.md
 
   - name: code-reviewer
-    provider: Auto
+    runtime_id: auto
     role: reviewer
     prompt: agents/code-reviewer.md
 

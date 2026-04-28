@@ -2,7 +2,8 @@ export type RunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancel
 
 export interface AgentRun {
   agent_name: string;
-  provider: string;
+  runtime_id?: string;
+  runtime_cli?: string;
   role?: string;
   status: string;
   duration_seconds?: number;
@@ -66,17 +67,43 @@ export interface Pipeline {
   id: string;
   name: string;
   description: string;
-  yaml: string;
+  yaml_config: Record<string, unknown>;
   stage_count?: number;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface RuntimeConfig {
+  name?: string;
+  cli: string;
+  args?: string[];
+  prompt_mode?: 'arg' | 'stdin';
+  default_model?: string;
+  env?: Record<string, string>;
+  available?: boolean;
+}
+
+export interface AgentConfig {
+  name: string;
+  runtime_id: string;
+  role?: string;
+  prompt?: string;
+  model?: string;
+  fallback_models?: string[];
+  timeout?: number;
+}
+
+export interface AppConfig {
+  runtimes?: Record<string, RuntimeConfig>;
+  agents?: AgentConfig[];
+  [section: string]: unknown;
 }
 
 export interface SettingsResponse {
   source: string;
   path: string | null;
   warnings: string[];
-  config: Record<string, unknown>;
+  config: AppConfig;
 }
 
 export interface PipelineTemplate {

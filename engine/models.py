@@ -39,7 +39,7 @@ class LoadedConfig(BaseModel):
 
 class AgentDefinition(BaseModel):
     name: str
-    provider: str = "Auto"
+    runtime_id: str = "auto"
     role: Optional[str] = None
     prompt: Optional[str] = None
     timeout: Optional[int] = None
@@ -49,7 +49,8 @@ class AgentDefinition(BaseModel):
 
 class AgentRun(BaseModel):
     agent_name: str
-    provider: str
+    runtime_id: str
+    runtime_cli: Optional[str] = None
     role: Optional[str] = None
     model_requested: Optional[str] = None
     model_used: Optional[str] = None

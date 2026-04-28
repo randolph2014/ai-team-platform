@@ -16,7 +16,6 @@ from .config import (
     ConfigError,
     agent_map,
     load_config,
-    provider_config,
     read_prompt,
     validate_production_config,
 )
@@ -24,6 +23,7 @@ from .context_scanner import scan_codebase
 from .cost_tracker import CostTracker
 from .events import EventBus
 from .models import AgentDefinition, AgentRun, RunReport, StageRun, model_to_dict, utc_now
+from .runtimes import runtime_config
 from .quality_gates import (
     has_blocking_failure,
     max_retry_count_for_failures,
@@ -343,12 +343,12 @@ class Orchestrator:
             if agent_name not in self.agents:
                 raise ConfigError(f"Agent not configured: {agent_name}")
             agent = self.agents[agent_name]
-            provider = provider_config(self.config, agent.provider)
+            runtime = runtime_config(self.config, agent.runtime_id)
             output_name = (stage.get("output") or {}).get(agent.name) or f"{agent.name}-output.md"
             output_file = output_dir / output_name
             raw_log_file = output_dir / f"{stage_id}-{agent.name}.raw.log"
             prompt = self._render_prompt(stage, agent, output_dir, cwd, extra_feedback)
-            return runner.run(report.run_id, stage_id, agent, provider, prompt, cwd, output_file, raw_log_file)
+            return runner.run(report.run_id, stage_id, agent, runtime, prompt, cwd, output_file, raw_log_file)
 
         try:
             if stage.get("parallel") and len(agent_names) > 1:
@@ -385,7 +385,8 @@ class Orchestrator:
             lines.extend([
                 "",
                 f"### Agent: {agent.agent_name}",
-                f"- Provider: {agent.provider}",
+                f"- Runtime: {agent.runtime_id}",
+                f"- CLI: {agent.runtime_cli or 'unknown'}",
                 f"- 状态: {agent.status}",
             ])
             if agent.error_message:

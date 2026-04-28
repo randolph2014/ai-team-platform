@@ -21,7 +21,7 @@ function StageCard({ stage, liveLines }: { stage: StageRun; liveLines: string[] 
               <div className="agentIcon">{agent.agent_name.slice(0, 2).toUpperCase()}</div>
               <div>
                 <div className="agentName">{agent.agent_name}</div>
-                <div className="agentRole">{agent.role ?? agent.provider}</div>
+                <div className="agentRole">{agent.role ?? agent.runtime_id ?? agent.runtime_cli}</div>
               </div>
             </div>
             <div className="agentMeta">

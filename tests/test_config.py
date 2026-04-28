@@ -17,7 +17,6 @@ from engine.config import (
     load_config,
     load_json_file,
     normalize_config,
-    provider_config,
     read_prompt,
     resolve_prompt_path,
     validate_production_config,
@@ -51,11 +50,48 @@ class TestProjectPromptOverride(unittest.TestCase):
 
 
 class TestNormalizeConfig(unittest.TestCase):
+    def test_runtime_mapping_is_first_class(self) -> None:
+        """runtimes 是新的 CLI 执行器配置入口，agent 通过 runtime_id 引用"""
+        config = {
+            "runtimes": {"codex": {"name": "Codex", "cli": "codex"}},
+            "agents": [{"name": "dev", "runtime_id": "codex", "role": "developer"}],
+            "pipeline": [],
+        }
+        result = normalize_config(config)
+        self.assertNotIn("providers", result)
+        self.assertEqual(result["runtimes"]["codex"]["cli"], "codex")
+        self.assertEqual(result["agents"][0]["runtime_id"], "codex")
+        self.assertEqual(agent_map(result)["dev"].runtime_id, "codex")
+
+    def test_legacy_providers_migrate_to_runtimes(self) -> None:
+        """旧 providers/agent.provider 只作为读取期迁移输入，不保留为新结构"""
+        config = {
+            "providers": {"Mock": {"cli": "mock", "response": "done"}},
+            "agents": [{"name": "dev", "provider": "Mock", "role": "developer"}],
+            "pipeline": [],
+        }
+        result = normalize_config(config)
+        self.assertNotIn("providers", result)
+        self.assertEqual(result["runtimes"]["Mock"]["cli"], "mock")
+        self.assertEqual(result["agents"][0]["runtime_id"], "Mock")
+        self.assertNotIn("provider", result["agents"][0])
+
+    def test_agent_runtime_reference_must_exist(self) -> None:
+        """agent.runtime_id 必须指向已配置 runtime，避免运行期才失败"""
+        with self.assertRaises(ConfigError):
+            normalize_config(
+                {
+                    "runtimes": {"codex": {"cli": "codex"}},
+                    "agents": [{"name": "dev", "runtime_id": "missing"}],
+                    "pipeline": [],
+                }
+            )
+
     def test_string_provider_normalized(self) -> None:
-        """字符串 provider 自动转为 dict 形式"""
+        """字符串 legacy provider 自动迁移为 runtime dict"""
         config = {"providers": {"Test": "test-cli"}}
         result = normalize_config(config)
-        self.assertEqual(result["providers"]["Test"], {"cli": "test-cli"})
+        self.assertEqual(result["runtimes"]["Test"]["cli"], "test-cli")
 
     def test_worktree_default_enabled(self) -> None:
         """normalize_config 默认 worktree.enabled=True"""
@@ -70,14 +106,14 @@ class TestNormalizeConfig(unittest.TestCase):
         self.assertEqual(result["quality_gates"], [])
 
     def test_invalid_provider_raises(self) -> None:
-        """无效 provider 类型抛出 ConfigError"""
+        """无效 legacy provider 类型抛出 ConfigError"""
         with self.assertRaises(ConfigError):
             normalize_config({"providers": {"Bad": 123}})
 
     def test_auto_provider_added_when_missing(self) -> None:
-        """无 Auto provider 时自动添加"""
-        result = normalize_config({"providers": {"Custom": {"cli": "custom"}}})
-        self.assertIn("Auto", result["providers"])
+        """无 runtime 时自动添加 auto runtime"""
+        result = normalize_config({})
+        self.assertIn("auto", result["runtimes"])
 
     def test_runners_default_empty(self) -> None:
         """normalize_config 默认 runner={}"""
@@ -86,17 +122,21 @@ class TestNormalizeConfig(unittest.TestCase):
         self.assertEqual(result["runner"], {})
 
 
-class TestProviderConfig(unittest.TestCase):
-    def test_get_existing_provider(self) -> None:
-        """provider_config 返回已存在的 provider"""
-        config = {"providers": {"Test": {"cli": "test-cli", "timeout": 30}}}
-        result = provider_config(config, "Test")
+class TestRuntimeConfig(unittest.TestCase):
+    def test_get_existing_runtime(self) -> None:
+        """runtime_config 返回已存在的 runtime"""
+        from engine.runtimes import runtime_config
+
+        config = {"runtimes": {"Test": {"cli": "test-cli", "timeout": 30}}}
+        result = runtime_config(config, "Test")
         self.assertEqual(result["cli"], "test-cli")
 
-    def test_unknown_provider_raises(self) -> None:
-        """查询不存在的 provider 抛出 ConfigError"""
+    def test_unknown_runtime_raises(self) -> None:
+        """查询不存在的 runtime 抛出 ConfigError"""
+        from engine.runtimes import runtime_config
+
         with self.assertRaises(ConfigError):
-            provider_config({"providers": {}}, "Nonexistent")
+            runtime_config({"runtimes": {}}, "Nonexistent")
 
 
 class TestLoadConfig(unittest.TestCase):
@@ -119,7 +159,7 @@ class TestLoadConfig(unittest.TestCase):
             config_path = root / "custom.yaml"
             config_path.write_text("providers:\n  Mock:\n    cli: mock\nagents: []\npipeline: []\n", encoding="utf-8")
             loaded = load_config(root, explicit_config=str(config_path))
-            self.assertIn("Mock", loaded.config["providers"])
+            self.assertIn("Mock", loaded.config["runtimes"])
 
     def test_load_config_invalid_yaml(self) -> None:
         """加载无效 YAML 抛出 ConfigError"""

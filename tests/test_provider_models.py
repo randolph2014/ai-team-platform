@@ -3,43 +3,44 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from engine.agent_runner import AgentRunner, build_command
+from engine.agent_runner import AgentRunner
 from engine.models import AgentDefinition, AgentRun
+from engine.runtimes import build_runtime_command
 
 
 class BuildCommandWithModelTest(unittest.TestCase):
     def test_claude_includes_model_flag(self) -> None:
-        provider = {"cli": "claude"}
-        cmd, cli, _ = build_command(provider, "do something", model="claude-opus-4-7")
+        runtime = {"cli": "claude"}
+        cmd, cli, _ = build_runtime_command(runtime, "do something", model="claude-opus-4-7")
         self.assertEqual(cli, "claude")
         self.assertIn("--model", cmd)
         idx = cmd.index("--model")
         self.assertEqual(cmd[idx + 1], "claude-opus-4-7")
 
     def test_codex_uses_dash_m(self) -> None:
-        provider = {"cli": "codex"}
-        cmd, cli, _ = build_command(provider, "do something", model="o3")
+        runtime = {"cli": "codex"}
+        cmd, cli, _ = build_runtime_command(runtime, "do something", model="o3")
         self.assertEqual(cli, "codex")
         self.assertIn("-m", cmd)
         idx = cmd.index("-m")
         self.assertEqual(cmd[idx + 1], "o3")
 
     def test_opencode_includes_model_flag(self) -> None:
-        provider = {"cli": "opencode"}
-        cmd, cli, _ = build_command(provider, "do something", model="gemini-2.5-pro")
+        runtime = {"cli": "opencode"}
+        cmd, cli, _ = build_runtime_command(runtime, "do something", model="gemini-2.5-pro")
         self.assertEqual(cli, "opencode")
         self.assertIn("--model", cmd)
         idx = cmd.index("--model")
         self.assertEqual(cmd[idx + 1], "gemini-2.5-pro")
 
     def test_no_model_omits_flag(self) -> None:
-        provider = {"cli": "claude"}
-        cmd, _, _ = build_command(provider, "do something", model=None)
+        runtime = {"cli": "claude"}
+        cmd, _, _ = build_runtime_command(runtime, "do something", model=None)
         self.assertNotIn("--model", cmd)
 
-    def test_mock_provider_ignores_model(self) -> None:
-        provider = {"cli": "mock"}
-        cmd, cli, _ = build_command(provider, "do something", model="any-model")
+    def test_mock_runtime_ignores_model(self) -> None:
+        runtime = {"cli": "mock"}
+        cmd, cli, _ = build_runtime_command(runtime, "do something", model="any-model")
         self.assertEqual(cli, "mock")
         self.assertEqual(cmd, ["mock"])
 
@@ -50,25 +51,25 @@ class FallbackRetryTest(unittest.TestCase):
         attempts: list = []
 
         def tracking_try_model(
-            run_id, stage_id, agent, provider, prompt, cwd, output_file, raw_log_file, model, model_requested, timeout, heartbeat_seconds
+            run_id, stage_id, agent, runtime, prompt, cwd, output_file, raw_log_file, model, model_requested, timeout, heartbeat_seconds
         ):
             attempts.append(model)
             if model == "primary-model":
                 return AgentRun(
-                    agent_name=agent.name, provider=agent.provider, model_used=model, status="failed", error_message="unavailable"
+                    agent_name=agent.name, runtime_id=agent.runtime_id, model_used=model, status="failed", error_message="unavailable"
                 )
-            return AgentRun(agent_name=agent.name, provider=agent.provider, model_used=model, status="completed")
+            return AgentRun(agent_name=agent.name, runtime_id=agent.runtime_id, model_used=model, status="completed")
 
-        runner = AgentRunner({"providers": {}, "runner": {}})
+        runner = AgentRunner({"runtimes": {}, "runner": {}})
         runner._try_model = tracking_try_model
 
-        agent_def = AgentDefinition(name="dev", provider="Mock", model="primary-model", fallback_models=["fallback-a"])
-        provider_cfg = {"cli": "mock"}
+        agent_def = AgentDefinition(name="dev", runtime_id="Mock", model="primary-model", fallback_models=["fallback-a"])
+        runtime_cfg = {"cli": "mock"}
         result = runner.run(
             run_id="test-run",
             stage_id="develop",
             agent=agent_def,
-            provider=provider_cfg,
+            runtime=runtime_cfg,
             prompt="test",
             cwd=Path("/tmp"),
             output_file=Path("/tmp/test-output.md"),
@@ -84,25 +85,25 @@ class FallbackRetryTest(unittest.TestCase):
         attempts: list = []
 
         def always_fail(
-            run_id, stage_id, agent, provider, prompt, cwd, output_file, raw_log_file, model, model_requested, timeout, heartbeat_seconds
+            run_id, stage_id, agent, runtime, prompt, cwd, output_file, raw_log_file, model, model_requested, timeout, heartbeat_seconds
         ):
             attempts.append(model)
             return AgentRun(
-                agent_name=agent.name, provider=agent.provider, model_used=model, status="failed", error_message=f"{model}-unavailable"
+                agent_name=agent.name, runtime_id=agent.runtime_id, model_used=model, status="failed", error_message=f"{model}-unavailable"
             )
 
-        runner = AgentRunner({"providers": {}, "runner": {}})
+        runner = AgentRunner({"runtimes": {}, "runner": {}})
         runner._try_model = always_fail
 
         agent_def = AgentDefinition(
-            name="dev", provider="Mock", model="model-a", fallback_models=["model-b", "model-c"]
+            name="dev", runtime_id="Mock", model="model-a", fallback_models=["model-b", "model-c"]
         )
-        provider_cfg = {"cli": "mock"}
+        runtime_cfg = {"cli": "mock"}
         result = runner.run(
             run_id="test-run",
             stage_id="develop",
             agent=agent_def,
-            provider=provider_cfg,
+            runtime=runtime_cfg,
             prompt="test",
             cwd=Path("/tmp"),
             output_file=Path("/tmp/test-output.md"),

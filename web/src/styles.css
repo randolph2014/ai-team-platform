@@ -454,21 +454,92 @@ tbody tr:hover td { background: var(--bg-hover); }
   background: var(--bg-card);
   padding: 10px;
 }
-.settingsNav a {
+.settingsNav button {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   min-height: 34px;
+  border: 0;
   border-radius: 6px;
+  background: transparent;
   color: var(--text-secondary);
   padding: 7px 10px;
   cursor: pointer;
+  text-align: left;
+  font-weight: 700;
 }
-.settingsNav a:hover { background: var(--bg-hover); color: var(--text-primary); }
+.settingsNav button:hover { background: var(--bg-hover); color: var(--text-primary); }
 .settingsNavActive { background: var(--accent) !important; color: #fff !important; }
 .settingGroup { padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
 .settingGroup:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
 .settingGroup h2 { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.settingsSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.settingsCards {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.settingsEditCard {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  padding: 14px;
+}
+.settingsCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.settingsFormGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.settingsFormGrid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.settingsFormGrid input,
+.settingsFormGrid select,
+.settingsFormGrid textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  padding: 8px 10px;
+  outline: none;
+}
+.settingsFormGrid textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+.settingsFormGrid input:focus,
+.settingsFormGrid select:focus,
+.settingsFormGrid textarea:focus { border-color: var(--accent); }
+.settingsWideField { grid-column: 1 / -1; }
+.settingsMetaLine {
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.iconButton.danger { color: var(--red); }
+.configNestedList { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.configNestedItem { padding: 6px 0; border-bottom: 1px solid var(--border); }
 .settingRow {
   display: flex;
   align-items: center;
@@ -928,7 +999,7 @@ tbody tr:hover td { background: var(--bg-hover); }
   border-color: var(--yellow);
 }
 
-.flow-node-tag-provider {
+.flow-node-tag-runtime {
   background: var(--purple-bg);
   color: var(--purple);
   border-color: var(--purple);

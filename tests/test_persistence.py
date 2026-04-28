@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -297,7 +298,8 @@ class TestAgentRunRepo:
                     id="agent-001",
                     stage_run_id="stage-001",
                     agent_name="dev",
-                    provider="claude",
+                    runtime_id="codex-runtime",
+                    runtime_cli="codex",
                     role="developer",
                     status="completed",
                     output_file=None,
@@ -541,6 +543,13 @@ class TestMigration:
             finally:
                 loop.close()
 
+    def test_runtime_migration_does_not_unconditionally_read_provider(self) -> None:
+        """006 需要兼容新库：001 已无 provider 列，不能直接引用 provider"""
+        sql = (Path(__file__).resolve().parents[1] / "persistence" / "migrations" / "006_agent_runtime_fields.up.sql").read_text(encoding="utf-8")
+        assert "information_schema.columns" in sql
+        assert "column_name = 'provider'" in sql
+        assert "EXECUTE" in sql
+
 
 # ══════════════════════════════════════════════════════════════════════
 # save_report 测试
@@ -714,13 +723,15 @@ class TestAgentRunRecord:
         from persistence.models import AgentRunRecord
         row = _make_row(
             id="a1", stage_run_id="s1", agent_name="dev",
-            provider="claude", role="developer", status="completed",
+            runtime_id="codex-runtime", runtime_cli="codex", role="developer", status="completed",
             output_file=None, raw_log_file=None, exit_code=0,
             error_message=None, started_at=None, completed_at=None,
             duration_seconds=3.0,
         )
         record = AgentRunRecord.from_row(row)
         assert record.agent_name == "dev"
+        assert record.runtime_id == "codex-runtime"
+        assert record.runtime_cli == "codex"
         assert record.exit_code == 0
 
 
@@ -996,7 +1007,8 @@ class TestRunDetailToResponse:
                     "agents": [
                         {
                             "agent_name": "dev",
-                            "provider": "claude",
+                            "runtime_id": "codex-runtime",
+                            "runtime_cli": "codex",
                             "role": "developer",
                             "model_requested": "sonnet",
                             "model_used": "sonnet-4",
@@ -1033,6 +1045,8 @@ class TestRunDetailToResponse:
         assert stage["stage_id"] == "develop"
         assert len(stage["agents"]) == 1
         assert stage["agents"][0]["agent_name"] == "dev"
+        assert stage["agents"][0]["runtime_id"] == "codex-runtime"
+        assert stage["agents"][0]["runtime_cli"] == "codex"
         assert stage["agents"][0]["model_used"] == "sonnet-4"
         assert len(stage["quality_gates"]) == 1
         assert stage["quality_gates"][0]["name"] == "lint"
