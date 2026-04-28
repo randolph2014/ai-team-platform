@@ -8,6 +8,10 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+  PIP_TRUSTED_HOST: mirrors.aliyun.com
+
 jobs:
   # ——————————————————————————————————————————————————————————————————————
   # Python 后端测试
