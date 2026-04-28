@@ -39,6 +39,7 @@ def create_app():
     from .routes.pipelines import router as pipelines_router
     from .routes.runs import router as runs_router
     from .routes.settings import router as settings_router
+    from .routes.webhooks import router as webhooks_router
     from .ws import router as ws_router
 
     app = FastAPI(title="AI Team Platform", version="0.1.0", lifespan=_lifespan)
@@ -54,6 +55,10 @@ def create_app():
     # ---- Auth routes (must be registered before auth-dependent routes) ----
     from .auth import auth_enabled, handle_login
 
+    @app.get("/api/auth/status")
+    def auth_status():
+        return {"auth_enabled": auth_enabled()}
+
     @app.post("/api/auth/login")
     async def login(api_key: str):
         """Exchange an API key for a JWT access token."""
@@ -66,6 +71,7 @@ def create_app():
     app.include_router(costs_router, prefix="/api")
     app.include_router(pipelines_router, prefix="/api")
     app.include_router(settings_router, prefix="/api")
+    app.include_router(webhooks_router, prefix="/api")
     app.include_router(ws_router)
 
     @app.get("/health")

@@ -85,3 +85,13 @@ export interface PipelineTemplate {
   description: string;
   stages: string[];
 }
+
+export interface Webhook {
+  id: string;
+  url: string;
+  secret: string;
+  events: string[];
+  pipeline_id?: string | null;
+  enabled: boolean;
+  created_at?: string;
+}

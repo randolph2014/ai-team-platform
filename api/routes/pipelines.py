@@ -22,6 +22,24 @@ PIPELINES_DIR = TEMPLATES_ROOT / "pipelines"
 
 BUILTIN_TEMPLATES: List[Dict[str, Any]] = [
     {
+        "id": "basic",
+        "name": "基础流水线",
+        "description": "标准四阶段流水线：需求分析 → 代码实现 → 自动化测试 → 代码审查",
+        "stages": ["plan", "develop", "qa", "review"],
+    },
+    {
+        "id": "full",
+        "name": "全功能流水线",
+        "description": "含架构设计和上下文扫描的完整流水线：需求分析 → 架构设计 → 上下文扫描 → 代码实现 → 自动化测试 → 代码审查",
+        "stages": ["plan", "architect", "context_scan", "develop", "qa", "review"],
+    },
+    {
+        "id": "minimal",
+        "name": "极简流水线",
+        "description": "单 Agent 快速开发流水线，适用于快速原型和小型任务",
+        "stages": ["develop"],
+    },
+    {
         "id": "ios",
         "name": "iOS 开发流水线",
         "description": "适用于 Swift/iOS 项目的需求分析、方案设计、代码实现、测试和审查",

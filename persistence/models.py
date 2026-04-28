@@ -184,3 +184,28 @@ class QualityGateRecord(BaseModel):
 
     def to_dict(self) -> Dict[str, Any]:
         return self.model_dump(mode="json")
+
+
+class WebhookRecord(BaseModel):
+    """Maps to ``webhook`` table."""
+
+    id: str
+    url: str
+    secret: str
+    events: List[str] = Field(default_factory=list)
+    pipeline_id: Optional[str] = None
+    enabled: bool = True
+    created_at: Optional[datetime] = None
+
+    @classmethod
+    def from_row(cls, row: Any) -> "WebhookRecord":
+        data = dict(row)
+        data["id"] = _coerce_uuid(data.get("id"))
+        data["pipeline_id"] = _coerce_uuid(data.get("pipeline_id"))
+        if isinstance(data.get("events"), str):
+            import json
+            data["events"] = json.loads(data["events"])
+        return cls(**{k: v for k, v in data.items() if k in cls.model_fields})
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.model_dump(mode="json")

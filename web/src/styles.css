@@ -687,3 +687,321 @@ tbody tr:hover td { background: var(--bg-hover); }
   .settingControl input,
   .settingControl select { max-width: 100%; }
 }
+
+/* ————————————————————————————————————————————————————
+   Pipeline Editor & React Flow 节点样式
+   ———————————————————————————————————————————————————— */
+
+.pipeline-editor-layout {
+  display: flex;
+  gap: 0;
+  flex: 1;
+  min-height: calc(100vh - 150px);
+  position: relative;
+}
+
+.pipeline-editor-canvas {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.pipeline-editor-flow {
+  flex: 1;
+  min-height: 500px;
+  background: var(--bg-primary);
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.pipeline-editor-yaml-view {
+  flex: 1;
+  min-height: 500px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  overflow: auto;
+}
+
+.yamlPreview {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  line-height: 1.6;
+}
+
+.pipeline-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+
+.pipeline-editor-stage-count {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.pipeline-editor-sidebar {
+  width: 320px;
+  min-width: 320px;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.pipeline-editor-sidebar-toggle {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  color: var(--text-secondary);
+  padding: 16px 6px;
+  cursor: pointer;
+  z-index: 5;
+}
+
+.pipeline-editor-sidebar-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.pipeline-editor-properties {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pipeline-editor-properties label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.pipeline-editor-properties input[type="text"],
+.pipeline-editor-properties input[type="number"],
+.pipeline-editor-properties select {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  width: 100%;
+}
+
+.pipeline-editor-properties input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.pipeline-editor-stage-props {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.pipeline-editor-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.pipeline-editor-section-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.pipeline-editor-detail {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin-top: 4px;
+}
+
+.pipeline-editor-detail summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.pipeline-editor-detail-content {
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pipeline-editor-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+/* React Flow 自定义节点 */
+
+.flow-node {
+  background: var(--bg-card);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  padding: 0;
+  min-width: 160px;
+  max-width: 220px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition: border-color 0.2s;
+}
+
+.flow-node[data-status="running"] {
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.3);
+}
+
+.flow-node[data-status="failed"] {
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.3);
+}
+
+.flow-node-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.flow-node-body {
+  padding: 8px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.flow-node-status {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.flow-node-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.flow-node-tag-parallel {
+  background: var(--blue-bg);
+  color: var(--blue);
+  border-color: var(--blue);
+}
+
+.flow-node-tag-loopback {
+  background: var(--yellow-bg);
+  color: var(--yellow);
+  border-color: var(--yellow);
+}
+
+.flow-node-tag-provider {
+  background: var(--purple-bg);
+  color: var(--purple);
+  border-color: var(--purple);
+}
+
+.flow-node-tag-model {
+  background: var(--green-bg);
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.flow-node-tag-role {
+  background: var(--accent-hover);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.flow-node-tag-required {
+  background: var(--yellow-bg);
+  color: var(--yellow);
+  border-color: var(--yellow);
+}
+
+/* Loopback Edge */
+
+.flow-edge-loopback .react-flow__edge-path {
+  stroke: var(--yellow) !important;
+  stroke-dasharray: 6 4;
+}
+
+.flow-edge-label {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.loopback-label {
+  background: var(--yellow-bg);
+  color: var(--yellow);
+  border-color: var(--yellow);
+}
+
+.loopback-retries {
+  margin-left: 4px;
+  opacity: 0.7;
+}
+
+/* React Flow 全局覆盖 */
+
+.react-flow__background {
+  background: var(--bg-primary);
+}
+
+.react-flow__controls button {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text-primary) !important;
+  fill: var(--text-primary) !important;
+}
+
+.react-flow__controls button:hover {
+  background: var(--bg-hover) !important;
+}
+
+.react-flow__minimap {
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+}
+
+.react-flow__attribution {
+  display: none !important;
+}

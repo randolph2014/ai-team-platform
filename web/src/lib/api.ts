@@ -1,4 +1,4 @@
-import type { Pipeline, PipelineTemplate, RunListItem, RunReport, SettingsResponse } from './types';
+import type { Pipeline, PipelineTemplate, RunListItem, RunReport, SettingsResponse, Webhook } from './types';
 
 const API_BASE = '/api';
 const TOKEN_KEY = 'ai-team.token';
@@ -24,7 +24,9 @@ export function isLoggedIn(): boolean {
 }
 
 export async function login(apiKey: string): Promise<string> {
-  const response = await fetch(`${API_BASE}/auth/login?api_key=${encodeURIComponent(apiKey)}`);
+  const response = await fetch(`${API_BASE}/auth/login?api_key=${encodeURIComponent(apiKey)}`, {
+    method: 'POST',
+  });
   if (!response.ok) {
     const body = await response.json().catch(() => ({ detail: '登录失败' }));
     throw new Error(body.detail || `登录失败: ${response.status}`);
@@ -32,6 +34,17 @@ export async function login(apiKey: string): Promise<string> {
   const data: { access_token: string; token_type: string } = await response.json();
   setToken(data.access_token);
   return data.access_token;
+}
+
+export async function checkAuthStatus(): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE}/auth/status`);
+    if (!response.ok) return true;
+    const data: { auth_enabled: boolean } = await response.json();
+    return data.auth_enabled;
+  } catch {
+    return true;
+  }
 }
 
 // --- Core fetch with auth ---
@@ -227,4 +240,33 @@ export async function fetchCostSummary(period: string = 'daily'): Promise<{ peri
   const response = await apiFetch(`/costs/summary?period=${period}`);
   if (!response.ok) throw new Error(`获取成本摘要失败: ${response.status}`);
   return response.json();
+}
+
+// --- Webhooks ---
+
+export async function fetchWebhooks(): Promise<Webhook[]> {
+  const response = await apiFetch('/webhooks');
+  if (!response.ok) throw new Error(`获取 Webhook 列表失败: ${response.status}`);
+  return response.json();
+}
+
+export async function fetchWebhook(id: string): Promise<Webhook> {
+  const response = await apiFetch(`/webhooks/${id}`);
+  if (!response.ok) throw new Error(`获取 Webhook 失败: ${response.status}`);
+  return response.json();
+}
+
+export async function createWebhook(webhook: { url: string; secret: string; events: string[]; pipeline_id?: string }): Promise<Webhook> {
+  const response = await apiFetch('/webhooks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(webhook),
+  });
+  if (!response.ok) throw new Error(`创建 Webhook 失败: ${response.status}`);
+  return response.json();
+}
+
+export async function deleteWebhook(id: string): Promise<void> {
+  const response = await apiFetch(`/webhooks/${id}`, { method: 'DELETE' });
+  if (!response.ok) throw new Error(`删除 Webhook 失败: ${response.status}`);
 }

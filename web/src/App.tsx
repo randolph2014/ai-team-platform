@@ -1,21 +1,24 @@
-import { Activity, Boxes, History, LogOut, Settings2 } from 'lucide-react';
+import { Activity, Boxes, History, LogOut, PenLine, Settings2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { clearToken, isLoggedIn } from './lib/api';
+import { checkAuthStatus, clearToken, isLoggedIn } from './lib/api';
 import { NewRunModal } from './components/NewRunModal';
 import { Dashboard } from './pages/Dashboard';
 import { Login } from './pages/Login';
+import { PipelineEditor } from './pages/PipelineEditor';
 import { Pipelines } from './pages/Pipelines';
 import { RunDetail } from './pages/RunDetail';
 import { Runs } from './pages/Runs';
 import { Settings } from './pages/Settings';
 
-type Route = 'dashboard' | 'runs' | 'run-detail' | 'pipelines' | 'settings' | 'login';
+type Route = 'dashboard' | 'runs' | 'run-detail' | 'pipelines' | 'pipeline-editor' | 'settings' | 'login';
 
-function currentRoute(): { route: Route; runId?: string } {
+function currentRoute(): { route: Route; runId?: string; pipelineId?: string } {
   const path = window.location.pathname;
   if (path === '/login') return { route: 'login' };
   if (path.startsWith('/runs/')) return { route: 'run-detail', runId: path.split('/')[2] };
   if (path === '/runs') return { route: 'runs' };
+  if (path.startsWith('/pipelines/editor/')) return { route: 'pipeline-editor', pipelineId: path.split('/')[3] };
+  if (path === '/pipelines/editor' || path === '/pipeline-editor') return { route: 'pipeline-editor' };
   if (path === '/pipelines') return { route: 'pipelines' };
   if (path === '/settings') return { route: 'settings' };
   return { route: 'dashboard' };
@@ -30,11 +33,20 @@ export function App() {
   const [route, setRoute] = useState(currentRoute());
   const [modalOpen, setModalOpen] = useState(false);
   const [authenticated, setAuthenticated] = useState(isLoggedIn());
+  const [authChecked, setAuthChecked] = useState(false);
+
+  useEffect(() => {
+    checkAuthStatus().then((enabled) => {
+      if (!enabled) {
+        setAuthenticated(true);
+      }
+      setAuthChecked(true);
+    });
+  }, []);
 
   useEffect(() => {
     const listener = () => {
       setRoute(currentRoute());
-      setAuthenticated(isLoggedIn());
     };
     const authListener = () => {
       setAuthenticated(false);
@@ -51,9 +63,16 @@ export function App() {
     if (!authenticated && route.route !== 'login') {
       navigate('/login');
     }
+    if (authenticated && route.route === 'login') {
+      navigate('/dashboard');
+    }
   }, [authenticated, route.route]);
 
-  if (route.route === 'login' || !authenticated) {
+  if (!authChecked) {
+    return null;
+  }
+
+  if (!authenticated) {
     return <Login />;
   }
 
@@ -99,6 +118,7 @@ export function App() {
         {route.route === 'runs' && <Runs onNewRun={() => setModalOpen(true)} />}
         {route.route === 'run-detail' && <RunDetail runId={route.runId ?? ''} />}
         {route.route === 'pipelines' && <Pipelines />}
+        {route.route === 'pipeline-editor' && <PipelineEditor pipelineId={route.pipelineId} />}
         {route.route === 'settings' && <Settings />}
       </main>
       <NewRunModal open={modalOpen} onClose={() => setModalOpen(false)} onRefreshNeeded={() => {}} />

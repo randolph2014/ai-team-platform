@@ -632,6 +632,108 @@ def save_report_sync(report: RunReport, config: Optional[Dict[str, Any]] = None)
         pass
 
 
+class WebhookRepo:
+    """webhook 表 CRUD 操作"""
+
+    TABLE = "webhook"
+
+    async def create(
+        self,
+        conn,
+        *,
+        id: str,
+        url: str,
+        secret: str,
+        events: List[str],
+        pipeline_id: Optional[str] = None,
+        enabled: bool = True,
+    ) -> None:
+        await conn.execute(
+            f"""
+            INSERT INTO {self.TABLE} (id, url, secret, events, pipeline_id, enabled)
+            VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+            ON CONFLICT (id) DO UPDATE SET
+                url = EXCLUDED.url,
+                secret = EXCLUDED.secret,
+                events = EXCLUDED.events,
+                pipeline_id = EXCLUDED.pipeline_id,
+                enabled = EXCLUDED.enabled
+            """,
+            id,
+            url,
+            secret,
+            _jsonb(events),
+            pipeline_id,
+            enabled,
+        )
+
+    async def get_by_id(self, conn, id: str) -> Optional[Dict[str, Any]]:
+        row = await conn.fetchrow(f"SELECT * FROM {self.TABLE} WHERE id = $1", id)
+        if row is None:
+            return None
+        result = dict(row)
+        result["id"] = str(result["id"])
+        if result.get("pipeline_id"):
+            result["pipeline_id"] = str(result["pipeline_id"])
+        if result.get("events") and isinstance(result["events"], str):
+            try:
+                result["events"] = json.loads(result["events"])
+            except Exception:
+                pass
+        result["created_at"] = _dt_to_str(result.get("created_at"))
+        return result
+
+    async def list_all(self, conn) -> List[Dict[str, Any]]:
+        rows = await conn.fetch(
+            f"SELECT * FROM {self.TABLE} ORDER BY created_at DESC"
+        )
+        results = []
+        for row in rows:
+            r = dict(row)
+            r["id"] = str(r["id"])
+            if r.get("pipeline_id"):
+                r["pipeline_id"] = str(r["pipeline_id"])
+            if r.get("events") and isinstance(r["events"], str):
+                try:
+                    r["events"] = json.loads(r["events"])
+                except Exception:
+                    pass
+            r["created_at"] = _dt_to_str(r.get("created_at"))
+            results.append(r)
+        return results
+
+    async def delete(self, conn, id: str) -> bool:
+        result = await conn.execute(
+            f"DELETE FROM {self.TABLE} WHERE id = $1", id
+        )
+        return result.endswith("1")
+
+    async def list_by_pipeline(self, conn, pipeline_id: str) -> List[Dict[str, Any]]:
+        rows = await conn.fetch(
+            f"SELECT * FROM {self.TABLE} WHERE pipeline_id = $1 ORDER BY created_at DESC",
+            pipeline_id,
+        )
+        results = []
+        for row in rows:
+            r = dict(row)
+            r["id"] = str(r["id"])
+            r["pipeline_id"] = str(r["pipeline_id"]) if r.get("pipeline_id") else None
+            if r.get("events") and isinstance(r["events"], str):
+                try:
+                    r["events"] = json.loads(r["events"])
+                except Exception:
+                    pass
+            r["created_at"] = _dt_to_str(r.get("created_at"))
+            results.append(r)
+        return results
+
+    async def update_enabled(self, conn, id: str, enabled: bool) -> bool:
+        result = await conn.execute(
+            f"UPDATE {self.TABLE} SET enabled = $2 WHERE id = $1", id, enabled
+        )
+        return result.endswith("1")
+
+
 # ——————————————————————————————————————————————————————————————————————————————
 # API 层辅助：从 asyncpg 行记录转为 API 响应格式
 # ——————————————————————————————————————————————————————————————————————————————
