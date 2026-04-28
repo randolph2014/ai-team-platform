@@ -812,3 +812,529 @@ class TestRepoClassesExist:
     def test_quality_gate_run_repo_importable(self) -> None:
         from persistence import QualityGateRunRepo
         assert QualityGateRunRepo is not None
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 辅助函数补充测试
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestToDt:
+    """测试 _to_dt() ISO 字符串转 datetime"""
+
+    def test_none_returns_none(self) -> None:
+        from persistence.repository import _to_dt
+        assert _to_dt(None) is None
+
+    def test_valid_iso_string(self) -> None:
+        from persistence.repository import _to_dt
+        result = _to_dt("2025-01-15T10:30:00+08:00")
+        assert result is not None
+        assert result.year == 2025
+        assert result.month == 1
+        assert result.hour == 10
+
+    def test_z_suffix_converted(self) -> None:
+        from persistence.repository import _to_dt
+        result = _to_dt("2025-06-01T12:00:00Z")
+        assert result is not None
+        assert result.tzinfo is not None
+        assert result.hour == 12
+
+
+class TestJsonb:
+    """测试 _jsonb() JSON 序列化"""
+
+    def test_none_returns_empty_dict(self) -> None:
+        from persistence.repository import _jsonb
+        assert _jsonb(None) == "{}"
+
+    def test_dict_serialized(self) -> None:
+        from persistence.repository import _jsonb
+        result = _jsonb({"key": "value"})
+        assert '"key"' in result
+        assert '"value"' in result
+
+    def test_list_serialized(self) -> None:
+        from persistence.repository import _jsonb
+        result = _jsonb([1, 2, 3])
+        assert result == "[1, 2, 3]"
+
+    def test_nested_dict(self) -> None:
+        from persistence.repository import _jsonb
+        result = _jsonb({"a": {"b": [1, 2]}})
+        assert '"a"' in result
+        assert '"b"' in result
+
+
+class TestDtToStr:
+    """测试 _dt_to_str() datetime 转 ISO 字符串"""
+
+    def test_none_returns_none(self) -> None:
+        from persistence.repository import _dt_to_str
+        assert _dt_to_str(None) is None
+
+    def test_datetime_returns_iso(self) -> None:
+        from persistence.repository import _dt_to_str
+        from datetime import datetime, timezone
+        dt = datetime(2025, 3, 10, 8, 0, 0, tzinfo=timezone.utc)
+        result = _dt_to_str(dt)
+        assert "2025-03-10" in result
+        assert "08:00:00" in result
+
+    def test_string_passthrough(self) -> None:
+        from persistence.repository import _dt_to_str
+        s = "2025-03-10T08:00:00+00:00"
+        assert _dt_to_str(s) == s
+
+
+class TestRunRowToSummary:
+    """测试 run_row_to_summary() 行转摘要"""
+
+    def test_basic_row(self) -> None:
+        from persistence.repository import run_row_to_summary
+        from datetime import datetime, timezone
+        row = _make_row(
+            id="db-id-001",
+            status="completed",
+            context={"app_run_id": "app-001", "config_path": "/cfg/p.yaml"},
+            started_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        )
+        result = run_row_to_summary(row)
+        assert result["run_id"] == "app-001"
+        assert result["status"] == "completed"
+        assert result["pipeline"] == "/cfg/p.yaml"
+        assert "2025-01-01" in result["started_at"]
+
+    def test_string_context_parsed(self) -> None:
+        from persistence.repository import run_row_to_summary
+        row = _make_row(
+            id="db-id-002",
+            status="running",
+            context='{"app_run_id": "app-002", "config_path": "/x.yaml"}',
+            started_at=None,
+            completed_at=None,
+        )
+        result = run_row_to_summary(row)
+        assert result["run_id"] == "app-002"
+        assert result["pipeline"] == "/x.yaml"
+
+    def test_missing_context_fallback_to_id(self) -> None:
+        from persistence.repository import run_row_to_summary
+        row = _make_row(
+            id="db-id-003",
+            status="failed",
+            context=None,
+            started_at=None,
+            completed_at=None,
+        )
+        result = run_row_to_summary(row)
+        assert result["run_id"] == "db-id-003"
+        assert result["pipeline"] is None
+
+    def test_invalid_string_context(self) -> None:
+        from persistence.repository import run_row_to_summary
+        row = _make_row(
+            id="db-id-004",
+            status="pending",
+            context="not-json",
+            started_at=None,
+            completed_at=None,
+        )
+        result = run_row_to_summary(row)
+        assert result["run_id"] == "db-id-004"
+
+    def test_empty_dict_context(self) -> None:
+        from persistence.repository import run_row_to_summary
+        row = _make_row(
+            id="db-id-005",
+            status="completed",
+            context={},
+            started_at=None,
+            completed_at=None,
+        )
+        result = run_row_to_summary(row)
+        assert result["run_id"] == "db-id-005"
+
+
+class TestRunDetailToResponse:
+    """测试 run_detail_to_response() 详细信息转 API 响应"""
+
+    def test_full_detail(self) -> None:
+        from persistence.repository import run_detail_to_response
+        from datetime import datetime, timezone
+        detail = {
+            "id": "db-id-001",
+            "status": "completed",
+            "project_root": "/tmp/proj",
+            "requirement": "add feature X",
+            "worktree_path": "/tmp/wt",
+            "context": {
+                "app_run_id": "app-001",
+                "config_source": "default",
+                "config_path": "/cfg/p.yaml",
+                "artifacts": ["/out/a.txt"],
+            },
+            "started_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+            "completed_at": datetime(2025, 1, 2, tzinfo=timezone.utc),
+            "duration_seconds": 86400.0,
+            "error_message": None,
+            "stages": [
+                {
+                    "id": "stage-db-001",
+                    "stage_id": "develop",
+                    "stage_name": "开发",
+                    "iteration": 1,
+                    "status": "completed",
+                    "is_parallel": False,
+                    "started_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+                    "completed_at": datetime(2025, 1, 2, tzinfo=timezone.utc),
+                    "duration_seconds": 3600.0,
+                    "output_dir": "/tmp/out",
+                    "error_message": None,
+                    "agents": [
+                        {
+                            "agent_name": "dev",
+                            "provider": "claude",
+                            "role": "developer",
+                            "model_requested": "sonnet",
+                            "model_used": "sonnet-4",
+                            "status": "completed",
+                            "started_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+                            "completed_at": datetime(2025, 1, 2, tzinfo=timezone.utc),
+                            "duration_seconds": 1800.0,
+                            "output_file": "/tmp/out/dev.md",
+                            "exit_code": 0,
+                            "error_message": None,
+                        }
+                    ],
+                    "quality_gates": [
+                        {
+                            "gate_name": "lint",
+                            "gate_type": "command",
+                            "status": "passed",
+                            "command": "npm run lint",
+                            "exit_code": 0,
+                            "output": "OK",
+                            "required": True,
+                        }
+                    ],
+                }
+            ],
+        }
+        result = run_detail_to_response(detail)
+        assert result["run_id"] == "app-001"
+        assert result["status"] == "completed"
+        assert result["config_path"] == "/cfg/p.yaml"
+        assert result["artifacts"] == ["/out/a.txt"]
+        assert len(result["stages"]) == 1
+        stage = result["stages"][0]
+        assert stage["stage_id"] == "develop"
+        assert len(stage["agents"]) == 1
+        assert stage["agents"][0]["agent_name"] == "dev"
+        assert stage["agents"][0]["model_used"] == "sonnet-4"
+        assert len(stage["quality_gates"]) == 1
+        assert stage["quality_gates"][0]["name"] == "lint"
+        assert stage["quality_gates"][0]["required"] is True
+
+    def test_string_context_parsed(self) -> None:
+        from persistence.repository import run_detail_to_response
+        detail = {
+            "id": "db-id-002",
+            "status": "failed",
+            "project_root": "/tmp",
+            "requirement": "req",
+            "worktree_path": None,
+            "context": '{"app_run_id": "app-002", "artifacts": []}',
+            "started_at": None,
+            "completed_at": None,
+            "duration_seconds": None,
+            "error_message": "timeout",
+            "stages": [],
+        }
+        result = run_detail_to_response(detail)
+        assert result["run_id"] == "app-002"
+        assert result["error_message"] == "timeout"
+        assert result["stages"] == []
+
+    def test_invalid_string_context_fallback(self) -> None:
+        from persistence.repository import run_detail_to_response
+        detail = {
+            "id": "db-id-003",
+            "status": "pending",
+            "project_root": "/tmp",
+            "requirement": "req",
+            "worktree_path": None,
+            "context": "not-json",
+            "started_at": None,
+            "completed_at": None,
+            "duration_seconds": None,
+            "error_message": None,
+            "stages": [],
+        }
+        result = run_detail_to_response(detail)
+        assert result["run_id"] == "db-id-003"
+        assert result["artifacts"] == []
+
+    def test_none_context(self) -> None:
+        from persistence.repository import run_detail_to_response
+        detail = {
+            "id": "db-id-004",
+            "status": "completed",
+            "project_root": "/tmp",
+            "requirement": "req",
+            "worktree_path": None,
+            "context": None,
+            "started_at": None,
+            "completed_at": None,
+            "duration_seconds": None,
+            "error_message": None,
+            "stages": [],
+        }
+        result = run_detail_to_response(detail)
+        assert result["run_id"] == "db-id-004"
+        assert result["config_source"] is None
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Repository 补充测试（未覆盖的方法）
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestPipelineRunRepoExtra:
+    """测试 PipelineRunRepo 中未覆盖的方法"""
+
+    def test_list_paginated_default(self, mock_conn: MagicMock) -> None:
+        repo = PipelineRunRepo()
+        mock_conn.fetch.return_value = [{"id": "run-1"}, {"id": "run-2"}]
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(repo.list_paginated(mock_conn))
+            assert len(result) == 2
+            call_args = mock_conn.fetch.call_args
+            assert call_args[0][1] == 20
+            assert call_args[0][2] == 0
+        finally:
+            loop.close()
+
+    def test_list_paginated_page_2(self, mock_conn: MagicMock) -> None:
+        repo = PipelineRunRepo()
+        mock_conn.fetch.return_value = [{"id": "run-3"}]
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(repo.list_paginated(mock_conn, page=2, size=10))
+            assert len(result) == 1
+            call_args = mock_conn.fetch.call_args
+            assert call_args[0][1] == 10
+            assert call_args[0][2] == 10
+        finally:
+            loop.close()
+
+    def test_update_status_basic(self, mock_conn: MagicMock) -> None:
+        repo = PipelineRunRepo()
+        mock_conn.execute.return_value = "UPDATE 1"
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(repo.update_status(mock_conn, "run-001", "completed"))
+            assert result is True
+            call_args = mock_conn.execute.call_args
+            assert "status = $2" in call_args[0][0]
+            assert "WHERE id = $1" in call_args[0][0]
+        finally:
+            loop.close()
+
+    def test_update_status_with_all_params(self, mock_conn: MagicMock) -> None:
+        repo = PipelineRunRepo()
+        mock_conn.execute.return_value = "UPDATE 1"
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(
+                repo.update_status(
+                    mock_conn,
+                    "run-001",
+                    "failed",
+                    error_message="timeout",
+                    completed_at="2025-01-01T00:00:00Z",
+                    duration_seconds=120.5,
+                )
+            )
+            assert result is True
+            sql = mock_conn.execute.call_args[0][0]
+            assert "error_message" in sql
+            assert "completed_at" in sql
+            assert "duration_seconds" in sql
+        finally:
+            loop.close()
+
+    def test_update_status_no_rows_affected(self, mock_conn: MagicMock) -> None:
+        repo = PipelineRunRepo()
+        mock_conn.execute.return_value = "UPDATE 0"
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(repo.update_status(mock_conn, "nonexistent", "completed"))
+            assert result is False
+        finally:
+            loop.close()
+
+    def test_create_pending(self, mock_conn: MagicMock) -> None:
+        repo = PipelineRunRepo()
+        mock_conn.execute.return_value = None
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                repo.create_pending(
+                    mock_conn,
+                    id="run-new",
+                    pipeline_id="pipe-001",
+                    project_root="/tmp",
+                    main_branch="main",
+                    requirement="do something",
+                    trigger_source="api",
+                    worktree_path="/tmp/wt",
+                    app_run_id="app-new",
+                )
+            )
+            assert mock_conn.execute.called
+            sql = mock_conn.execute.call_args[0][0]
+            assert "'pending'" in sql
+        finally:
+            loop.close()
+
+    def test_create_pending_without_app_run_id(self, mock_conn: MagicMock) -> None:
+        repo = PipelineRunRepo()
+        mock_conn.execute.return_value = None
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                repo.create_pending(
+                    mock_conn,
+                    id="run-new-2",
+                    pipeline_id=None,
+                    project_root="/tmp",
+                    main_branch="main",
+                    requirement="do something",
+                )
+            )
+            assert mock_conn.execute.called
+        finally:
+            loop.close()
+
+    def test_get_run_with_details_returns_none(self, mock_conn: MagicMock) -> None:
+        repo = PipelineRunRepo()
+        mock_conn.fetchrow.return_value = None
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(repo.get_run_with_details(mock_conn, "nonexistent"))
+            assert result is None
+        finally:
+            loop.close()
+
+    def test_get_run_with_details_returns_full_detail(self, mock_conn: MagicMock) -> None:
+        repo = PipelineRunRepo()
+        run_row = {"id": "run-001", "status": "completed"}
+        stage_row = {"id": "stage-001", "stage_id": "develop"}
+        agent_row = {"id": "agent-001", "agent_name": "dev"}
+        gate_row = {"id": "gate-001", "gate_name": "lint"}
+
+        mock_conn.fetchrow.return_value = run_row
+        mock_conn.fetch.side_effect = [
+            [stage_row],
+            [agent_row],
+            [gate_row],
+        ]
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(repo.get_run_with_details(mock_conn, "run-001"))
+            assert result is not None
+            assert result["id"] == "run-001"
+            assert len(result["stages"]) == 1
+            assert result["stages"][0]["agents"] == [agent_row]
+            assert result["stages"][0]["quality_gates"] == [gate_row]
+        finally:
+            loop.close()
+
+    def test_run_exists_true(self, mock_conn: MagicMock) -> None:
+        repo = PipelineRunRepo()
+        mock_conn.fetchrow.return_value = {"1": 1}
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(repo.run_exists(mock_conn, "run-001"))
+            assert result is True
+        finally:
+            loop.close()
+
+    def test_run_exists_false(self, mock_conn: MagicMock) -> None:
+        repo = PipelineRunRepo()
+        mock_conn.fetchrow.return_value = None
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(repo.run_exists(mock_conn, "nonexistent"))
+            assert result is False
+        finally:
+            loop.close()
+
+
+class TestStageRunRepoExtra:
+    """测试 StageRunRepo 中未覆盖的方法"""
+
+    def test_list_by_run(self, mock_conn: MagicMock) -> None:
+        repo = StageRunRepo()
+        mock_conn.fetch.return_value = [
+            {"id": "s1", "stage_id": "develop", "iteration": 1},
+            {"id": "s2", "stage_id": "test", "iteration": 1},
+        ]
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(repo.list_by_run(mock_conn, "run-001"))
+            assert len(result) == 2
+            assert result[0]["stage_id"] == "develop"
+        finally:
+            loop.close()
+
+    def test_list_by_run_empty(self, mock_conn: MagicMock) -> None:
+        repo = StageRunRepo()
+        mock_conn.fetch.return_value = []
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(repo.list_by_run(mock_conn, "run-empty"))
+            assert result == []
+        finally:
+            loop.close()
+
+    def test_get_by_id_returns_record(self, mock_conn: MagicMock) -> None:
+        repo = StageRunRepo()
+        mock_conn.fetchrow.return_value = {"id": "stage-001", "stage_id": "develop", "status": "completed"}
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(repo.get_by_id(mock_conn, "stage-001"))
+            assert result is not None
+            assert result["stage_id"] == "develop"
+            assert result["status"] == "completed"
+        finally:
+            loop.close()
+
+    def test_get_by_id_returns_none(self, mock_conn: MagicMock) -> None:
+        repo = StageRunRepo()
+        mock_conn.fetchrow.return_value = None
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(repo.get_by_id(mock_conn, "nonexistent"))
+            assert result is None
+        finally:
+            loop.close()

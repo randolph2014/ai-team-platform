@@ -30,6 +30,16 @@ from .quality_gates import (
     render_gate_feedback,
     run_quality_gates,
 )
+from .logging_config import (
+    get_logger,
+    log_agent_complete,
+    log_agent_start,
+    log_engine_start,
+    log_loopback,
+    log_stage_complete,
+    log_stage_start,
+)
+from .metrics import record_gate_result, record_run, record_stage_duration
 from .worktree import WorktreeManager
 
 
@@ -94,6 +104,9 @@ class Orchestrator:
         merge: bool = False,
     ) -> RunReport:
         run_id = run_id or new_run_id()
+        logger = get_logger("orchestrator", run_id=run_id)
+        log_engine_start(str(self.project_root), self.loaded_config.source)
+        logger.info("pipeline run started")
         output_dir = self.output_base / run_id
         output_dir.mkdir(parents=True, exist_ok=False)
         (output_dir / "requirement.md").write_text(requirement, encoding="utf-8")
@@ -186,6 +199,7 @@ class Orchestrator:
                         to_stage=target,
                         iteration=count + 1,
                     )
+                    log_loopback(report.run_id, stage_id, target, count)
                     extra_feedback = self._render_loopback_feedback(stage_id, stage_run, count, target)
                     feedback_file = output_dir / f"loopback-feedback-{stage_id}-{count}.md"
                     feedback_file.write_text(extra_feedback, encoding="utf-8")
@@ -206,6 +220,8 @@ class Orchestrator:
                         worktree_manager.cleanup(worktree_path)
             report.completed_at = utc_now()
             report.duration_seconds = _duration(start)
+            record_run(report.status)
+            logger.info("pipeline run completed status=%s duration=%.1fs", report.status, report.duration_seconds)
             self.bus.emit("run:completed", report.run_id, status=report.status, summary={"duration": report.duration_seconds})
             self._write_report(report, output_dir)
             return report
@@ -214,6 +230,8 @@ class Orchestrator:
             report.error_message = str(exc)
             report.completed_at = utc_now()
             report.duration_seconds = _duration(start)
+            record_run("failed")
+            logger.error("pipeline run failed: %s", exc)
             self.bus.emit("run:completed", report.run_id, status="failed", summary={"error": str(exc)})
             self._write_report(report, output_dir)
             if worktree_path and worktree_manager and self.config.get("worktree", {}).get("auto_cleanup_on_failure", False):
@@ -308,6 +326,7 @@ class Orchestrator:
             output_dir=str(output_dir),
         )
         start = time.monotonic()
+        log_stage_start(report.run_id, stage_id)
         self.bus.emit("stage:started", report.run_id, stage_id=stage_id, stage_name=stage_run.stage_name, iteration=stage_run.iteration)
         cost_tracker = CostTracker(self.project_root, bus=self.bus)
         runner = AgentRunner(self.config, bus=self.bus, cost_tracker=cost_tracker)
@@ -350,6 +369,8 @@ class Orchestrator:
 
         stage_run.completed_at = utc_now()
         stage_run.duration_seconds = _duration(start)
+        log_stage_complete(report.run_id, stage_id, stage_run.status, stage_run.duration_seconds)
+        record_stage_duration(stage_id, stage_run.duration_seconds)
         self.bus.emit("stage:completed", report.run_id, stage_id=stage_id, status=stage_run.status, duration=stage_run.duration_seconds)
         return stage_run
 

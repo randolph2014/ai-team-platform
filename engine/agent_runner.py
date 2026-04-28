@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from .config import ConfigError
 from .cost_tracker import CostTracker, estimate_tokens
 from .events import EventBus
+from .logging_config import get_logger, log_agent_complete, log_agent_start
+from .metrics import record_agent_duration
 from .models import AgentDefinition, AgentRun, utc_now
 
 
@@ -171,6 +173,7 @@ class AgentRunner:
             raw_log_file=str(raw_log_file),
         )
         self.bus.emit("agent:started", run_id, stage_id=stage_id, agent_name=agent.name, provider=agent.provider)
+        log_agent_start(run_id, agent.name, agent.provider)
 
         try:
             command, cli, prompt_mode = build_command(provider, prompt, model=model)
@@ -283,6 +286,10 @@ class AgentRunner:
     def _complete(self, agent_run: AgentRun, started: float, run_id: str, stage_id: str) -> AgentRun:
         agent_run.completed_at = utc_now()
         agent_run.duration_seconds = round(time.monotonic() - started, 3)
+
+        model_label = agent_run.model_used or "unknown"
+        record_agent_duration(agent_run.agent_name, model_label, agent_run.duration_seconds)
+        log_agent_complete(run_id, agent_run.agent_name, agent_run.status, agent_run.exit_code)
 
         if self.cost_tracker:
             try:

@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from .events import EventBus
+from .logging_config import log_gate_result
+from .metrics import record_gate_result as record_gate_metric
 from .models import QualityGateRun, utc_now
 
 
@@ -100,6 +102,8 @@ def run_quality_gate(gate: Dict, cwd: Path, run_id: str, bus: Optional[EventBus]
 
     result.completed_at = utc_now()
     result.duration_seconds = round(time.monotonic() - start, 3)
+    record_gate_metric(name, result.status)
+    log_gate_result(run_id, name, result.status, result.exit_code)
     if bus:
         bus.emit(
             "gate:result",

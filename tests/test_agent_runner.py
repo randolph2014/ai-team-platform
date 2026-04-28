@@ -140,5 +140,214 @@ class TestAgentRunnerCostTracking(unittest.TestCase):
             self.assertIsInstance(costs, dict)
 
 
+class TestDecodeClaudeStreamLineExtended(unittest.TestCase):
+    def test_json_list_passthrough(self) -> None:
+        """JSON 数组直接返回原文（非 dict）"""
+        payload = json.dumps([1, 2, 3])
+        self.assertEqual(_decode_claude_stream_line(payload), payload)
+
+    def test_json_int_passthrough(self) -> None:
+        """JSON 整数直接返回原文"""
+        payload = json.dumps(42)
+        self.assertEqual(_decode_claude_stream_line(payload), "42")
+
+    def test_dict_without_type_or_content(self) -> None:
+        """dict 既无 type 也无 content 字段时返回原文"""
+        payload = json.dumps({"foo": "bar", "baz": 123})
+        self.assertEqual(_decode_claude_stream_line(payload), payload)
+
+    def test_dict_with_type_not_assistant_and_no_content(self) -> None:
+        """dict 有 type 但不是 assistant，且无 content 字段"""
+        payload = json.dumps({"type": "system", "data": "info"})
+        self.assertEqual(_decode_claude_stream_line(payload), payload)
+
+    def test_assistant_type_empty_content(self) -> None:
+        """assistant 类型但 content 为空列表，返回原文"""
+        payload = json.dumps({"type": "assistant", "message": {"content": []}})
+        self.assertEqual(_decode_claude_stream_line(payload), payload)
+
+    def test_assistant_type_no_message(self) -> None:
+        """assistant 类型但无 message 字段"""
+        payload = json.dumps({"type": "assistant"})
+        self.assertEqual(_decode_claude_stream_line(payload), payload)
+
+    def test_content_field_non_string(self) -> None:
+        """dict 有 content 字段但不是字符串，返回原文"""
+        payload = json.dumps({"content": 123})
+        self.assertEqual(_decode_claude_stream_line(payload), payload)
+
+
+class TestBuildCommandOpencode(unittest.TestCase):
+    def test_opencode_with_model(self) -> None:
+        """opencode provider 带 model 参数"""
+        cmd, cli, mode = build_command({"cli": "opencode"}, "prompt", model="deepseek-v3")
+        self.assertEqual(cmd[0], "opencode")
+        self.assertIn("run", cmd)
+        self.assertIn("--model", cmd)
+        self.assertIn("deepseek-v3", cmd)
+        self.assertEqual(mode, "arg")
+        self.assertEqual(cli, "opencode")
+
+    def test_opencode_without_model(self) -> None:
+        """opencode provider 不带 model"""
+        cmd, cli, mode = build_command({"cli": "opencode"}, "hello")
+        self.assertEqual(cmd, ["opencode", "run", "hello"])
+
+
+class TestAgentRunnerSubprocessFailure(unittest.TestCase):
+    @patch("engine.agent_runner.subprocess.Popen")
+    def test_run_subprocess_nonzero_exit(self, mock_popen_cls) -> None:
+        """subprocess 以非零退出码结束时，状态为 failed"""
+        mock_proc = MagicMock()
+        mock_proc.stdout.readline.return_value = ""
+        mock_proc.stdout.read.return_value = ""
+        mock_proc.poll.return_value = 1
+        mock_proc.wait.return_value = 1
+        mock_popen_cls.return_value = mock_proc
+
+        config = {"providers": {"P": {"cli": "claude"}}, "runner": {}}
+        runner = AgentRunner(config)
+        agent = AgentDefinition(name="a1", provider="P", model="m1")
+        provider = {"cli": "claude"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            output_file = cwd / "out.md"
+            raw_log = cwd / "raw.log"
+            result = runner.run("r1", "s1", agent, provider, "prompt", cwd, output_file, raw_log)
+            self.assertEqual(result.status, "failed")
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn("exited with code 1", result.error_message)
+
+    @patch("engine.agent_runner.subprocess.Popen")
+    def test_run_subprocess_file_not_found(self, mock_popen_cls) -> None:
+        """subprocess.Popen 抛出 FileNotFoundError 时，状态为 failed"""
+        mock_popen_cls.side_effect = FileNotFoundError("claude not found")
+
+        config = {"providers": {"P": {"cli": "claude"}}, "runner": {}}
+        runner = AgentRunner(config)
+        agent = AgentDefinition(name="a1", provider="P", model="m1")
+        provider = {"cli": "claude"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            output_file = cwd / "out.md"
+            raw_log = cwd / "raw.log"
+            result = runner.run("r1", "s1", agent, provider, "prompt", cwd, output_file, raw_log)
+            self.assertEqual(result.status, "failed")
+            self.assertIn("claude not found", result.error_message)
+            self.assertTrue(output_file.exists())
+            self.assertTrue(raw_log.exists())
+
+    @patch("engine.agent_runner.time.monotonic")
+    @patch("engine.agent_runner.subprocess.Popen")
+    def test_run_subprocess_timeout(self, mock_popen_cls, mock_monotonic) -> None:
+        """subprocess 超时时状态为 timeout"""
+        mock_proc = MagicMock()
+        mock_proc.stdout.readline.return_value = ""
+        mock_proc.stdout.read.return_value = ""
+        mock_proc.poll.return_value = None
+        mock_proc.wait.return_value = -15
+        mock_popen_cls.return_value = mock_proc
+
+        tick = [0.0]
+
+        def advance():
+            tick[0] += 0.6
+            return tick[0]
+
+        mock_monotonic.side_effect = advance
+
+        config = {"providers": {"P": {"cli": "claude"}}, "runner": {}}
+        runner = AgentRunner(config)
+        agent = AgentDefinition(name="a1", provider="P", model="m1", timeout=1)
+        provider = {"cli": "claude"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            output_file = cwd / "out.md"
+            raw_log = cwd / "raw.log"
+            result = runner.run("r1", "s1", agent, provider, "prompt", cwd, output_file, raw_log)
+            self.assertEqual(result.status, "timeout")
+            self.assertIn("timed out", result.error_message)
+
+
+class TestAgentRunnerComplete(unittest.TestCase):
+    def test_complete_records_duration_and_emits_event(self) -> None:
+        """_complete 设置 completed_at、duration_seconds 并发射 agent:completed 事件"""
+        config = {"providers": {}, "runner": {}}
+        bus = MagicMock()
+        runner = AgentRunner(config, bus=bus)
+        agent_run = MagicMock()
+        agent_run.model_used = "test-model"
+        agent_run.agent_name = "agent-1"
+        agent_run.status = "completed"
+        agent_run.exit_code = 0
+        agent_run.output_file = None
+
+        import time as _time
+        started = _time.monotonic() - 1.5
+        result = runner._complete(agent_run, started, "run-1", "stage-1")
+
+        self.assertIsNotNone(result.completed_at)
+        self.assertIsNotNone(result.duration_seconds)
+        self.assertGreaterEqual(result.duration_seconds, 1.0)
+        bus.emit.assert_called_once()
+        call_args = bus.emit.call_args
+        self.assertEqual(call_args[0][0], "agent:completed")
+
+    def test_complete_with_cost_tracker(self) -> None:
+        """_complete 在有 cost_tracker 时调用 _track_cost"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cost_tracker = CostTracker(Path(tmp))
+            config = {"providers": {"P": {"model": "test-model"}}, "runner": {}}
+            runner = AgentRunner(config, cost_tracker=cost_tracker)
+            output_path = Path(tmp) / "out.md"
+            output_path.write_text("agent output text", encoding="utf-8")
+
+            agent_run = MagicMock()
+            agent_run.model_used = "test-model"
+            agent_run.agent_name = "agent-1"
+            agent_run.status = "completed"
+            agent_run.exit_code = 0
+            agent_run.output_file = str(output_path)
+            agent_run.provider = "P"
+
+            runner._last_prompt = "test prompt content"
+            import time as _time
+            started = _time.monotonic() - 1.0
+            runner._complete(agent_run, started, "run-1", "stage-1")
+
+            costs = cost_tracker.get_run_costs("run-1")
+            self.assertIsInstance(costs, dict)
+
+
+class TestAgentRunnerHeartbeat(unittest.TestCase):
+    @patch("engine.agent_runner.subprocess.Popen")
+    def test_heartbeat_thread_started(self, mock_popen_cls) -> None:
+        """heartbeat_seconds > 0 时启动心跳线程"""
+        import time as _time
+
+        mock_proc = MagicMock()
+        mock_proc.stdout.readline.return_value = "done\n"
+        mock_proc.poll.return_value = 0
+        mock_proc.stdout.read.return_value = ""
+        mock_proc.wait.return_value = 0
+        mock_popen_cls.return_value = mock_proc
+
+        bus = MagicMock()
+        config = {"providers": {"P": {"cli": "claude"}}, "runner": {"heartbeat_seconds": 1}}
+        runner = AgentRunner(config, bus=bus)
+        agent = AgentDefinition(name="a1", provider="P", model="m1")
+        provider = {"cli": "claude"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            output_file = cwd / "out.md"
+            raw_log = cwd / "raw.log"
+            result = runner.run("r1", "s1", agent, provider, "prompt", cwd, output_file, raw_log)
+            self.assertEqual(result.status, "completed")
+
+
 if __name__ == "__main__":
     unittest.main()

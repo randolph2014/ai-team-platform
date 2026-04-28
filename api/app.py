@@ -72,4 +72,13 @@ def create_app():
     def health():
         return {"status": "ok"}
 
+    @app.get("/metrics")
+    def metrics():
+        from engine.metrics import get_metrics_output
+
+        body, content_type = get_metrics_output()
+        from fastapi.responses import Response
+
+        return Response(content=body, media_type=content_type)
+
     return app
