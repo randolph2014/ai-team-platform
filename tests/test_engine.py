@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 import unittest
@@ -527,6 +528,36 @@ worktree:
             report = load_report(report_path)
             self.assertEqual(report.run_id, "r1")
             self.assertEqual(report.status, "completed")
+
+    def test_load_report_migrates_legacy_agent_runtime_id(self) -> None:
+        """旧 report 里的 agent 缺 runtime_id 时，读取期补 legacy，避免列表页 500"""
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path = Path(tmp) / "report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "run_id": "legacy-run",
+                        "status": "completed",
+                        "requirement": "test",
+                        "project_root": "/tmp",
+                        "output_dir": "/tmp",
+                        "config_source": "default",
+                        "stages": [
+                            {
+                                "stage_id": "develop",
+                                "stage_name": "Develop",
+                                "is_parallel": False,
+                                "type": "agent",
+                                "agents": [{"agent_name": "dev", "status": "completed"}],
+                                "quality_gates": [],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report = load_report(report_path)
+            self.assertEqual(report.stages[0].agents[0].runtime_id, "legacy")
 
     def test_find_run_reports_returns_sorted(self) -> None:
         """find_run_reports 返回排序后的报告文件"""

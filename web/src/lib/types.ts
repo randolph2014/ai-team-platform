@@ -74,13 +74,25 @@ export interface Pipeline {
 }
 
 export interface RuntimeConfig {
+  id?: string;
   name?: string;
   cli: string;
   args?: string[];
   prompt_mode?: 'arg' | 'stdin';
+  model_arg_style?: 'long' | 'codex' | string;
+  model?: string;
   default_model?: string;
+  fallback_models?: string[];
   env?: Record<string, string>;
+  provider?: string;
   available?: boolean;
+  configured?: boolean;
+  supported?: boolean;
+  path?: string | null;
+  version?: string | null;
+  launch_header?: string;
+  unsupported_reason?: string;
+  source?: string;
 }
 
 export interface AgentConfig {
@@ -88,8 +100,6 @@ export interface AgentConfig {
   runtime_id: string;
   role?: string;
   prompt?: string;
-  model?: string;
-  fallback_models?: string[];
   timeout?: number;
 }
 
@@ -104,6 +114,26 @@ export interface SettingsResponse {
   path: string | null;
   warnings: string[];
   config: AppConfig;
+}
+
+export interface RuntimeCandidate extends RuntimeConfig {
+  id: string;
+  provider: string;
+  cli: string;
+  available: boolean;
+  supported: boolean;
+}
+
+export interface RuntimeCatalogResponse {
+  runtimes: Record<string, RuntimeConfig>;
+  candidates: RuntimeCandidate[];
+}
+
+export interface AgentPromptResponse {
+  agent_name: string;
+  path: string;
+  source_path?: string;
+  content: string;
 }
 
 export interface PipelineTemplate {

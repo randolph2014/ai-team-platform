@@ -1,18 +1,38 @@
 import { AlertTriangle, FileText, Loader2, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { fetchSettings, resetSettings, updateSettings } from '../lib/api';
-import type { AgentConfig, AppConfig, RuntimeConfig, SettingsResponse } from '../lib/types';
+import {
+  fetchAgentPrompt,
+  fetchRuntimeCatalog,
+  fetchSettings,
+  resetSettings,
+  updateAgentPrompt,
+  updateSettings,
+} from '../lib/api';
+import type {
+  AgentConfig,
+  AppConfig,
+  RuntimeCandidate,
+  RuntimeCatalogResponse,
+  RuntimeConfig,
+  SettingsResponse,
+} from '../lib/types';
 
-type SettingsSection = 'runtimes' | 'agents' | 'runner' | 'worktree' | 'quality_gates' | 'raw';
+type SettingsSection = 'runtimes' | 'agents' | 'runner' | 'worktree';
 
 const SETTINGS_SECTIONS: Array<{ key: SettingsSection; label: string }> = [
   { key: 'runtimes', label: 'Runtimes' },
   { key: 'agents', label: 'Agents' },
   { key: 'runner', label: 'Runner' },
   { key: 'worktree', label: 'Worktree' },
-  { key: 'quality_gates', label: 'Quality Gates' },
-  { key: 'raw', label: 'Raw' },
 ];
+
+type PromptDraft = {
+  path?: string;
+  sourcePath?: string;
+  content: string;
+  originalContent: string;
+  error?: string;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -68,16 +88,38 @@ function parseList(value: string): string[] | undefined {
 }
 
 function cleanRuntime(runtime: RuntimeConfig): RuntimeConfig {
+  const {
+    available: _available,
+    configured: _configured,
+    default_model: legacyDefaultModel,
+    launch_header: _launchHeader,
+    path: _path,
+    provider: _provider,
+    source: _source,
+    supported: _supported,
+    unsupported_reason: _unsupportedReason,
+    version: _version,
+    ...rest
+  } = runtime;
   const next: RuntimeConfig = {
-    ...runtime,
-    cli: runtime.cli.trim(),
+    ...rest,
+    cli: (runtime.cli || '').trim(),
   };
   if (!next.name?.trim()) delete next.name;
   else next.name = next.name.trim();
   if (!next.args || next.args.length === 0) delete next.args;
+  else next.args = next.args.map((item) => item.trim()).filter(Boolean);
   if (!next.prompt_mode) delete next.prompt_mode;
-  if (!next.default_model?.trim()) delete next.default_model;
-  else next.default_model = next.default_model.trim();
+  if (!next.model_arg_style?.trim()) delete next.model_arg_style;
+  if (!next.model?.trim() && legacyDefaultModel?.trim()) next.model = legacyDefaultModel.trim();
+  if (!next.model?.trim()) delete next.model;
+  else next.model = next.model.trim();
+  if (!next.fallback_models || next.fallback_models.length === 0) delete next.fallback_models;
+  else {
+    const fallbackModels = next.fallback_models.map((item) => item.trim()).filter(Boolean);
+    if (fallbackModels.length > 0) next.fallback_models = fallbackModels;
+    else delete next.fallback_models;
+  }
   if (next.env) {
     const env = Object.fromEntries(
       Object.entries(next.env).filter(([, value]) => value !== '***'),
@@ -106,25 +148,87 @@ function normalizeConfig(config: AppConfig): AppConfig {
   };
 }
 
+async function readPromptDrafts(config: AppConfig): Promise<Record<string, PromptDraft>> {
+  const agents = config.agents || [];
+  const entries = await Promise.all(
+    agents.map(async (agent) => {
+      if (!agent.name) {
+        return ['', { content: '', originalContent: '', error: 'Agent 名称为空' }] as const;
+      }
+      try {
+        const prompt = await fetchAgentPrompt(agent.name);
+        return [
+          agent.name,
+          {
+            path: prompt.path,
+            sourcePath: prompt.source_path,
+            content: prompt.content,
+            originalContent: prompt.content,
+          },
+        ] as const;
+      } catch (err: unknown) {
+        return [
+          agent.name,
+          {
+            path: agent.prompt,
+            content: '',
+            originalContent: '',
+            error: err instanceof Error ? err.message : 'Prompt 读取失败',
+          },
+        ] as const;
+      }
+    }),
+  );
+  return Object.fromEntries(entries.filter(([name]) => Boolean(name)));
+}
+
+function runtimeFromCandidate(candidate: RuntimeCandidate): RuntimeConfig {
+  return {
+    name: candidate.name,
+    cli: candidate.cli,
+    args: candidate.args,
+    prompt_mode: candidate.prompt_mode,
+    model_arg_style: candidate.model_arg_style,
+  };
+}
+
+function candidateStatus(candidate: RuntimeCandidate): string {
+  if (!candidate.available) return '未安装';
+  if (!candidate.supported) return candidate.unsupported_reason || '暂未支持';
+  return '可添加';
+}
+
 export function Settings() {
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [draftConfig, setDraftConfig] = useState<AppConfig | null>(null);
+  const [runtimeCatalog, setRuntimeCatalog] = useState<RuntimeCatalogResponse | null>(null);
+  const [agentPrompts, setAgentPrompts] = useState<Record<string, PromptDraft>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [activeSection, setActiveSection] = useState<SettingsSection>('runtimes');
+  const [selectedCandidateId, setSelectedCandidateId] = useState('');
 
-  const loadSettings = useCallback(() => {
+  const loadSettings = useCallback(async () => {
     setLoading(true);
     setError('');
-    fetchSettings()
-      .then((result) => {
-        setSettings(result);
-        setDraftConfig(normalizeConfig(result.config));
-      })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
+    try {
+      const [settingsResult, catalogResult] = await Promise.all([
+        fetchSettings(),
+        fetchRuntimeCatalog(),
+      ]);
+      const normalized = normalizeConfig(settingsResult.config);
+      const prompts = await readPromptDrafts(normalized);
+      setSettings(settingsResult);
+      setRuntimeCatalog(catalogResult);
+      setDraftConfig(normalized);
+      setAgentPrompts(prompts);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : '加载失败');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -140,6 +244,21 @@ export function Settings() {
     [draftConfig],
   );
   const runtimeIds = Object.keys(runtimes);
+  const runtimeCandidates = runtimeCatalog?.candidates || [];
+  const addableRuntimeCandidates = useMemo(
+    () => runtimeCandidates.filter((candidate) => !runtimes[candidate.id]),
+    [runtimeCandidates, runtimes],
+  );
+
+  useEffect(() => {
+    if (addableRuntimeCandidates.length === 0) {
+      setSelectedCandidateId('');
+      return;
+    }
+    if (!selectedCandidateId || !addableRuntimeCandidates.some((candidate) => candidate.id === selectedCandidateId)) {
+      setSelectedCandidateId(addableRuntimeCandidates[0].id);
+    }
+  }, [addableRuntimeCandidates, selectedCandidateId]);
 
   function updateDraft(section: Partial<AppConfig>) {
     setDraftConfig((current) => ({ ...(current || {}), ...section }));
@@ -150,32 +269,24 @@ export function Settings() {
     updateDraft({ runtimes: { ...runtimes, [id]: value } });
   }
 
-  function renameRuntime(oldId: string, newId: string) {
-    const trimmed = newId.trim();
-    if (!trimmed || runtimes[trimmed]) {
-      setSaveMessage(`Runtime ID ${newId || '(empty)'} 无效或已存在`);
+  function addRuntimeFromCandidate() {
+    const candidate = runtimeCandidates.find((item) => item.id === selectedCandidateId);
+    if (!candidate) {
+      setSaveMessage('请选择 Runtime');
       return;
     }
-    if (trimmed === oldId) return;
-    const { [oldId]: runtime, ...rest } = runtimes;
-    const renamed = { ...rest, [trimmed]: runtime };
-    const renamedAgents = agents.map((agent) =>
-      agent.runtime_id === oldId ? { ...agent, runtime_id: trimmed } : agent,
-    );
-    updateDraft({ runtimes: renamed, agents: renamedAgents });
-  }
-
-  function addRuntime() {
-    let index = Object.keys(runtimes).length + 1;
-    let id = `runtime-${index}`;
-    while (runtimes[id]) {
-      index += 1;
-      id = `runtime-${index}`;
+    if (!candidate.available || !candidate.supported) {
+      setSaveMessage(`Runtime ${candidate.name} 当前不能添加：${candidateStatus(candidate)}`);
+      return;
+    }
+    if (runtimes[candidate.id]) {
+      setSaveMessage(`Runtime ${candidate.name} 已存在`);
+      return;
     }
     updateDraft({
       runtimes: {
         ...runtimes,
-        [id]: { name: `Runtime ${index}`, cli: '', prompt_mode: 'arg' },
+        [candidate.id]: runtimeFromCandidate(candidate),
       },
     });
   }
@@ -194,6 +305,33 @@ export function Settings() {
     updateDraft({
       agents: agents.map((agent, i) => (i === index ? { ...agent, ...patch } : agent)),
     });
+  }
+
+  function updateAgentName(index: number, name: string) {
+    const previousName = agents[index]?.name;
+    updateAgent(index, { name });
+    setAgentPrompts((current) => {
+      if (!previousName || !name.trim() || previousName === name || !current[previousName] || current[name]) return current;
+      const next = { ...current, [name]: current[previousName] };
+      delete next[previousName];
+      return next;
+    });
+  }
+
+  function updatePromptDraft(agentName: string, content: string) {
+    if (!agentName.trim()) return;
+    setAgentPrompts((current) => {
+      const existing = current[agentName] || { content: '', originalContent: '' };
+      return {
+        ...current,
+        [agentName]: {
+          ...existing,
+          content,
+          error: undefined,
+        },
+      };
+    });
+    setSaveMessage('');
   }
 
   function addAgent() {
@@ -217,8 +355,15 @@ export function Settings() {
     setSaveMessage('');
     try {
       const result = await resetSettings();
-      setSettings(result);
-      setDraftConfig(normalizeConfig(result.config));
+      const normalized = normalizeConfig(result.config);
+      const [catalog, prompts] = await Promise.all([
+        fetchRuntimeCatalog(),
+        readPromptDrafts(normalized),
+      ]);
+      setSettings({ ...result, warnings: result.warnings || [] });
+      setRuntimeCatalog(catalog);
+      setDraftConfig(normalized);
+      setAgentPrompts(prompts);
       setSaveMessage('设置已重置');
     } catch (e: unknown) {
       setSaveMessage(e instanceof Error ? e.message : '重置失败');
@@ -244,25 +389,37 @@ export function Settings() {
         Object.entries(runtimes)
           .map(([id, runtime]) => [id.trim(), cleanRuntime(runtime)]),
       );
-      const cleanedAgents = agents
-        .map((agent) => ({
-          ...agent,
+      const cleanedAgents = agents.map((agent) => {
+        const next: AgentConfig = {
           name: agent.name.trim(),
           runtime_id: agent.runtime_id.trim(),
-          role: agent.role?.trim() || undefined,
-          prompt: agent.prompt?.trim() || undefined,
-          model: agent.model?.trim() || undefined,
-          fallback_models: agent.fallback_models?.filter(Boolean),
-        }));
+        };
+        if (agent.role?.trim()) next.role = agent.role.trim();
+        if (agent.prompt?.trim()) next.prompt = agent.prompt.trim();
+        if (agent.timeout !== undefined) next.timeout = agent.timeout;
+        return next;
+      });
+      const promptUpdates = cleanedAgents
+        .map((agent) => ({ agent, prompt: agentPrompts[agent.name] }))
+        .filter(({ prompt }) => prompt && prompt.content !== prompt.originalContent)
+        .map(({ agent, prompt }) => ({ agentName: agent.name, content: prompt!.content }));
       const payload = sanitizeEnvPlaceholders({
         ...draftConfig,
         runtimes: cleanedRuntimes,
         agents: cleanedAgents,
       }) as AppConfig;
       const result = await updateSettings(payload);
+      await Promise.all(promptUpdates.map((item) => updateAgentPrompt(item.agentName, item.content)));
+      const normalized = normalizeConfig(result.config);
+      const [catalog, prompts] = await Promise.all([
+        fetchRuntimeCatalog(),
+        readPromptDrafts(normalized),
+      ]);
       setSettings(result);
-      setDraftConfig(normalizeConfig(result.config));
-      setSaveMessage('设置已保存');
+      setRuntimeCatalog(catalog);
+      setDraftConfig(normalized);
+      setAgentPrompts(prompts);
+      setSaveMessage(promptUpdates.length > 0 ? '设置和 Prompt 已保存' : '设置已保存');
     } catch (e: unknown) {
       setSaveMessage(e instanceof Error ? e.message : '保存失败');
     } finally {
@@ -294,6 +451,12 @@ export function Settings() {
 
   if (!settings || !draftConfig) return null;
 
+  const selectedCandidate = runtimeCandidates.find((candidate) => candidate.id === selectedCandidateId);
+  const canAddSelectedCandidate = Boolean(
+    selectedCandidate && selectedCandidate.available && selectedCandidate.supported && !runtimes[selectedCandidate.id],
+  );
+  const warnings = settings.warnings || [];
+
   return (
     <div className="page">
       <header className="pageHeader">
@@ -307,10 +470,10 @@ export function Settings() {
         </div>
       </header>
 
-      {saveMessage && <div className={`saveBanner ${saveMessage.includes('失败') ? 'saveBannerError' : ''}`}>{saveMessage}</div>}
-      {settings.warnings.length > 0 && (
+      {saveMessage && <div className={`saveBanner ${saveMessage.includes('失败') || saveMessage.includes('不能') || saveMessage.includes('缺少') ? 'saveBannerError' : ''}`}>{saveMessage}</div>}
+      {warnings.length > 0 && (
         <div className="saveBanner saveBannerError" style={{ marginBottom: 18 }}>
-          {settings.warnings.map((warning, i) => <p key={i}>{warning}</p>)}
+          {warnings.map((warning, i) => <p key={i}>{warning}</p>)}
         </div>
       )}
 
@@ -333,60 +496,87 @@ export function Settings() {
             <div className="settingGroup">
               <div className="settingsSectionHeader">
                 <h2>Runtimes</h2>
-                <button className="button" onClick={addRuntime}><Plus size={14} /> 新增 Runtime</button>
+                <div className="runtimeAddRow">
+                  <select value={selectedCandidateId} onChange={(e) => setSelectedCandidateId(e.target.value)}>
+                    {addableRuntimeCandidates.length === 0 && <option value="">没有可添加 Runtime</option>}
+                    {addableRuntimeCandidates.map((candidate) => (
+                      <option key={candidate.id} value={candidate.id}>
+                        {candidate.name} · {candidateStatus(candidate)}
+                      </option>
+                    ))}
+                  </select>
+                  <button className="button" onClick={addRuntimeFromCandidate} disabled={!canAddSelectedCandidate}>
+                    <Plus size={14} /> 添加 Runtime
+                  </button>
+                </div>
               </div>
+              {selectedCandidate && (!selectedCandidate.available || !selectedCandidate.supported) && (
+                <div className="settingsMetaLine" style={{ marginBottom: 12 }}>
+                  {selectedCandidate.name}: {candidateStatus(selectedCandidate)}
+                </div>
+              )}
               <div className="settingsCards">
-                {Object.entries(runtimes).map(([id, runtime]) => (
-                  <div className="settingsEditCard" key={id}>
-                    <div className="settingsCardHeader">
-                      <strong>{runtime.name || id}</strong>
-                      <button className="iconButton danger" onClick={() => removeRuntime(id)} aria-label="删除 Runtime">
-                        <Trash2 size={14} />
-                      </button>
+                {Object.entries(runtimes).map(([id, runtime]) => {
+                  const candidateRuntime = runtimeCandidates.find((candidate) => candidate.id === id);
+                  const displayRuntime = { ...(candidateRuntime || {}), ...(runtimeCatalog?.runtimes?.[id] || {}), ...runtime };
+                  return (
+                    <div className="settingsEditCard" key={id}>
+                      <div className="settingsCardHeader">
+                        <div>
+                          <strong>{runtime.name || displayRuntime.name || id}</strong>
+                          <div className="settingsMetaLine settingsMetaInline">
+                            id: {id} · cli: {displayRuntime.cli || runtime.cli}
+                          </div>
+                        </div>
+                        <button className="iconButton danger" onClick={() => removeRuntime(id)} aria-label="删除 Runtime">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                      <div className="settingsFormGrid">
+                        <label>
+                          Name
+                          <input value={runtime.name || ''} onChange={(e) => updateRuntime(id, { ...runtime, name: e.target.value })} />
+                        </label>
+                        <label>
+                          CLI
+                          <input value={runtime.cli || ''} readOnly className="settingsReadOnlyInput" />
+                        </label>
+                        <label>
+                          Args
+                          <input value={splitList(runtime.args)} onChange={(e) => updateRuntime(id, { ...runtime, args: parseList(e.target.value) })} />
+                        </label>
+                        <label>
+                          Prompt Mode
+                          <select value={runtime.prompt_mode || 'arg'} onChange={(e) => updateRuntime(id, { ...runtime, prompt_mode: e.target.value as RuntimeConfig['prompt_mode'] })}>
+                            <option value="arg">arg</option>
+                            <option value="stdin">stdin</option>
+                          </select>
+                        </label>
+                        <label>
+                          Model Override
+                          <input
+                            value={runtime.model || runtime.default_model || ''}
+                            placeholder={displayRuntime.model ? `CLI 当前配置: ${displayRuntime.model}` : '留空时使用 CLI 当前配置'}
+                            onChange={(e) => updateRuntime(id, { ...runtime, model: e.target.value, default_model: undefined })}
+                          />
+                        </label>
+                        <label>
+                          Fallback Models
+                          <input value={splitList(runtime.fallback_models)} onChange={(e) => updateRuntime(id, { ...runtime, fallback_models: parseList(e.target.value) })} />
+                        </label>
+                      </div>
+                      <div className="runtimeMetaGrid">
+                        <span>available: {displayRuntime.available === undefined ? '-' : displayRuntime.available ? 'true' : 'false'}</span>
+                        <span>supported: {displayRuntime.supported === undefined ? '-' : displayRuntime.supported ? 'true' : 'false'}</span>
+                        {displayRuntime.model && <span>detected model: {displayRuntime.model}</span>}
+                        {displayRuntime.version && <span>version: {displayRuntime.version}</span>}
+                        {displayRuntime.path && <span className="settingsWideMeta">path: {displayRuntime.path}</span>}
+                        {displayRuntime.unsupported_reason && <span className="settingsWideMeta">reason: {displayRuntime.unsupported_reason}</span>}
+                      </div>
+                      {runtime.env && <div className="settingsMetaLine">env: {Object.keys(runtime.env).length} 个变量，保存时会跳过值为 *** 的字段</div>}
                     </div>
-                    <div className="settingsFormGrid">
-                      <label>
-                        ID
-                        <input
-                          defaultValue={id}
-                          onBlur={(e) => {
-                            renameRuntime(id, e.target.value);
-                            if (!e.target.value.trim() || (e.target.value.trim() !== id && runtimes[e.target.value.trim()])) {
-                              e.target.value = id;
-                            }
-                          }}
-                        />
-                      </label>
-                      <label>
-                        Name
-                        <input value={runtime.name || ''} onChange={(e) => updateRuntime(id, { ...runtime, name: e.target.value })} />
-                      </label>
-                      <label>
-                        CLI
-                        <input value={runtime.cli || ''} onChange={(e) => updateRuntime(id, { ...runtime, cli: e.target.value })} />
-                      </label>
-                      <label>
-                        Args
-                        <input value={splitList(runtime.args)} onChange={(e) => updateRuntime(id, { ...runtime, args: parseList(e.target.value) })} />
-                      </label>
-                      <label>
-                        Prompt Mode
-                        <select value={runtime.prompt_mode || 'arg'} onChange={(e) => updateRuntime(id, { ...runtime, prompt_mode: e.target.value as RuntimeConfig['prompt_mode'] })}>
-                          <option value="arg">arg</option>
-                          <option value="stdin">stdin</option>
-                        </select>
-                      </label>
-                      <label>
-                        Default Model
-                        <input value={runtime.default_model || ''} onChange={(e) => updateRuntime(id, { ...runtime, default_model: e.target.value })} />
-                      </label>
-                    </div>
-                    {runtime.available !== undefined && (
-                      <div className="settingsMetaLine">available: {runtime.available ? 'true' : 'false'}</div>
-                    )}
-                    {runtime.env && <div className="settingsMetaLine">env: {Object.keys(runtime.env).length} 个变量，保存时会跳过值为 *** 的字段</div>}
-                  </div>
-                ))}
+                  );
+                })}
                 {Object.keys(runtimes).length === 0 && <div className="emptyState">暂无 Runtime 配置</div>}
               </div>
             </div>
@@ -399,47 +589,51 @@ export function Settings() {
                 <button className="button" onClick={addAgent}><Plus size={14} /> 新增 Agent</button>
               </div>
               <div className="settingsCards">
-                {agents.map((agent, index) => (
-                  <div className="settingsEditCard" key={`${agent.name}-${index}`}>
-                    <div className="settingsCardHeader">
-                      <strong>{agent.name || `Agent ${index + 1}`}</strong>
-                      <button className="iconButton danger" onClick={() => removeAgent(index)} aria-label="删除 Agent">
-                        <Trash2 size={14} />
-                      </button>
+                {agents.map((agent, index) => {
+                  const promptDraft = agentPrompts[agent.name];
+                  return (
+                    <div className="settingsEditCard" key={`${agent.name}-${index}`}>
+                      <div className="settingsCardHeader">
+                        <strong>{agent.name || `Agent ${index + 1}`}</strong>
+                        <button className="iconButton danger" onClick={() => removeAgent(index)} aria-label="删除 Agent">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                      <div className="settingsFormGrid">
+                        <label>
+                          Name
+                          <input value={agent.name} onChange={(e) => updateAgentName(index, e.target.value)} />
+                        </label>
+                        <label>
+                          Runtime
+                          <select value={agent.runtime_id} onChange={(e) => updateAgent(index, { runtime_id: e.target.value })}>
+                            <option value="">选择 Runtime</option>
+                            {runtimeIds.map((runtimeId) => (
+                              <option key={runtimeId} value={runtimeId}>{runtimes[runtimeId]?.name || runtimeId}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="settingsWideField">
+                          Role
+                          <input value={agent.role || ''} onChange={(e) => updateAgent(index, { role: e.target.value })} />
+                        </label>
+                        <label className="settingsWideField">
+                          Prompt
+                          <textarea
+                            value={promptDraft?.content || ''}
+                            onChange={(e) => updatePromptDraft(agent.name, e.target.value)}
+                            placeholder={promptDraft?.error || 'Prompt 文档内容'}
+                          />
+                        </label>
+                      </div>
+                      <div className={`settingsMetaLine ${promptDraft?.error ? 'settingsMetaError' : ''}`}>
+                        Prompt file: {promptDraft?.path || agent.prompt || '.ai/agents/<agent>.md'}
+                        {promptDraft?.sourcePath && promptDraft.sourcePath !== promptDraft.path ? ` · source: ${promptDraft.sourcePath}` : ''}
+                        {promptDraft?.error ? ` · ${promptDraft.error}` : ''}
+                      </div>
                     </div>
-                    <div className="settingsFormGrid">
-                      <label>
-                        Name
-                        <input value={agent.name} onChange={(e) => updateAgent(index, { name: e.target.value })} />
-                      </label>
-                      <label>
-                        Runtime
-                        <select value={agent.runtime_id} onChange={(e) => updateAgent(index, { runtime_id: e.target.value })}>
-                          <option value="">选择 Runtime</option>
-                          {runtimeIds.map((runtimeId) => (
-                            <option key={runtimeId} value={runtimeId}>{runtimes[runtimeId]?.name || runtimeId}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        Role
-                        <input value={agent.role || ''} onChange={(e) => updateAgent(index, { role: e.target.value })} />
-                      </label>
-                      <label>
-                        Model
-                        <input value={agent.model || ''} onChange={(e) => updateAgent(index, { model: e.target.value })} />
-                      </label>
-                      <label className="settingsWideField">
-                        Fallback Models
-                        <input value={splitList(agent.fallback_models)} onChange={(e) => updateAgent(index, { fallback_models: parseList(e.target.value) })} />
-                      </label>
-                      <label className="settingsWideField">
-                        Prompt
-                        <textarea value={agent.prompt || ''} onChange={(e) => updateAgent(index, { prompt: e.target.value })} />
-                      </label>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {agents.length === 0 && <div className="emptyState">暂无 Agent 配置</div>}
               </div>
             </div>
@@ -456,20 +650,6 @@ export function Settings() {
             <div className="settingGroup">
               <h2>Worktree</h2>
               {renderValue(draftConfig.worktree)}
-            </div>
-          )}
-
-          {activeSection === 'quality_gates' && (
-            <div className="settingGroup">
-              <h2>Quality Gates</h2>
-              {renderValue(draftConfig.quality_gates)}
-            </div>
-          )}
-
-          {activeSection === 'raw' && (
-            <div className="settingGroup">
-              <h2>Raw</h2>
-              {renderObject(draftConfig as Record<string, unknown>)}
             </div>
           )}
         </section>

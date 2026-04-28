@@ -547,7 +547,14 @@ class Orchestrator:
 
 
 def load_report(path: Path) -> RunReport:
-    return RunReport(**json.loads(path.read_text(encoding="utf-8")))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for stage in data.get("stages", []) or []:
+        if not isinstance(stage, dict):
+            continue
+        for agent in stage.get("agents", []) or []:
+            if isinstance(agent, dict) and not agent.get("runtime_id"):
+                agent["runtime_id"] = "legacy"
+    return RunReport(**data)
 
 
 def find_run_reports(project_root: Path) -> List[Path]:

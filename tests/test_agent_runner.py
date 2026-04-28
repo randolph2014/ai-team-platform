@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -63,6 +64,21 @@ class TestBuildCommand(unittest.TestCase):
         self.assertIn("-m", cmd)
         self.assertIn("gpt-4", cmd)
 
+    def test_runtime_model_arg_style_overrides_cli_default(self) -> None:
+        """runtime.model_arg_style 可显式控制模型参数风格"""
+        from engine.runtimes import build_runtime_command
+
+        cmd, _, _ = build_runtime_command({"cli": "custom", "args": [], "model_arg_style": "codex"}, "prompt", model="gpt-5")
+        self.assertIn("-m", cmd)
+        self.assertNotIn("--model", cmd)
+
+    def test_unsupported_runtime_cli_raises(self) -> None:
+        """检测但未适配的 CLI 不能被当作可执行 runtime 静默运行"""
+        from engine.runtimes import build_runtime_command
+
+        with self.assertRaises(ConfigError):
+            build_runtime_command({"cli": "hermes"}, "prompt")
+
     @patch("engine.runtimes.resolve_auto_cli", return_value=None)
     def test_auto_no_cli_raises(self, mock_resolve) -> None:
         """auto 但无可用 CLI 时抛出 ConfigError"""
@@ -78,6 +94,43 @@ class TestBuildCommand(unittest.TestCase):
         cmd, _, _ = build_runtime_command({"cli": "claude", "args": ["--custom"]}, "prompt")
         self.assertIn("--custom", cmd)
         self.assertNotIn("--output-format", " ".join(cmd))
+
+
+class TestDiscoverRuntimeCandidates(unittest.TestCase):
+    def test_reads_models_from_cli_config_files(self) -> None:
+        """Runtime 候选项从本机 CLI 配置读取默认模型，仅作为 runtime 元信息暴露"""
+        from engine.runtimes import discover_runtime_candidates
+
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            (home / ".codex").mkdir(parents=True)
+            (home / ".codex" / "config.toml").write_text(
+                'model = "gpt-5.5"\n\n[projects."/tmp/repo"]\ntrust_level = "trusted"\n',
+                encoding="utf-8",
+            )
+            (home / ".claude").mkdir(parents=True)
+            (home / ".claude" / "settings.json").write_text(
+                json.dumps({"env": {"ANTHROPIC_MODEL": "mimo-v2.5-pro"}, "model": "opus"}),
+                encoding="utf-8",
+            )
+            (home / ".config" / "opencode").mkdir(parents=True)
+            (home / ".config" / "opencode" / "opencode.json").write_text(
+                json.dumps({"model": "glm-5"}),
+                encoding="utf-8",
+            )
+
+            def fake_which(command: str) -> str | None:
+                return f"/usr/local/bin/{command}" if command in {"claude", "codex", "opencode"} else None
+
+            with patch("engine.runtimes.Path.home", return_value=home), \
+                patch("engine.runtimes.shutil.which", side_effect=fake_which), \
+                patch("engine.runtimes.detect_cli_version", return_value=None), \
+                patch.dict(os.environ, {}, clear=True):
+                by_id = {candidate["id"]: candidate for candidate in discover_runtime_candidates()}
+
+        self.assertEqual(by_id["codex"]["model"], "gpt-5.5")
+        self.assertEqual(by_id["claude"]["model"], "mimo-v2.5-pro")
+        self.assertEqual(by_id["opencode"]["model"], "glm-5")
 
 
 class TestDecodeClaudeStreamLine(unittest.TestCase):
@@ -113,18 +166,15 @@ class TestResolveAutoCli(unittest.TestCase):
 
 
 class TestAgentRunnerMock(unittest.TestCase):
-    def test_mock_agent_with_fallback_models(self) -> None:
-        """mock agent 带 fallback_models 字段时，主模型 mock 成功直接返回"""
+    def test_mock_runtime_with_model(self) -> None:
+        """runtime 带 model 字段时，mock 成功直接记录模型"""
         config = {
-            "runtimes": {"Mock": {"cli": "mock", "response": "done"}},
+            "runtimes": {"Mock": {"cli": "mock", "response": "done", "model": "primary-model"}},
             "runner": {},
         }
         runner = AgentRunner(config)
-        agent = AgentDefinition(
-            name="test-agent", runtime_id="Mock", role="tester",
-            model="primary-model", fallback_models=["fallback-1"],
-        )
-        runtime = {"cli": "mock", "response": "mock output success"}
+        agent = AgentDefinition(name="test-agent", runtime_id="Mock", role="tester")
+        runtime = {"cli": "mock", "response": "mock output success", "model": "primary-model"}
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp)
             output_file = cwd / "output.md"
@@ -225,9 +275,9 @@ class TestAgentRunnerSubprocessFailure(unittest.TestCase):
         mock_proc.wait.return_value = 1
         mock_popen_cls.return_value = mock_proc
 
-        config = {"runtimes": {"P": {"cli": "claude"}}, "runner": {}}
+        config = {"runtimes": {"P": {"cli": "claude", "model": "m1"}}, "runner": {}}
         runner = AgentRunner(config)
-        agent = AgentDefinition(name="a1", runtime_id="P", model="m1")
+        agent = AgentDefinition(name="a1", runtime_id="P")
         runtime = {"cli": "claude"}
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -244,9 +294,9 @@ class TestAgentRunnerSubprocessFailure(unittest.TestCase):
         """subprocess.Popen 抛出 FileNotFoundError 时，状态为 failed"""
         mock_popen_cls.side_effect = FileNotFoundError("claude not found")
 
-        config = {"runtimes": {"P": {"cli": "claude"}}, "runner": {}}
+        config = {"runtimes": {"P": {"cli": "claude", "model": "m1"}}, "runner": {}}
         runner = AgentRunner(config)
-        agent = AgentDefinition(name="a1", runtime_id="P", model="m1")
+        agent = AgentDefinition(name="a1", runtime_id="P")
         runtime = {"cli": "claude"}
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -278,9 +328,9 @@ class TestAgentRunnerSubprocessFailure(unittest.TestCase):
 
         mock_monotonic.side_effect = advance
 
-        config = {"runtimes": {"P": {"cli": "claude"}}, "runner": {}}
+        config = {"runtimes": {"P": {"cli": "claude", "model": "m1"}}, "runner": {}}
         runner = AgentRunner(config)
-        agent = AgentDefinition(name="a1", runtime_id="P", model="m1", timeout=1)
+        agent = AgentDefinition(name="a1", runtime_id="P", timeout=1)
         runtime = {"cli": "claude"}
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -356,9 +406,9 @@ class TestAgentRunnerHeartbeat(unittest.TestCase):
         mock_popen_cls.return_value = mock_proc
 
         bus = MagicMock()
-        config = {"runtimes": {"P": {"cli": "claude"}}, "runner": {"heartbeat_seconds": 1}}
+        config = {"runtimes": {"P": {"cli": "claude", "model": "m1"}}, "runner": {"heartbeat_seconds": 1}}
         runner = AgentRunner(config, bus=bus)
-        agent = AgentDefinition(name="a1", runtime_id="P", model="m1")
+        agent = AgentDefinition(name="a1", runtime_id="P")
         runtime = {"cli": "claude"}
 
         with tempfile.TemporaryDirectory() as tmp:

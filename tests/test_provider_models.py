@@ -46,8 +46,8 @@ class BuildCommandWithModelTest(unittest.TestCase):
 
 
 class FallbackRetryTest(unittest.TestCase):
-    def test_fallback_tries_next_model_on_failure(self) -> None:
-        """主模型失败后回退到 fallback_models，最终用 fallback 成功"""
+    def test_runtime_fallback_tries_next_model_on_failure(self) -> None:
+        """runtime 主模型失败后回退到 fallback_models，最终用 fallback 成功"""
         attempts: list = []
 
         def tracking_try_model(
@@ -63,8 +63,8 @@ class FallbackRetryTest(unittest.TestCase):
         runner = AgentRunner({"runtimes": {}, "runner": {}})
         runner._try_model = tracking_try_model
 
-        agent_def = AgentDefinition(name="dev", runtime_id="Mock", model="primary-model", fallback_models=["fallback-a"])
-        runtime_cfg = {"cli": "mock"}
+        agent_def = AgentDefinition(name="dev", runtime_id="Mock")
+        runtime_cfg = {"cli": "mock", "model": "primary-model", "fallback_models": ["fallback-a"]}
         result = runner.run(
             run_id="test-run",
             stage_id="develop",
@@ -95,10 +95,8 @@ class FallbackRetryTest(unittest.TestCase):
         runner = AgentRunner({"runtimes": {}, "runner": {}})
         runner._try_model = always_fail
 
-        agent_def = AgentDefinition(
-            name="dev", runtime_id="Mock", model="model-a", fallback_models=["model-b", "model-c"]
-        )
-        runtime_cfg = {"cli": "mock"}
+        agent_def = AgentDefinition(name="dev", runtime_id="Mock")
+        runtime_cfg = {"cli": "mock", "model": "model-a", "fallback_models": ["model-b", "model-c"]}
         result = runner.run(
             run_id="test-run",
             stage_id="develop",

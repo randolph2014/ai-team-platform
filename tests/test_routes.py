@@ -304,8 +304,29 @@ class TestConfigRoutes(BaseRoutesTest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("runtimes", data)
+        self.assertIn("candidates", data)
         self.assertIsInstance(data["runtimes"], dict)
         self.assertIn("mock", data["runtimes"])
+
+    def test_get_runtimes_discovers_supported_cli_candidates(self) -> None:
+        """GET /api/config/runtimes 返回本机探测到的 CLI 候选项"""
+        def fake_which(name: str):
+            if name in {"claude", "codex"}:
+                return f"/usr/local/bin/{name}"
+            return None
+
+        with patch("engine.runtimes.shutil.which", side_effect=fake_which), \
+             patch("engine.runtimes.detect_cli_version", return_value="1.0.0"):
+            response = self.client.get("/api/config/runtimes", params={"workdir": str(self.project_root)})
+
+        self.assertEqual(response.status_code, 200)
+        candidates = {item["id"]: item for item in response.json()["candidates"]}
+        self.assertTrue(candidates["claude"]["available"])
+        self.assertEqual(candidates["claude"]["path"], "/usr/local/bin/claude")
+        self.assertTrue(candidates["codex"]["available"])
+        self.assertTrue(candidates["claude"]["supported"])
+        self.assertTrue(candidates["codex"]["supported"])
+        self.assertFalse(candidates["hermes"]["supported"])
 
     def test_get_runtimes_masks_sensitive_fields(self) -> None:
         """GET /api/config/runtimes 不泄露 runtime 敏感字段"""
@@ -391,6 +412,85 @@ runner:
         # 如果系统没有 git，valid 应为 False；如果有 git 则跳过
         # 这里只验证端点正常返回
         self.assertIn("valid", data)
+
+    def test_get_agent_prompt_reads_resolved_file(self) -> None:
+        """GET /api/settings/agents/{name}/prompt 返回真实 prompt 文件内容"""
+        response = self.client.get(
+            "/api/settings/agents/dev/prompt",
+            params={"workdir": str(self.project_root)},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["agent_name"], "dev")
+        self.assertEqual(data["content"], "You are a dev agent.")
+        self.assertTrue(data["path"].endswith(".ai/agents/dev.md"))
+
+    def test_put_agent_prompt_writes_resolved_file(self) -> None:
+        """PUT /api/settings/agents/{name}/prompt 修改对应 prompt 文档"""
+        response = self.client.put(
+            "/api/settings/agents/dev/prompt",
+            params={"workdir": str(self.project_root)},
+            json={"content": "Updated prompt"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual((self.project_root / ".ai" / "agents" / "dev.md").read_text(encoding="utf-8"), "Updated prompt")
+
+    def test_put_agent_prompt_materializes_template_prompt_in_project(self) -> None:
+        """平台模板 prompt 保存时写入项目覆盖文件，不修改平台模板"""
+        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path.write_text(
+            """
+runtimes:
+  mock:
+    name: Mock
+    cli: mock
+agents:
+  - name: tech-lead
+    runtime_id: mock
+    prompt: agents/tech-lead.md
+pipeline: []
+""",
+            encoding="utf-8",
+        )
+        project_prompt = self.project_root / ".ai" / "agents" / "tech-lead.md"
+        if project_prompt.exists():
+            project_prompt.unlink()
+
+        response = self.client.put(
+            "/api/settings/agents/tech-lead/prompt",
+            params={"workdir": str(self.project_root)},
+            json={"content": "Project tech lead prompt"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["path"], str(project_prompt.resolve(strict=False)))
+        self.assertEqual(project_prompt.read_text(encoding="utf-8"), "Project tech lead prompt")
+
+    def test_put_agent_prompt_rejects_path_escape(self) -> None:
+        """prompt 写路径不能通过配置逃逸项目目录"""
+        (self.project_root / ".ai" / "team.yaml").write_text(
+            """
+runtimes:
+  mock:
+    name: Mock
+    cli: mock
+agents:
+  - name: dev
+    runtime_id: mock
+    prompt: ../outside.md
+pipeline: []
+""",
+            encoding="utf-8",
+        )
+
+        response = self.client.put(
+            "/api/settings/agents/dev/prompt",
+            params={"workdir": str(self.project_root)},
+            json={"content": "escape"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse((self.project_root.parent / "outside.md").exists())
 
 
 class TestRunsRoutes(BaseRoutesTest):
@@ -592,6 +692,154 @@ class TestSettingsPutEndpoint(BaseRoutesTest):
 
         saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         self.assertEqual(saved["runtimes"]["Claude"]["api_key"], "sk-real-secret")
+
+    def test_post_settings_runtime_partial_update_preserves_other_runtimes(self) -> None:
+        """POST 局部更新 runtimes 时不能丢掉未提交的已有 runtime"""
+        import yaml
+
+        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path.write_text(
+            """
+runtimes:
+  mock:
+    name: Mock
+    cli: mock
+  codex:
+    name: Codex
+    cli: codex
+agents:
+  - name: dev
+    runtime_id: mock
+    role: developer
+    prompt: agents/dev.md
+pipeline: []
+""",
+            encoding="utf-8",
+        )
+
+        response = self.client.post(
+            "/api/settings",
+            params={"workdir": str(self.project_root)},
+            json={"runtimes": {"mock": {"name": "Mock Updated", "cli": "mock"}}},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        self.assertIn("codex", saved["runtimes"])
+        self.assertEqual(saved["runtimes"]["mock"]["name"], "Mock Updated")
+
+    def test_put_settings_runtimes_replaces_removed_runtime(self) -> None:
+        """PUT 保存完整 settings 时应能删除废弃 runtime"""
+        import yaml
+
+        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path.write_text(
+            """
+runtimes:
+  mock:
+    name: Mock
+    cli: mock
+  codex:
+    name: Codex
+    cli: codex
+agents:
+  - name: dev
+    runtime_id: mock
+    role: developer
+    prompt: agents/dev.md
+pipeline: []
+""",
+            encoding="utf-8",
+        )
+
+        response = self.client.put(
+            "/api/settings",
+            params={"workdir": str(self.project_root)},
+            json={
+                "runtimes": {"mock": {"name": "Mock", "cli": "mock"}},
+                "agents": [{"name": "dev", "runtime_id": "mock", "role": "developer", "prompt": "agents/dev.md"}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        self.assertNotIn("codex", saved["runtimes"])
+
+    def test_put_settings_runtime_replaces_removed_runtime_fields(self) -> None:
+        """PUT 保存完整 settings 时应能删除同名 runtime 内部旧字段"""
+        import yaml
+
+        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path.write_text(
+            """
+runtimes:
+  mock:
+    name: Mock
+    cli: mock
+    model: old-model
+    fallback_models:
+      - old-fallback
+    env:
+      OLD_FLAG: "1"
+    api_key: sk-real-secret
+agents:
+  - name: dev
+    runtime_id: mock
+    role: developer
+    prompt: agents/dev.md
+pipeline: []
+""",
+            encoding="utf-8",
+        )
+
+        response = self.client.put(
+            "/api/settings",
+            params={"workdir": str(self.project_root)},
+            json={
+                "runtimes": {"mock": {"name": "Mock", "cli": "mock", "api_key": "***"}},
+                "agents": [{"name": "dev", "runtime_id": "mock", "role": "developer", "prompt": "agents/dev.md"}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        runtime = saved["runtimes"]["mock"]
+        self.assertNotIn("model", runtime)
+        self.assertNotIn("fallback_models", runtime)
+        self.assertNotIn("env", runtime)
+        self.assertEqual(runtime["api_key"], "sk-real-secret")
+
+    def test_put_settings_does_not_persist_discovery_metadata(self) -> None:
+        """available/path/version 等探测字段不能写入 team.yaml"""
+        import yaml
+
+        response = self.client.put(
+            "/api/settings",
+            params={"workdir": str(self.project_root)},
+            json={
+                "runtimes": {
+                    "claude": {
+                        "name": "Claude",
+                        "cli": "claude",
+                        "available": True,
+                        "path": "/usr/local/bin/claude",
+                        "version": "1.0.0",
+                        "configured": True,
+                    }
+                },
+                "agents": [
+                    {"name": "dev", "runtime_id": "claude", "role": "developer", "prompt": "agents/dev.md"}
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        saved = yaml.safe_load((self.project_root / ".ai" / "team.yaml").read_text(encoding="utf-8"))
+        runtime = saved["runtimes"]["claude"]
+        self.assertNotIn("available", runtime)
+        self.assertNotIn("path", runtime)
+        self.assertNotIn("version", runtime)
+        self.assertNotIn("configured", runtime)
 
 
 class TestRunsPagination(BaseRoutesTest):

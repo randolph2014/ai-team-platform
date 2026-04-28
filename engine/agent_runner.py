@@ -59,11 +59,11 @@ class AgentRunner:
         timeout = agent.timeout or self.runner_config.get("agent_timeout_seconds") or 1800
         heartbeat_seconds = int(self.runner_config.get("heartbeat_seconds") or 0)
 
-        primary_model = agent.model or runtime.get("default_model")
+        primary_model = runtime.get("model") or runtime.get("default_model")
         models_to_try: List[Optional[str]] = []
         if primary_model:
             models_to_try.append(primary_model)
-        models_to_try.extend(agent.fallback_models)
+        models_to_try.extend(runtime.get("fallback_models") or [])
         if not models_to_try:
             models_to_try = [None]
 
@@ -283,7 +283,12 @@ class AgentRunner:
         completion_tokens = estimate_tokens(output_text)
 
         runtime_config = self.config.get("runtimes", {}).get(agent_run.runtime_id, {})
-        model = agent_run.model_used or (runtime_config.get("model") if isinstance(runtime_config, dict) else None) or "default"
+        model = (
+            agent_run.model_used
+            or (runtime_config.get("model") if isinstance(runtime_config, dict) else None)
+            or (runtime_config.get("default_model") if isinstance(runtime_config, dict) else None)
+            or "default"
+        )
 
         self.cost_tracker.track_usage(
             run_id=run_id,

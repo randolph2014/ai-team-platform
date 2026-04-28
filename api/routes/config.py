@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 from typing import Any, Dict, List
 
 from engine.config import (
@@ -11,7 +10,7 @@ from engine.config import (
     load_config,
     validate_production_config,
 )
-from engine.runtimes import runtime_available
+from engine.runtimes import discover_runtime_candidates, runtime_available
 from .settings import _mask_sensitive
 
 try:
@@ -20,9 +19,6 @@ except ImportError:  # pragma: no cover
     APIRouter = None
 
 router = APIRouter() if APIRouter else None
-
-
-KNOWN_RUNTIMES = ["claude", "codex", "opencode"]
 
 
 def _load_default_yaml() -> Dict[str, Any]:
@@ -35,9 +31,9 @@ if router:
 
     @router.get("/config/runtimes")
     def get_runtimes(workdir: str = Query(default=".")):
-        result: Dict[str, Any] = {"runtimes": {}}
-        for name in KNOWN_RUNTIMES:
-            result["runtimes"][name] = {"name": name, "cli": name, "available": shutil.which(name) is not None}
+        candidates = discover_runtime_candidates()
+        candidates_by_id = {candidate["id"]: candidate for candidate in candidates}
+        result: Dict[str, Any] = {"runtimes": {}, "candidates": candidates}
 
         try:
             loaded = load_config(find_project_root(workdir))
@@ -47,7 +43,18 @@ if router:
         configured = loaded.config.get("runtimes", {})
         for runtime_id, runtime in configured.items():
             item = dict(runtime)
+            candidate = candidates_by_id.get(runtime_id) or candidates_by_id.get(str(item.get("cli", "")))
+            if candidate:
+                item.setdefault("path", candidate.get("path"))
+                item.setdefault("version", candidate.get("version"))
+                item.setdefault("supported", candidate.get("supported"))
+                item.setdefault("launch_header", candidate.get("launch_header"))
+                if candidate.get("model"):
+                    item.setdefault("model", candidate.get("model"))
+                if candidate.get("unsupported_reason"):
+                    item.setdefault("unsupported_reason", candidate.get("unsupported_reason"))
             item["available"] = runtime_available(item)
+            item["configured"] = True
             result["runtimes"][runtime_id] = _mask_sensitive(item)
 
         return result
@@ -101,6 +108,8 @@ if router:
             warnings.append("No pipeline stages configured")
 
         worktree = loaded.config.get("worktree", {})
+        import shutil
+
         if worktree.get("enabled") and not shutil.which("git"):
             errors.append("Worktree enabled but git is not installed")
 

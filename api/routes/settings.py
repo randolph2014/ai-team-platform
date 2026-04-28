@@ -9,9 +9,12 @@ from engine.config import (
     DEFAULT_TEAM_FILE,
     ConfigError,
     _read_yaml,
+    agent_map,
     find_project_root,
     load_config,
     normalize_config,
+    resolve_prompt_path,
+    resolve_prompt_write_path,
 )
 
 try:
@@ -59,11 +62,37 @@ def _merge_runtime_updates(existing: Any, updates: Any) -> Any:
     if not isinstance(existing, dict) or not isinstance(updates, dict):
         return updates
 
-    merged: Dict[str, Any] = {}
+    merged: Dict[str, Any] = dict(existing)
     for runtime_id, runtime_update in updates.items():
         existing_runtime = existing.get(runtime_id)
         merged[runtime_id] = _merge_preserving_masks(existing_runtime, runtime_update)
     return merged
+
+
+def _replace_runtime_updates(existing: Any, updates: Any) -> Any:
+    if not isinstance(existing, dict) or not isinstance(updates, dict):
+        return updates
+
+    replaced: Dict[str, Any] = {}
+    for runtime_id, runtime_update in updates.items():
+        replaced[runtime_id] = _replace_preserving_masks(existing.get(runtime_id), runtime_update)
+    return replaced
+
+
+def _replace_preserving_masks(existing: Any, updates: Any) -> Any:
+    if isinstance(updates, dict):
+        existing_dict = existing if isinstance(existing, dict) else {}
+        replaced: Dict[str, Any] = {}
+        for key, value in updates.items():
+            if isinstance(value, str) and value == MASK and _is_sensitive_key(key):
+                if key in existing_dict:
+                    replaced[key] = existing_dict[key]
+                continue
+            replaced[key] = _replace_preserving_masks(existing_dict.get(key), value)
+        return replaced
+    if isinstance(updates, list):
+        return [_replace_preserving_masks(None, item) for item in updates]
+    return updates
 
 
 def _merge_preserving_masks(existing: Any, updates: Any) -> Any:
@@ -91,6 +120,12 @@ class SettingsUpdate(BaseModel):
     quality_gates: Optional[list] = None
     context_scanner: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
+
+
+class PromptUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str
 
 
 def _project_config_path(project_root: Path) -> Path:
@@ -132,7 +167,7 @@ def _structured_response(config: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _do_update(body: SettingsUpdate, workdir: str) -> Dict[str, Any]:
+def _do_update(body: SettingsUpdate, workdir: str, *, replace_runtimes: bool = False) -> Dict[str, Any]:
     """共享的更新逻辑，POST 和 PUT 共用。"""
     project_root = find_project_root(workdir)
     config_path = _project_config_path(project_root)
@@ -157,7 +192,10 @@ def _do_update(body: SettingsUpdate, workdir: str) -> Dict[str, Any]:
     for key, value in updates.items():
         if value is not None:
             if key == "runtimes":
-                existing[key] = _merge_runtime_updates(existing.get(key), value)
+                if replace_runtimes:
+                    existing[key] = _replace_runtime_updates(existing.get(key), value)
+                else:
+                    existing[key] = _merge_runtime_updates(existing.get(key), value)
             elif isinstance(existing.get(key), dict) and isinstance(value, dict):
                 existing[key] = _merge_preserving_masks(existing.get(key), value)
             else:
@@ -171,7 +209,9 @@ def _do_update(body: SettingsUpdate, workdir: str) -> Dict[str, Any]:
     _safe_write_yaml(config_path, existing)
     return {
         "status": "saved",
+        "source": "project",
         "path": str(config_path),
+        "warnings": [],
         "config": _mask_sensitive(_structured_response(existing)),
     }
 
@@ -193,7 +233,7 @@ if router:
 
     @router.put("/settings")
     def update_settings_put(body: SettingsUpdate, workdir: str = Query(default=".")):
-        return _do_update(body, workdir)
+        return _do_update(body, workdir, replace_runtimes=True)
 
     @router.post("/settings")
     def update_settings(body: SettingsUpdate, workdir: str = Query(default=".")):
@@ -215,5 +255,51 @@ if router:
             "status": "reset",
             "source": loaded.source,
             "path": loaded.path,
+            "warnings": loaded.warnings,
             "config": _structured_response(loaded.config),
+        }
+
+    @router.get("/settings/agents/{agent_name}/prompt")
+    def get_agent_prompt(agent_name: str, workdir: str = Query(default=".")):
+        project_root = find_project_root(workdir)
+        loaded = load_config(project_root)
+        agents = agent_map(loaded.config)
+        agent = agents.get(agent_name)
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"Agent not found: {agent_name}")
+        try:
+            read_path = resolve_prompt_path(project_root, loaded.path, agent, loaded.warnings)
+            content = read_path.read_text(encoding="utf-8")
+            path = resolve_prompt_write_path(project_root, loaded.path, agent)
+        except ConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        return {
+            "agent_name": agent_name,
+            "path": str(path),
+            "source_path": str(read_path),
+            "content": content,
+        }
+
+    @router.put("/settings/agents/{agent_name}/prompt")
+    def update_agent_prompt(agent_name: str, body: PromptUpdate, workdir: str = Query(default=".")):
+        project_root = find_project_root(workdir)
+        loaded = load_config(project_root)
+        agents = agent_map(loaded.config)
+        agent = agents.get(agent_name)
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"Agent not found: {agent_name}")
+        try:
+            path = resolve_prompt_write_path(project_root, loaded.path, agent)
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            path.write_text(body.content, encoding="utf-8")
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to write prompt: {exc}")
+        return {
+            "status": "saved",
+            "agent_name": agent_name,
+            "path": str(path),
+            "content": body.content,
         }

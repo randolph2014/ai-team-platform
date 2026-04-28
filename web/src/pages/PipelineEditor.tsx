@@ -130,7 +130,6 @@ function configToYaml(config: PipelineConfig): string {
         const runtimeId = agentRuntime(agent as AgentDefWithRuntime);
         lines.push(`      - name: ${agent.name}`);
         lines.push(`        runtime_id: ${runtimeId}`);
-        if (agent.model) lines.push(`        model: ${agent.model}`);
       }
     }
   }
@@ -169,7 +168,6 @@ function stageToNodes(
         data: {
           name: agent.name,
           runtime_id: agentRuntime(agent as AgentDefWithRuntime),
-          model: agent.model,
           role: agent.role,
           status: 'pending',
         },
@@ -697,7 +695,6 @@ export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
                           <div>
                             <strong>{agent.name}</strong>
                             <span className="flow-node-tag">{agentRuntime(agent as AgentDefWithRuntime)}</span>
-                            {agent.model && <span className="flow-node-tag">{agent.model}</span>}
                           </div>
                           <button className="iconButton" onClick={() => handleRemoveAgent(agent.name)}>×</button>
                         </div>

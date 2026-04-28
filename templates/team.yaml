@@ -6,8 +6,6 @@ runtimes:
 agents:
   - name: solution-architect
     runtime_id: auto
-    model: claude-opus-4-7
-    fallback_models: [claude-sonnet-4-20250514]
     role: architect
     prompt: agents/solution-architect.md
 

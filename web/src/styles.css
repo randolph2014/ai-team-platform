@@ -481,6 +481,21 @@ tbody tr:hover td { background: var(--bg-hover); }
   gap: 12px;
   margin-bottom: 14px;
 }
+.runtimeAddRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: min(420px, 100%);
+}
+.runtimeAddRow select {
+  min-width: 220px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  padding: 8px 10px;
+  outline: none;
+}
 .settingsCards {
   display: flex;
   flex-direction: column;
@@ -531,12 +546,28 @@ tbody tr:hover td { background: var(--bg-hover); }
 .settingsFormGrid input:focus,
 .settingsFormGrid select:focus,
 .settingsFormGrid textarea:focus { border-color: var(--accent); }
+.settingsReadOnlyInput {
+  color: var(--text-secondary) !important;
+  background: var(--bg-hover) !important;
+}
 .settingsWideField { grid-column: 1 / -1; }
 .settingsMetaLine {
   margin-top: 10px;
   color: var(--text-secondary);
   font-size: 12px;
 }
+.settingsMetaInline { margin-top: 4px; }
+.settingsMetaError { color: var(--red); }
+.runtimeMetaGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  margin-top: 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.settingsWideMeta { grid-column: 1 / -1; }
 .iconButton.danger { color: var(--red); }
 .configNestedList { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .configNestedItem { padding: 6px 0; border-bottom: 1px solid var(--border); }

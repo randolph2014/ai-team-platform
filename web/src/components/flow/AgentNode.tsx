@@ -4,7 +4,6 @@ import { Bot } from 'lucide-react';
 export interface AgentNodeData {
   name: string;
   runtime_id?: string;
-  model?: string;
   role?: string;
   status?: string;
 }
@@ -32,9 +31,6 @@ export function AgentNode({ data }: NodeProps) {
       <div className="flow-node-body">
         {nodeData.runtime_id && (
           <span className="flow-node-tag flow-node-tag-runtime">{nodeData.runtime_id}</span>
-        )}
-        {nodeData.model && (
-          <span className="flow-node-tag flow-node-tag-model">{nodeData.model}</span>
         )}
         {nodeData.role && (
           <span className="flow-node-tag flow-node-tag-role">{nodeData.role}</span>

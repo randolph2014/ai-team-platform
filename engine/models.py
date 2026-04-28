@@ -43,8 +43,6 @@ class AgentDefinition(BaseModel):
     role: Optional[str] = None
     prompt: Optional[str] = None
     timeout: Optional[int] = None
-    model: Optional[str] = None
-    fallback_models: List[str] = Field(default_factory=list)
 
 
 class AgentRun(BaseModel):

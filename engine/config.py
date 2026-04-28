@@ -12,6 +12,7 @@ except ImportError:  # pragma: no cover - dependency is declared for production.
     yaml = None
 
 from .models import AgentDefinition, LoadedConfig
+from .runtimes import sanitize_runtime_config
 
 
 PLATFORM_ROOT = Path(__file__).resolve().parent.parent
@@ -74,6 +75,27 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 class ConfigError(RuntimeError):
     pass
+
+
+def _path_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(root.resolve(strict=False))
+    except ValueError:
+        return False
+    return True
+
+
+def _reject_unsafe_prompt_path(prompt: Path) -> None:
+    if any(part == ".." for part in prompt.parts):
+        raise ConfigError(f"Prompt path cannot contain '..': {prompt}")
+
+
+def _safe_prompt_path(path: Path, allowed_roots: Iterable[Path], label: str) -> Path:
+    resolved = path.expanduser().resolve(strict=False)
+    if any(_path_within(resolved, root) for root in allowed_roots):
+        return resolved
+    roots = ", ".join(str(root) for root in allowed_roots)
+    raise ConfigError(f"{label} must be inside allowed roots ({roots}): {path}")
 
 
 def find_project_root(start: str) -> Path:
@@ -148,7 +170,7 @@ def normalize_config(config: Dict[str, Any], project_root: Optional[Path] = None
             if isinstance(runtime, str):
                 normalized_runtimes[str(runtime_id)] = {"cli": runtime}
             elif isinstance(runtime, dict):
-                normalized_runtimes[str(runtime_id)] = dict(runtime)
+                normalized_runtimes[str(runtime_id)] = sanitize_runtime_config(runtime)
             else:
                 raise ConfigError(f"Invalid runtime config for {runtime_id}")
     else:
@@ -167,6 +189,12 @@ def normalize_config(config: Dict[str, Any], project_root: Optional[Path] = None
         if not isinstance(item, dict):
             raise ConfigError("Agent config entries must be mappings")
         agent = dict(item)
+        forbidden_agent_fields = sorted({"model", "fallback_models"} & set(agent))
+        if forbidden_agent_fields:
+            raise ConfigError(
+                f"Agent {agent.get('name', '<unknown>')} cannot contain {', '.join(forbidden_agent_fields)}; "
+                "configure model and fallback_models on the referenced runtime"
+            )
         legacy_provider = agent.pop("provider", None)
         if "runtime_id" not in agent:
             agent["runtime_id"] = legacy_provider or default_runtime_id
@@ -200,12 +228,19 @@ def resolve_prompt_path(
 ) -> Path:
     warnings = warnings if warnings is not None else []
 
+    allowed_roots = (project_root, TEMPLATES_ROOT, SKILL_ROOT)
+    prompt = Path(agent.prompt) if agent.prompt else None
+    if prompt:
+        if prompt.is_absolute():
+            _safe_prompt_path(prompt, allowed_roots, "Prompt path")
+        else:
+            _reject_unsafe_prompt_path(prompt)
+
     project_override = project_root / ".ai" / "agents" / f"{agent.name}.md"
     if project_override.exists():
-        return project_override
+        return _safe_prompt_path(project_override, allowed_roots, "Prompt path")
 
-    if agent.prompt:
-        prompt = Path(agent.prompt)
+    if prompt:
         candidates = []
         if prompt.is_absolute():
             candidates.append(prompt)
@@ -216,21 +251,52 @@ def resolve_prompt_path(
             candidates.append(project_root / prompt)
             candidates.append(TEMPLATES_ROOT / prompt)
         for candidate in candidates:
-            if candidate.exists():
-                return candidate
+            safe_candidate = _safe_prompt_path(candidate, allowed_roots, "Prompt path")
+            if safe_candidate.exists():
+                return safe_candidate
 
     template = TEMPLATES_ROOT / "agents" / f"{agent.name}.md"
     if template.exists():
-        return template
+        return _safe_prompt_path(template, allowed_roots, "Prompt path")
 
     skill_prompt = SKILL_ROOT / "agents" / f"{agent.name}.md"
     if skill_prompt.exists():
         warnings.append(
             f"DEPRECATED: prompt {agent.name} 从旧 skill 目录回退读取。请迁移到 templates/agents/ 或项目 .ai/agents/。"
         )
-        return skill_prompt
+        return _safe_prompt_path(skill_prompt, allowed_roots, "Prompt path")
 
     raise ConfigError(f"Prompt not found for agent: {agent.name}")
+
+
+def resolve_prompt_write_path(
+    project_root: Path,
+    config_path: Optional[str],
+    agent: AgentDefinition,
+) -> Path:
+    prompt = Path(agent.prompt) if agent.prompt else None
+    absolute_prompt: Optional[Path] = None
+    if prompt:
+        if prompt.is_absolute():
+            absolute_prompt = _safe_prompt_path(prompt, (project_root,), "Prompt write path")
+        else:
+            _reject_unsafe_prompt_path(prompt)
+
+    project_override = project_root / ".ai" / "agents" / f"{agent.name}.md"
+    if project_override.exists():
+        return _safe_prompt_path(project_override, (project_root,), "Prompt write path")
+
+    if prompt:
+        if prompt.is_absolute():
+            if absolute_prompt and _path_within(absolute_prompt, TEMPLATES_ROOT):
+                return _safe_prompt_path(project_override, (project_root,), "Prompt write path")
+            return absolute_prompt or _safe_prompt_path(prompt, (project_root,), "Prompt write path")
+        if config_path:
+            config_parent = Path(config_path).expanduser().resolve(strict=False).parent
+            if _path_within(config_parent, project_root) and not _path_within(config_parent, TEMPLATES_ROOT):
+                return _safe_prompt_path(config_parent / prompt, (project_root,), "Prompt write path")
+        return _safe_prompt_path(project_root / ".ai" / prompt, (project_root,), "Prompt write path")
+    return _safe_prompt_path(project_override, (project_root,), "Prompt write path")
 
 
 def read_prompt(project_root: Path, config_path: Optional[str], agent: AgentDefinition, warnings: Optional[List[str]] = None) -> str:

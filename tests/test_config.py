@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from engine.config import (
     ConfigError,
+    DEFAULT_TEAM_FILE,
     LoadedConfig,
     _read_yaml,
     agent_map,
@@ -19,8 +20,10 @@ from engine.config import (
     normalize_config,
     read_prompt,
     resolve_prompt_path,
+    resolve_prompt_write_path,
     validate_production_config,
 )
+from engine.models import AgentDefinition
 
 
 class TestProjectPromptOverride(unittest.TestCase):
@@ -34,7 +37,7 @@ class TestProjectPromptOverride(unittest.TestCase):
             loaded = load_config(root)
             agents = agent_map(loaded.config)
             prompt_path = resolve_prompt_path(root, loaded.path, agents["tech-lead"])
-            self.assertEqual(prompt_path, root / ".ai" / "agents" / "tech-lead.md")
+            self.assertEqual(prompt_path, (root / ".ai" / "agents" / "tech-lead.md").resolve(strict=False))
 
     def test_read_prompt_returns_content(self) -> None:
         """read_prompt 返回文件内容"""
@@ -47,6 +50,30 @@ class TestProjectPromptOverride(unittest.TestCase):
             agents = agent_map(loaded.config)
             content = read_prompt(root, loaded.path, agents["tech-lead"])
             self.assertEqual(content, "Hello from project")
+
+    def test_template_prompt_writes_to_project_override(self) -> None:
+        """平台模板 prompt 只作为读取来源，保存时写入项目级覆盖文件"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            loaded = load_config(root)
+            agents = agent_map(loaded.config)
+
+            write_path = resolve_prompt_write_path(root, loaded.path or str(DEFAULT_TEAM_FILE), agents["tech-lead"])
+
+            self.assertEqual(write_path, (root / ".ai" / "agents" / "tech-lead.md").resolve(strict=False))
+
+    def test_prompt_write_path_rejects_project_escape(self) -> None:
+        """prompt 写路径不能通过绝对路径或 .. 逃逸项目目录"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            agent = AgentDefinition(name="dev", runtime_id="mock", prompt="../outside.md")
+            with self.assertRaises(ConfigError):
+                resolve_prompt_write_path(root, str(root / ".ai" / "team.yaml"), agent)
+
+            agent = AgentDefinition(name="dev", runtime_id="mock", prompt="/tmp/outside.md")
+            with self.assertRaises(ConfigError):
+                resolve_prompt_write_path(root, str(root / ".ai" / "team.yaml"), agent)
 
 
 class TestNormalizeConfig(unittest.TestCase):
@@ -83,6 +110,25 @@ class TestNormalizeConfig(unittest.TestCase):
                 {
                     "runtimes": {"codex": {"cli": "codex"}},
                     "agents": [{"name": "dev", "runtime_id": "missing"}],
+                    "pipeline": [],
+                }
+            )
+
+    def test_agent_model_fields_are_not_allowed(self) -> None:
+        """model/fallback_models 属于 runtime 配置，agent 配置中不允许再出现"""
+        with self.assertRaises(ConfigError):
+            normalize_config(
+                {
+                    "runtimes": {"mock": {"cli": "mock"}},
+                    "agents": [{"name": "dev", "runtime_id": "mock", "model": "agent-model"}],
+                    "pipeline": [],
+                }
+            )
+        with self.assertRaises(ConfigError):
+            normalize_config(
+                {
+                    "runtimes": {"mock": {"cli": "mock"}},
+                    "agents": [{"name": "dev", "runtime_id": "mock", "fallback_models": ["fallback"]}],
                     "pipeline": [],
                 }
             )

@@ -143,7 +143,7 @@ runner:
 ## 迭代 3：Runtime 多模型 + Fallback — ✅ 已完成
 
 ### 背景
-当前所有 agent 默认 `runtime_id: auto`，由 runtime 配置中的 CLI 按 claude→codex→opencode 顺序选择第一个可用工具。agent 可配置模型级参数（如 claude-opus vs claude-sonnet）和 fallback 模型，避免一种模型失败后整个流水线直接失败。
+当前所有 agent 默认 `runtime_id: auto`，由 runtime 配置中的 CLI 按 claude→codex→opencode 顺序选择第一个可用工具。模型级参数（如 claude-opus vs claude-sonnet）和 fallback 模型属于 runtime 配置，agent 只通过 `runtime_id` 引用 runtime，避免一种模型失败后整个流水线直接失败。
 
 ### CLI 参数验证（已确认）
 
@@ -157,19 +157,22 @@ runner:
 
 ### 实际实现
 
-1. `engine/models.py` AgentDefinition（第 46-47 行）：
-   - `model: Optional[str] = None`
-   - `fallback_models: List[str] = Field(default_factory=list)`
-2. `engine/models.py` AgentRun（第 54 行）：
+1. `engine/models.py` AgentDefinition：
+   - 只保留 `runtime_id`、`role`、`prompt`、`timeout` 等 agent 自身字段
+   - 禁止再配置 `model` / `fallback_models`
+2. runtime 配置：
+   - `model` 为主模型
+   - `fallback_models` 为同一 CLI/runtime 下的模型回退序列
+3. `engine/models.py` AgentRun：
    - `model_used: Optional[str] = None`
-3. `engine/runtimes.py` `build_runtime_command(runtime, prompt, model=None)`：
+4. `engine/runtimes.py` `build_runtime_command(runtime, prompt, model=None)`：
    - codex: `["-m", model]`，其他 CLI: `["--model", model]`
-4. `engine/agent_runner.py` `AgentRunner.run`（第 85-143 行）：
-   - 先用 `agent.model` 或 `runtime.default_model` 执行
-   - 失败时按 `agent.fallback_models` 顺序重试
+5. `engine/agent_runner.py` `AgentRunner.run`：
+   - 先用 `runtime.model` 执行
+   - 失败时按 `runtime.fallback_models` 顺序重试
    - 记录 `agent_run.model_used`
    - 发送 `agent:fallback` 事件
-5. `templates/team.yaml` 示例已更新
+6. `templates/team.yaml` 示例已更新
 
 ### 测试方案
 - `tests/test_provider_models.py`：指定 model 时 build_runtime_command 输出含 `--model claude-opus-4-7`；mock 主模型失败→fallback 到下一个→记录 model_used；所有 fallback 都失败→返回最后错误
@@ -621,7 +624,7 @@ CREATE TABLE eval_result (
 
 - 编排核心：`engine/orchestrator.py`（loopback 反馈 `_render_loopback_feedback:356-389`、CI/CD hook）
 - Agent 执行：`engine/agent_runner.py`（model 参数 `build_command:41-59`、fallback `AgentRunner.run:85-143`）
-- 数据模型：`engine/models.py`（AgentDefinition/AgentRun 含 model/fallback_models/model_used）
+- 数据模型：`engine/models.py`（AgentDefinition 只引用 runtime；AgentRun 含 model_used/model_requested）
 - 配置：`engine/config.py`（normalize_config:123-142、validate_production_config:207-214）
 - Quality Gates：`engine/quality_gates.py`（render_gate_feedback:134-151 反馈格式参考）
 - 任务队列：`engine/task_queue.py`（enqueue_run:44-69 含 job_timeout="24h"）

@@ -1,4 +1,14 @@
-import type { AppConfig, Pipeline, PipelineTemplate, RunListItem, RunReport, SettingsResponse, Webhook } from './types';
+import type {
+  AgentPromptResponse,
+  AppConfig,
+  Pipeline,
+  PipelineTemplate,
+  RunListItem,
+  RunReport,
+  RuntimeCatalogResponse,
+  SettingsResponse,
+  Webhook,
+} from './types';
 
 const API_BASE = '/api';
 const TOKEN_KEY = 'ai-team.token';
@@ -165,6 +175,31 @@ export async function resetSettings(workdir?: string): Promise<SettingsResponse>
     headers: { 'Content-Type': 'application/json' },
   });
   if (!response.ok) throw new Error(`重置设置失败: ${response.status}`);
+  return response.json();
+}
+
+export async function fetchRuntimeCatalog(workdir?: string): Promise<RuntimeCatalogResponse> {
+  const wd = workdir || rememberedWorkdir();
+  const response = await apiFetch(`/config/runtimes${runQuery(wd)}`);
+  if (!response.ok) throw new Error(`获取 Runtime 列表失败: ${response.status}`);
+  return response.json();
+}
+
+export async function fetchAgentPrompt(agentName: string, workdir?: string): Promise<AgentPromptResponse> {
+  const wd = workdir || rememberedWorkdir();
+  const response = await apiFetch(`/settings/agents/${encodeURIComponent(agentName)}/prompt${runQuery(wd)}`);
+  if (!response.ok) throw new Error(`读取 Prompt 失败: ${response.status}`);
+  return response.json();
+}
+
+export async function updateAgentPrompt(agentName: string, content: string, workdir?: string): Promise<AgentPromptResponse> {
+  const wd = workdir || rememberedWorkdir();
+  const response = await apiFetch(`/settings/agents/${encodeURIComponent(agentName)}/prompt${runQuery(wd)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  if (!response.ok) throw new Error(`保存 Prompt 失败: ${response.status}`);
   return response.json();
 }
 
