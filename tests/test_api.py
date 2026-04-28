@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import tempfile
 import time
+import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 def _wait_for_report(output_dir: Path, timeout: float = 5.0) -> dict | None:
@@ -80,6 +81,31 @@ worktree:
             existing = runtime.expected_output_dir("duplicate", str(root))
             existing.mkdir(parents=True)
             self.assertTrue(existing.exists())
+
+    def test_background_failure_report_has_required_fields(self) -> None:
+        from api import runtime
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / ".ai" / "team-output" / "failed-run"
+            save_report = MagicMock()
+            persistence_mod = types.SimpleNamespace(save_report_sync=save_report)
+            with patch.dict("sys.modules", {"persistence": persistence_mod}):
+                runtime._persist_background_failure(
+                    run_id="failed-run",
+                    requirement="req",
+                    project_root=root,
+                    output_dir=output_dir,
+                    error_message="boom",
+                    config_path="/tmp/custom.yaml",
+                )
+
+            report = save_report.call_args.args[0]
+            self.assertEqual(report.status, "failed")
+            self.assertEqual(report.requirement, "req")
+            self.assertEqual(report.project_root, str(root))
+            self.assertEqual(report.output_dir, str(output_dir))
+            self.assertEqual(report.config_path, "/tmp/custom.yaml")
 
 
 if __name__ == "__main__":

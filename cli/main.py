@@ -31,6 +31,27 @@ def _project_root(args: argparse.Namespace) -> Path:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    # Production 模式下禁止跳过关键 stage
+    CRITICAL_STAGES = {"qa", "review", "accept"}
+    if args.production and args.skip_stages:
+        skipped_critical = CRITICAL_STAGES.intersection(args.skip_stages)
+        if skipped_critical:
+            print(f"错误: production 模式下禁止跳过关键 stage: {', '.join(skipped_critical)}", file=sys.stderr)
+            print("关键 stage 包括: qa, review, accept", file=sys.stderr)
+            return 1
+
+    # 警告: 非 production 模式下跳过关键 stage
+    if args.skip_stages and not args.production:
+        skipped_critical = CRITICAL_STAGES.intersection(args.skip_stages)
+        if skipped_critical:
+            print(f"警告: 跳过关键 stage: {', '.join(skipped_critical)}", file=sys.stderr)
+            print("这可能导致低质量代码被合并。建议添加 --production 标志启用严格检查。", file=sys.stderr)
+            if not args.yes:
+                response = input("是否继续? [y/N] ").strip().lower()
+                if response not in {"y", "yes"}:
+                    print("已取消", file=sys.stderr)
+                    return 0
+
     project_root = _project_root(args)
     requirement = _read_requirement(args)
     orchestrator = Orchestrator(project_root, config_path=args.config)
@@ -42,6 +63,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         yes=args.yes,
         production=args.production,
         merge=args.merge,
+        execution_mode=args.execution_mode,
     )
     if args.json:
         print(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
@@ -71,6 +93,39 @@ def cmd_status(args: argparse.Namespace) -> int:
     for item in payload:
         print(f"{item['run_id']}  {item['status']}  {item.get('duration_seconds') or '-'}s  {item['output_dir']}")
     return 0
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    project_root = _project_root(args)
+    output_dir = project_root / ".ai" / "team-output" / args.run_id
+    requirement_file = output_dir / "requirement.md"
+    if not output_dir.exists():
+        print(f"run not found: {args.run_id}", file=sys.stderr)
+        return 1
+    if not (output_dir / "checkpoint.json").exists():
+        print(f"checkpoint not found for run: {args.run_id}", file=sys.stderr)
+        return 1
+    if not requirement_file.exists():
+        print(f"requirement.md not found for run: {args.run_id}", file=sys.stderr)
+        return 1
+
+    orchestrator = Orchestrator(project_root, config_path=args.config)
+    report = orchestrator.run(
+        requirement_file.read_text(encoding="utf-8"),
+        run_id=args.run_id,
+        yes=args.yes,
+        resume=True,
+        execution_mode=args.execution_mode,
+    )
+    if args.json:
+        print(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
+    else:
+        print(f"run_id: {report.run_id}")
+        print(f"status: {report.status}")
+        print(f"output_dir: {report.output_dir}")
+        if report.error_message:
+            print(f"error: {report.error_message}", file=sys.stderr)
+    return 0 if report.status in {"completed", "waiting"} else 1
 
 
 def cmd_cleanup(args: argparse.Namespace) -> int:
@@ -149,6 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--yes", action="store_true", help="auto-accept human review")
     run.add_argument("--production", action="store_true", help="enable production checks declared by config")
     run.add_argument("--merge", action="store_true", help="merge successful worktree back to base branch")
+    run.add_argument("--execution-mode", choices=["serial", "parallel", "auto"], help="override pipeline execution mode")
     run.add_argument("--json", action="store_true", help="print JSON report")
     run.set_defaults(func=cmd_run)
 
@@ -158,6 +214,15 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--latest", action="store_true", help="show latest run only")
     status.add_argument("--json", action="store_true")
     status.set_defaults(func=cmd_status)
+
+    resume = sub.add_parser("resume", help="resume a checkpointed pipeline run")
+    resume.add_argument("run_id", help="run id to resume")
+    resume.add_argument("--project", "--workdir", dest="project", help="project root")
+    resume.add_argument("--config", help="explicit team.yaml path")
+    resume.add_argument("--yes", action="store_true", help="auto-accept human review")
+    resume.add_argument("--execution-mode", choices=["serial", "parallel", "auto"], help="override pipeline execution mode")
+    resume.add_argument("--json", action="store_true", help="print JSON report")
+    resume.set_defaults(func=cmd_resume)
 
     cleanup = sub.add_parser("cleanup", help="cleanup orphan worktrees")
     cleanup.add_argument("--project", "--workdir", dest="project", help="project root")

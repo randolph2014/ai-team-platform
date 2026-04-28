@@ -162,10 +162,35 @@ class TestNormalizeConfig(unittest.TestCase):
         self.assertIn("auto", result["runtimes"])
 
     def test_runners_default_empty(self) -> None:
-        """normalize_config 默认 runner={}"""
+        """normalize_config 会补齐 runner 默认值"""
         config = {"providers": {}}
         result = normalize_config(config)
-        self.assertEqual(result["runner"], {})
+        self.assertIn("context_threshold_chars", result["runner"])
+
+    def test_pipeline_mapping_normalized_to_stages_and_settings(self) -> None:
+        """pipeline 支持 execution_mode + stages 写法，运行期仍拿到 stage list"""
+        config = {
+            "runtimes": {"mock": {"cli": "mock"}},
+            "agents": [],
+            "pipeline": {
+                "execution_mode": "serial",
+                "stages": [{"id": "develop", "agents": []}],
+            },
+        }
+        result = normalize_config(config)
+        self.assertEqual(result["pipeline_settings"]["execution_mode"], "serial")
+        self.assertEqual(result["pipeline"], [{"id": "develop", "agents": []}])
+
+    def test_pipeline_execution_mode_rejects_invalid_value(self) -> None:
+        """execution_mode 只允许 serial/parallel/auto，避免运行期才发现配置错"""
+        with self.assertRaises(ConfigError):
+            normalize_config({"pipeline": {"execution_mode": "fast", "stages": []}})
+
+    def test_runner_split_defaults_are_normalized(self) -> None:
+        """需求拆分相关 runner 默认值在 normalize_config 阶段补齐"""
+        result = normalize_config({"providers": {}})
+        self.assertEqual(result["runner"]["context_threshold_chars"], 100000)
+        self.assertTrue(result["runner"]["auto_split_requirements"])
 
 
 class TestRuntimeConfig(unittest.TestCase):
@@ -183,6 +208,25 @@ class TestRuntimeConfig(unittest.TestCase):
 
         with self.assertRaises(ConfigError):
             runtime_config({"runtimes": {}}, "Nonexistent")
+
+
+class TestCliParser(unittest.TestCase):
+    def test_run_accepts_execution_mode_override(self) -> None:
+        """CLI run 支持 --execution-mode 覆盖配置"""
+        from cli.main import build_parser
+
+        args = build_parser().parse_args(["run", "需求", "--execution-mode", "serial"])
+
+        self.assertEqual(args.execution_mode, "serial")
+
+    def test_resume_command_accepts_run_id(self) -> None:
+        """CLI 提供 ai-team resume <run-id> 入口"""
+        from cli.main import build_parser
+
+        args = build_parser().parse_args(["resume", "run-123", "--execution-mode", "auto"])
+
+        self.assertEqual(args.run_id, "run-123")
+        self.assertEqual(args.execution_mode, "auto")
 
 
 class TestLoadConfig(unittest.TestCase):

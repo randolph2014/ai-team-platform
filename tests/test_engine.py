@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from engine.config import load_config, resolve_prompt_path, agent_map
 from engine.context_scanner import ContextScanner, is_sensitive_path
@@ -711,3 +712,417 @@ quality_gates: []
             review_stages = [s for s in report.stages if s.stage_id == "review"]
             self.assertEqual(len(review_stages), 1)
             self.assertEqual(review_stages[0].status, "skipped")
+
+    def test_plan_confirm_skips_when_gap_analysis_has_no_blockers(self) -> None:
+        """plan_confirm 在无 blocker 时自动 skipped，并继续后续 stage"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+runtimes:
+  Mock:
+    cli: mock
+    response: "No blocker. 需求清晰，可以继续。"
+agents:
+  - name: brainstormer
+    runtime_id: Mock
+    role: brainstormer
+    prompt: agents/brainstormer.md
+  - name: devils-advocate
+    runtime_id: Mock
+    role: reviewer
+    prompt: agents/devils-advocate.md
+  - name: dev
+    runtime_id: Mock
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: plan
+    name: Plan
+    agents: [brainstormer, devils-advocate]
+    input: requirement
+    output:
+      brainstormer: brainstorm.md
+      devils-advocate: gap-analysis.md
+  - id: plan_confirm
+    name: Plan Confirm
+    type: human_review
+    input: [requirement, brainstorm.md, gap-analysis.md]
+    skip_if_no_blocker: true
+    blocker_source: gap-analysis.md
+    output_file: requirement-decisions.md
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: [requirement, requirement-decisions.md]
+    output:
+      dev: tech-lead-output.md
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            for name in ["brainstormer", "devils-advocate", "dev"]:
+                (root / ".ai" / "agents" / f"{name}.md").write_text(f"You are {name}.", encoding="utf-8")
+
+            report = Orchestrator(root).run("add hello", yes=False)
+
+            self.assertEqual(report.status, "completed")
+            stages = {stage.stage_id: stage for stage in report.stages}
+            self.assertEqual(stages["plan_confirm"].status, "skipped")
+            decisions = Path(report.output_dir) / "requirement-decisions.md"
+            self.assertTrue(decisions.exists())
+            self.assertIn("无 blocker", decisions.read_text(encoding="utf-8"))
+
+    def test_plan_confirm_waits_when_gap_analysis_has_blockers_and_keeps_checkpoint(self) -> None:
+        """plan_confirm 检测到 blocker 时进入 waiting，并保留 checkpoint 供恢复"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+runtimes:
+  Mock:
+    cli: mock
+    response: "Blocker: 需要确认 OAuth2 还是 JWT"
+agents:
+  - name: devils-advocate
+    runtime_id: Mock
+    role: reviewer
+    prompt: agents/devils-advocate.md
+pipeline:
+  - id: plan
+    name: Plan
+    agents: [devils-advocate]
+    input: requirement
+    output:
+      devils-advocate: gap-analysis.md
+  - id: plan_confirm
+    name: Plan Confirm
+    type: human_review
+    input: [requirement, gap-analysis.md]
+    skip_if_no_blocker: true
+    blocker_source: gap-analysis.md
+    output_file: requirement-decisions.md
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "devils-advocate.md").write_text("You are reviewer.", encoding="utf-8")
+
+            with patch("sys.stdin.isatty", return_value=False):
+                report = Orchestrator(root).run("auth", yes=False)
+
+            self.assertEqual(report.status, "waiting")
+            stages = {stage.stage_id: stage for stage in report.stages}
+            self.assertEqual(stages["plan_confirm"].status, "waiting")
+            output_dir = Path(report.output_dir)
+            self.assertTrue((output_dir / "checkpoint.json").exists())
+            decisions = (output_dir / "requirement-decisions.md").read_text(encoding="utf-8")
+            self.assertIn("waiting", decisions)
+            self.assertIn("Blocker", decisions)
+
+    def test_resume_accepts_waiting_plan_confirm_and_continues(self) -> None:
+        """waiting 的 plan_confirm 可通过 resume + yes 从原 checkpoint 继续"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+runtimes:
+  Reviewer:
+    cli: mock
+    response: "Blocker: 需要确认 OAuth2 还是 JWT"
+  Dev:
+    cli: mock
+    response: "done"
+agents:
+  - name: devils-advocate
+    runtime_id: Reviewer
+    role: reviewer
+    prompt: agents/devils-advocate.md
+  - name: dev
+    runtime_id: Dev
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: plan
+    name: Plan
+    agents: [devils-advocate]
+    input: requirement
+    output:
+      devils-advocate: gap-analysis.md
+  - id: plan_confirm
+    name: Plan Confirm
+    type: human_review
+    input: [requirement, gap-analysis.md]
+    skip_if_no_blocker: true
+    blocker_source: gap-analysis.md
+    output_file: requirement-decisions.md
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: [requirement, requirement-decisions.md]
+    output:
+      dev: tech-lead-output.md
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "devils-advocate.md").write_text("You are reviewer.", encoding="utf-8")
+            (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
+
+            with patch("sys.stdin.isatty", return_value=False):
+                waiting = Orchestrator(root).run("auth", run_id="resume-plan-confirm", yes=False)
+            self.assertEqual(waiting.status, "waiting")
+            self.assertTrue((Path(waiting.output_dir) / "checkpoint.json").exists())
+
+            resumed = Orchestrator(root).run("auth", run_id="resume-plan-confirm", yes=True, resume=True)
+
+            self.assertEqual(resumed.status, "completed")
+            self.assertFalse((Path(resumed.output_dir) / "checkpoint.json").exists())
+            self.assertTrue((Path(resumed.output_dir) / "tech-lead-output.md").exists())
+
+    def test_execution_mode_serial_overrides_parallel_stage(self) -> None:
+        """全局 serial 模式下，即使 stage.parallel=true 也串行执行"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                """
+runtimes:
+  Mock:
+    cli: mock
+    response: "done"
+agents:
+  - name: qa
+    runtime_id: Mock
+    role: tester
+    prompt: agents/qa.md
+  - name: reviewer
+    runtime_id: Mock
+    role: reviewer
+    prompt: agents/reviewer.md
+pipeline:
+  execution_mode: serial
+  stages:
+    - id: verify
+      name: Verify
+      parallel: true
+      agents: [qa, reviewer]
+      input: requirement
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "qa.md").write_text("You are qa.", encoding="utf-8")
+            (root / ".ai" / "agents" / "reviewer.md").write_text("You are reviewer.", encoding="utf-8")
+
+            report = Orchestrator(root).run("ship it", yes=True)
+
+            self.assertEqual(report.status, "completed")
+            self.assertFalse(report.stages[0].is_parallel)
+            self.assertEqual([agent.agent_name for agent in report.stages[0].agents], ["qa", "reviewer"])
+
+    def test_orchestrator_auto_splits_large_requirement_into_units(self) -> None:
+        """超过阈值的需求先拆成 units，再逐单元执行 pipeline 并写入 report"""
+        splitter_response = json.dumps(
+            {
+                "units": [
+                    {
+                        "id": "unit-1",
+                        "title": "认证",
+                        "description": "实现登录",
+                        "priority": 1,
+                        "depends_on": [],
+                        "requirement_text": "实现登录",
+                    },
+                    {
+                        "id": "unit-2",
+                        "title": "个人中心",
+                        "description": "实现资料页",
+                        "priority": 2,
+                        "depends_on": ["unit-1"],
+                        "requirement_text": "实现资料页",
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                f"""
+runtimes:
+  Splitter:
+    cli: mock
+    response: '{splitter_response}'
+  Mock:
+    cli: mock
+    response: "done"
+agents:
+  - name: solution-architect
+    runtime_id: Splitter
+    role: architect
+    prompt: agents/solution-architect.md
+  - name: dev
+    runtime_id: Mock
+    role: developer
+    prompt: agents/dev.md
+  - name: qa
+    runtime_id: Mock
+    role: tester
+    prompt: agents/qa.md
+  - name: reviewer
+    runtime_id: Mock
+    role: reviewer
+    prompt: agents/reviewer.md
+pipeline:
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: requirement
+    output:
+      dev: tech-lead-output.md
+  - id: qa
+    name: QA
+    agents: [qa]
+    input: [requirement, tech-lead-output.md]
+    output:
+      qa: test-report.md
+  - id: review
+    name: Review
+    agents: [reviewer]
+    input: [requirement, tech-lead-output.md, test-report.md]
+    output:
+      reviewer: review-report.md
+runner:
+  auto_split_requirements: true
+  context_threshold_chars: 10
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            for name in ["solution-architect", "dev", "qa", "reviewer"]:
+                (root / ".ai" / "agents" / f"{name}.md").write_text(f"You are {name}.", encoding="utf-8")
+
+            report = Orchestrator(root).run("x" * 30, yes=True)
+
+            self.assertEqual(report.status, "completed")
+            self.assertEqual(report.mode, "multi-unit")
+            self.assertEqual([unit.unit_id for unit in report.units], ["unit-1", "unit-2"])
+            self.assertTrue(all(unit.status == "completed" for unit in report.units))
+            self.assertTrue((Path(report.output_dir) / "requirement-units.json").exists())
+            self.assertTrue((Path(report.output_dir) / "requirement-units" / "unit-1" / "test-report.md").exists())
+
+    def test_orchestrator_runs_requirement_units_by_dependency_before_priority(self) -> None:
+        """multi-unit 执行按 depends_on 拓扑排序，priority 只作为同层排序"""
+        splitter_response = json.dumps(
+            {
+                "units": [
+                    {
+                        "id": "api",
+                        "title": "API",
+                        "description": "实现 API",
+                        "priority": 1,
+                        "depends_on": ["db"],
+                        "requirement_text": "实现 API",
+                    },
+                    {
+                        "id": "db",
+                        "title": "DB",
+                        "description": "实现数据库",
+                        "priority": 2,
+                        "depends_on": [],
+                        "requirement_text": "实现数据库",
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text(
+                f"""
+runtimes:
+  Splitter:
+    cli: mock
+    response: '{splitter_response}'
+  Mock:
+    cli: mock
+    response: "done"
+agents:
+  - name: solution-architect
+    runtime_id: Splitter
+    role: architect
+    prompt: agents/solution-architect.md
+  - name: dev
+    runtime_id: Mock
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: requirement
+    output:
+      dev: tech-lead-output.md
+runner:
+  auto_split_requirements: true
+  context_threshold_chars: 10
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            for name in ["solution-architect", "dev"]:
+                (root / ".ai" / "agents" / f"{name}.md").write_text(f"You are {name}.", encoding="utf-8")
+
+            report = Orchestrator(root).run("x" * 30, yes=True)
+
+            self.assertEqual(report.status, "completed")
+            self.assertEqual([unit.unit_id for unit in report.units], ["db", "api"])
+            self.assertTrue((Path(report.output_dir) / "requirement-units" / "db" / "tech-lead-output.md").exists())
+            self.assertTrue((Path(report.output_dir) / "requirement-units" / "api" / "tech-lead-output.md").exists())
+
+    def test_save_checkpoint_writes_unit_progress(self) -> None:
+        """checkpoint 支持 mode 与单元级进度，供 D3 resume 精确定位"""
+        from engine.models import RequirementUnitProgress
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / ".ai" / "team.yaml").write_text("runtimes: {}\nagents: []\npipeline: []\n", encoding="utf-8")
+            output_dir = root / ".ai" / "team-output" / "run-1"
+            output_dir.mkdir(parents=True)
+            orchestrator = Orchestrator(root)
+
+            orchestrator._save_checkpoint(
+                output_dir,
+                "run-1",
+                ["develop"],
+                None,
+                mode="multi-unit",
+                units=[
+                    RequirementUnitProgress(unit_id="unit-1", status="completed", completed_stages=["develop"]),
+                    RequirementUnitProgress(unit_id="unit-2", status="in_progress", completed_stages=[], current_stage="qa"),
+                ],
+            )
+
+            data = json.loads((output_dir / "checkpoint.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["mode"], "multi-unit")
+            self.assertEqual(data["units"][1]["unit_id"], "unit-2")
+            self.assertEqual(data["units"][1]["current_stage"], "qa")

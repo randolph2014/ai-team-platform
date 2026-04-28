@@ -78,6 +78,22 @@ class QualityGateRun(BaseModel):
     duration_seconds: Optional[float] = None
 
 
+class RequirementUnit(BaseModel):
+    id: str
+    title: str
+    description: str
+    priority: int = 0
+    depends_on: List[str] = Field(default_factory=list)
+    requirement_text: str
+
+
+class RequirementUnitProgress(BaseModel):
+    unit_id: str
+    status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
+    completed_stages: List[str] = Field(default_factory=list)
+    current_stage: Optional[str] = None
+
+
 class StageRun(BaseModel):
     stage_id: str
     stage_name: str
@@ -97,6 +113,7 @@ class StageRun(BaseModel):
 class RunReport(BaseModel):
     run_id: str
     status: RunStatus = "pending"
+    mode: Literal["single", "multi-unit"] = "single"
     requirement: str
     project_root: str
     output_dir: str
@@ -108,6 +125,7 @@ class RunReport(BaseModel):
     worktree_path: Optional[str] = None
     merge_result: Optional[Dict[str, Any]] = None
     stages: List[StageRun] = Field(default_factory=list)
+    units: List[RequirementUnitProgress] = Field(default_factory=list)
     artifacts: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     error_message: Optional[str] = None

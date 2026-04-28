@@ -41,73 +41,87 @@ worktree:
   auto_cleanup: true
   merge_on_conflict: pause
 
+runner:
+  auto_split_requirements: true
+  context_threshold_chars: 100000
+
 pipeline:
-  - id: plan
-    name: "方案讨论"
-    parallel: true
-    agents: [brainstormer, devils-advocate]
-    input: requirement
-    output:
-      brainstormer: brainstorm.md
-      devils-advocate: gap-analysis.md
+  execution_mode: parallel
+  stages:
+    - id: plan
+      name: "方案讨论"
+      parallel: true
+      agents: [brainstormer, devils-advocate]
+      input: requirement
+      output:
+        brainstormer: brainstorm.md
+        devils-advocate: gap-analysis.md
 
-  - id: architect
-    name: "方案定稿"
-    parallel: false
-    agents: [solution-architect]
-    input: [requirement, brainstorm.md, gap-analysis.md]
-    output:
-      solution-architect: solution-draft.md
+    - id: plan_confirm
+      name: "方案确认"
+      type: human_review
+      input: [requirement, brainstorm.md, gap-analysis.md]
+      skip_if_no_blocker: true
+      blocker_source: gap-analysis.md
+      output_file: requirement-decisions.md
 
-  - id: context
-    name: "代码库扫描"
-    type: context_scan
-    input: [solution-draft.md]
-    output_file: codebase-context.md
+    - id: architect
+      name: "方案定稿"
+      parallel: false
+      agents: [solution-architect]
+      input: [requirement, brainstorm.md, gap-analysis.md, requirement-decisions.md]
+      output:
+        solution-architect: solution-draft.md
 
-  - id: develop
-    name: "开发"
-    parallel: false
-    agents: [tech-lead]
-    input: [requirement, solution-draft.md, codebase-context.md]
-    output:
-      tech-lead: tech-lead-output.md
-    loopback_to: develop
-    loopback_trigger: "error:"
-    max_retries: 3
+    - id: context
+      name: "代码库扫描"
+      type: context_scan
+      input: [solution-draft.md]
+      output_file: codebase-context.md
 
-  - id: code_apply
-    name: "代码应用"
-    type: code_apply
-    input: [tech-lead-output.md]
+    - id: develop
+      name: "开发"
+      parallel: false
+      agents: [tech-lead]
+      input: [requirement, solution-draft.md, codebase-context.md]
+      output:
+        tech-lead: tech-lead-output.md
+      loopback_to: develop
+      loopback_trigger: "error:"
+      max_retries: 3
 
-  - id: qa
-    name: "测试"
-    parallel: false
-    stop_parallel_on_first_error: false
-    agents: [qa-automation]
-    input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, "git-diff"]
-    output:
-      qa-automation: test-report.md
-    loopback_to: develop
-    loopback_trigger: ["FAILED", "ERROR", "失败", "exit code: 1", "退出码: 1"]
-    max_retries: 2
+    - id: code_apply
+      name: "代码应用"
+      type: code_apply
+      input: [tech-lead-output.md]
 
-  - id: review
-    name: "代码审查"
-    parallel: false
-    agents: [code-reviewer]
-    input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, "git-diff"]
-    output:
-      code-reviewer: review-report.md
-    loopback_to: develop
-    loopback_trigger: "Request Changes"
-    max_retries: 2
+    - id: qa
+      name: "测试"
+      parallel: false
+      stop_parallel_on_first_error: false
+      agents: [qa-automation]
+      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, "git-diff"]
+      output:
+        qa-automation: test-report.md
+      loopback_to: develop
+      loopback_trigger: ["FAILED", "ERROR", "失败", "exit code: 1", "退出码: 1"]
+      max_retries: 2
 
-  - id: accept
-    name: "人工验收"
-    type: human_review
-    input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, review-report.md, "git-diff"]
+    - id: review
+      name: "代码审查"
+      parallel: false
+      agents: [code-reviewer]
+      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, "git-diff"]
+      output:
+        code-reviewer: review-report.md
+      loopback_to: develop
+      loopback_trigger: "Request Changes"
+      max_retries: 2
+
+    - id: accept
+      name: "人工验收"
+      type: human_review
+      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, review-report.md, "git-diff"]
 
 # Quality Gates — develop 阶段完成后自动运行。
 # 项目级 .ai/team.yaml 可覆盖此配置。

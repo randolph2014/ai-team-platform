@@ -36,6 +36,7 @@ class CreateRunRequest(BaseModel):
     yes: bool = False
     config_path: Optional[str] = None
     only_stage: Optional[str] = None
+    execution_mode: Optional[str] = None
 
 
 async def _db_list_runs(workdir: str, page: int, size: int) -> Optional[List[Dict[str, Any]]]:
@@ -138,6 +139,7 @@ if router:
             yes=body.yes,
             config_path=body.config_path,
             only_stage=body.only_stage,
+            execution_mode=body.execution_mode,
         )
         return {
             "run_id": run_id,
@@ -186,3 +188,50 @@ if router:
             if path.parent.name == run_id:
                 return load_report(path).model_dump(mode="json")
         raise HTTPException(status_code=404, detail="run not found")
+
+    @router.post("/runs/{run_id}/resume")
+    async def resume_run(
+        run_id: str,
+        workdir: str = Query(default="."),
+        yes: bool = Query(default=False),
+        config_path: Optional[str] = Query(default=None),
+        execution_mode: Optional[str] = Query(default=None),
+        user: Dict[str, Any] = _get_auth(),
+    ):
+        """恢复中断的 pipeline run"""
+        from ..runtime import resume_run_background
+
+        # 检查 run 是否存在
+        project_root = project_for_run(run_id, workdir)
+        output_dir = project_root / ".ai" / "team-output" / run_id
+        if not output_dir.exists():
+            raise HTTPException(status_code=404, detail="run not found")
+
+        # 检查是否有 checkpoint
+        checkpoint_file = output_dir / "checkpoint.json"
+        if not checkpoint_file.exists():
+            raise HTTPException(status_code=400, detail="no checkpoint found, cannot resume")
+
+        # 检查当前状态
+        report_file = output_dir / "report.json"
+        if report_file.exists():
+            report = load_report(report_file)
+            if report.status not in {"failed", "running", "waiting"}:
+                raise HTTPException(status_code=400, detail=f"run status is {report.status}, cannot resume")
+            config_path = config_path or report.config_path
+
+        try:
+            output_dir = resume_run_background(
+                run_id=run_id,
+                workdir=workdir,
+                yes=yes,
+                config_path=config_path,
+                execution_mode=execution_mode,
+            )
+            return {
+                "run_id": run_id,
+                "status": "resuming",
+                "output_dir": str(output_dir),
+            }
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import types
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -31,6 +32,7 @@ class TestTaskQueue(unittest.TestCase):
         self.assertIn("yes", params)
         self.assertIn("config_path", params)
         self.assertIn("only_stage", params)
+        self.assertIn("execution_mode", params)
 
     def test_redis_unavailable_enqueue_returns_none(self):
         """When Redis is unavailable, enqueue_run returns None without raising."""
@@ -81,6 +83,32 @@ class TestTaskQueue(unittest.TestCase):
             result = task_queue.enqueue_run("requirement", "/tmp", "run-1", yes=True)
             self.assertEqual(result, "test-job-123")
             mock_queue.enqueue.assert_called_once()
+            self.assertEqual(mock_queue.enqueue.call_args.kwargs["execution_mode"], None)
+
+    def test_failure_callback_persists_valid_failed_report(self):
+        """RQ failure callback 构造完整 RunReport，避免状态落库因字段缺失失效"""
+        from engine import task_queue
+
+        job = MagicMock()
+        job.kwargs = {
+            "requirement": "req",
+            "workdir": "/tmp/project",
+            "run_id": "run-fail",
+            "config_path": "/tmp/project/.ai/team.yaml",
+        }
+        job.args = ()
+
+        save_report = MagicMock()
+        persistence_mod = types.SimpleNamespace(save_report_sync=save_report)
+        with patch("engine.config.find_project_root", return_value="/tmp/project"), patch.dict("sys.modules", {"persistence": persistence_mod}):
+            task_queue._handle_pipeline_failure(job, RuntimeError, RuntimeError("boom"), None)
+
+        report = save_report.call_args.args[0]
+        self.assertEqual(report.run_id, "run-fail")
+        self.assertEqual(report.status, "failed")
+        self.assertEqual(report.requirement, "req")
+        self.assertEqual(report.project_root, "/tmp/project")
+        self.assertEqual(report.output_dir, "/tmp/project/.ai/team-output/run-fail")
 
     def test_enqueue_run_exception_resets_queue(self):
         """enqueue_run resets queue when enqueue raises."""

@@ -41,6 +41,42 @@ def reset_queue() -> None:
     _queue = None
 
 
+def _handle_pipeline_failure(job, exc_type, exc_value, traceback):
+    """RQ failure callback: 更新 run.status 为 failed"""
+    try:
+        run_id = job.kwargs.get("run_id") or (job.args[2] if len(job.args) > 2 else None)
+        if run_id:
+            logger.error("Pipeline run %s failed: %s", run_id, exc_value)
+            # 尝试更新数据库状态
+            try:
+                from pathlib import Path
+
+                from engine.config import find_project_root
+                from persistence import save_report_sync
+                from engine.models import RunReport, utc_now
+                requirement = job.kwargs.get("requirement") or (job.args[0] if job.args else "")
+                workdir = job.kwargs.get("workdir") or (job.args[1] if len(job.args) > 1 else ".")
+                project_root = Path(find_project_root(workdir))
+                config_path = job.kwargs.get("config_path")
+                report = RunReport(
+                    run_id=run_id,
+                    status="failed",
+                    requirement=requirement,
+                    project_root=str(project_root),
+                    output_dir=str(project_root / ".ai" / "team-output" / run_id),
+                    config_source="project" if config_path else "default",
+                    config_path=config_path,
+                    error_message=str(exc_value),
+                    started_at=utc_now(),
+                    completed_at=utc_now(),
+                )
+                save_report_sync(report, {})
+            except Exception:
+                logger.warning("无法更新数据库状态 for run %s", run_id)
+    except Exception:
+        logger.exception("failure callback 异常")
+
+
 def enqueue_run(
     requirement: str,
     workdir: str,
@@ -48,6 +84,7 @@ def enqueue_run(
     yes: bool = False,
     config_path: Optional[str] = None,
     only_stage: Optional[str] = None,
+    execution_mode: Optional[str] = None,
 ) -> Optional[str]:
     """Enqueue a pipeline run via RQ. Returns job_id or None if Redis unavailable."""
     q = get_queue()
@@ -64,8 +101,10 @@ def enqueue_run(
             yes=yes,
             config_path=config_path,
             only_stage=only_stage,
+            execution_mode=execution_mode,
             job_timeout="24h",
             result_ttl=86400,
+            on_failure=_handle_pipeline_failure,
         )
         return job.id
     except Exception as exc:

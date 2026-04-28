@@ -12,6 +12,7 @@ def execute_pipeline(
     yes: bool = False,
     config_path: str | None = None,
     only_stage: str | None = None,
+    execution_mode: str | None = None,
 ) -> str:
     """RQ task function: execute a pipeline run and return the output directory path."""
     from engine.config import find_project_root
@@ -30,6 +31,7 @@ def execute_pipeline(
         run_id=run_id,
         yes=yes,
         only_stage=only_stage,
+        execution_mode=execution_mode,
     )
     return str(report.output_dir)
 

@@ -33,6 +33,7 @@ class TestExecutePipeline(unittest.TestCase):
             run_id="run-123",
             yes=True,
             only_stage=None,
+            execution_mode=None,
         )
 
     @patch("engine.orchestrator.Orchestrator")
@@ -53,11 +54,14 @@ class TestExecutePipeline(unittest.TestCase):
             run_id="run-456",
             config_path="/tmp/project/ai-team.yaml",
             only_stage="coding",
+            execution_mode="serial",
         )
 
         self.assertEqual(result, "/tmp/out")
         call_kwargs = MockOrch.call_args[1]
         self.assertEqual(call_kwargs["config_path"], "/tmp/project/ai-team.yaml")
+        mock_instance.run.assert_called_once()
+        self.assertEqual(mock_instance.run.call_args.kwargs["execution_mode"], "serial")
 
     @patch("engine.orchestrator.Orchestrator")
     @patch("engine.config.find_project_root", return_value="/tmp/p")

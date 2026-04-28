@@ -542,6 +542,44 @@ class TestRunsRoutes(BaseRoutesTest):
         response = self.client.get("/api/runs/nonexistent-run", params={"workdir": str(self.project_root)})
         self.assertEqual(response.status_code, 404)
 
+    def test_resume_run_passes_config_path_and_execution_mode(self) -> None:
+        """POST /api/runs/{id}/resume 使用原 report.config_path 并透传 execution_mode/yes"""
+        run_id = "resume-route-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        (output_dir / "checkpoint.json").write_text('{"run_id":"resume-route-run","completed_stages":["plan"]}', encoding="utf-8")
+        (output_dir / "requirement.md").write_text("req", encoding="utf-8")
+        config_path = str(self.project_root / ".ai" / "custom-team.yaml")
+        (output_dir / "report.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "waiting",
+                    "requirement": "req",
+                    "project_root": str(self.project_root),
+                    "output_dir": str(output_dir),
+                    "config_source": "project",
+                    "config_path": config_path,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("api.runtime.resume_run_background", return_value=output_dir) as resume_bg:
+            response = self.client.post(
+                f"/api/runs/{run_id}/resume",
+                params={"workdir": str(self.project_root), "yes": True, "execution_mode": "serial"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        resume_bg.assert_called_once_with(
+            run_id=run_id,
+            workdir=str(self.project_root),
+            yes=True,
+            config_path=config_path,
+            execution_mode="serial",
+        )
+
 
 class TestArtifactsRoutes(BaseRoutesTest):
     """测试 artifacts 端点"""

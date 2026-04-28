@@ -69,6 +69,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "production_mode": False,
         "require_worktree": False,
         "require_verify_cmd": False,
+        "context_threshold_chars": 100000,
+        "auto_split_requirements": True,
     },
 }
 
@@ -204,8 +206,27 @@ def normalize_config(config: Dict[str, Any], project_root: Optional[Path] = None
             raise ConfigError(f"Unknown runtime referenced by agent {agent.get('name', '<unknown>')}: {agent['runtime_id']}")
         normalized_agents.append(agent)
     normalized["agents"] = normalized_agents
-    normalized.setdefault("pipeline", [])
-    normalized.setdefault("runner", {})
+    pipeline_source = normalized.get("pipeline", [])
+    pipeline_settings: Dict[str, Any] = {"execution_mode": "parallel"}
+    if isinstance(pipeline_source, dict):
+        pipeline_settings.update({k: v for k, v in pipeline_source.items() if k != "stages"})
+        pipeline_stages = pipeline_source.get("stages", [])
+    elif isinstance(pipeline_source, list):
+        pipeline_stages = pipeline_source
+    else:
+        raise ConfigError("pipeline must be a list or a mapping with stages")
+    execution_mode = pipeline_settings.get("execution_mode", "parallel")
+    if execution_mode not in {"serial", "parallel", "auto"}:
+        raise ConfigError("pipeline.execution_mode must be one of: serial, parallel, auto")
+    if not isinstance(pipeline_stages, list):
+        raise ConfigError("pipeline.stages must be a list")
+    normalized["pipeline"] = pipeline_stages
+    normalized["pipeline_settings"] = pipeline_settings
+
+    runner = dict(normalized.get("runner") or {})
+    runner.setdefault("context_threshold_chars", 100000)
+    runner.setdefault("auto_split_requirements", True)
+    normalized["runner"] = runner
     normalized.setdefault("worktree", {"enabled": True})
     normalized.setdefault("quality_gates", [])
 
