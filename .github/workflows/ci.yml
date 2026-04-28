@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
@@ -52,18 +52,18 @@ jobs:
 
       - name: Install dependencies
         run: |
-          if [ -f "frontend/package.json" ]; then
-            cd frontend && npm ci
+          if [ -f "web/package.json" ]; then
+            cd web && npm ci
           else
-            echo "No frontend package.json found, skipping"
+            echo "No web/package.json found, skipping"
           fi
 
       - name: Build
         run: |
-          if [ -f "frontend/package.json" ]; then
-            cd frontend && npm run build
+          if [ -f "web/package.json" ]; then
+            cd web && npm run build
           else
-            echo "No frontend package.json found, skipping"
+            echo "No web/package.json found, skipping"
           fi
 
   # ——————————————————————————————————————————————————————————————————————
@@ -72,18 +72,28 @@ jobs:
   docker-check:
     name: Docker Build Check
     runs-on: ubuntu-latest
-    if: hashFiles('Dockerfile') != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            context: .
+            file: docker/Dockerfile.api
+          - image: web
+            context: web
+            file: Dockerfile
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build image (no push)
+      - name: Build ${{ matrix.image }} image (no push)
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           load: true
-          tags: ai-team-platform:ci-test
+          tags: ai-team-platform:${{ matrix.image }}-ci-test
           cache-from: type=gha
           cache-to: type=gha,mode=max
