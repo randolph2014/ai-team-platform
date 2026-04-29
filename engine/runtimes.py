@@ -213,6 +213,27 @@ def detect_cli_version(cli_path: str) -> Optional[str]:
     return output.splitlines()[0] if output else None
 
 
+def backfill_runtime_models(runtimes: Dict[str, Any]) -> None:
+    """对未显式声明 model 的 runtime，尝试从 CLI 配置回填，仅用于可观测性。
+
+    Args:
+        runtimes: runtime 配置字典，会被原地修改
+    """
+    for runtime_id, runtime in runtimes.items():
+        if not isinstance(runtime, dict):
+            continue
+        if runtime.get("model"):
+            continue
+        cli = runtime.get("cli", "auto")
+        resolved_cli = resolve_auto_cli() if cli == "auto" else cli
+        if not resolved_cli:
+            continue
+        model = _cli_config_model(resolved_cli)
+        if model:
+            runtime["model"] = model
+            runtime["_model_source"] = "cli-config"
+
+
 def discover_runtime_candidates() -> List[Dict[str, Any]]:
     candidates: List[Dict[str, Any]] = []
     for runtime_id, spec in RUNTIME_SPECS.items():

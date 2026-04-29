@@ -1,0 +1,24 @@
+# Python 项目质量门禁模板
+# 用于 develop 阶段后自动验证代码质量
+quality_gates:
+  - name: python-syntax
+    type: command
+    command: "python3 -m py_compile $(git diff --name-only --diff-filter=ACM HEAD~1..HEAD 2>/dev/null | grep '\\.py$' | head -20) 2>&1 || true"
+    required: true
+    timeout_seconds: 30
+
+  - name: pytest
+    type: command
+    command: "python3 -m pytest --tb=short -q 2>&1"
+    required: true
+    max_retries: 1
+    timeout_seconds: 600
+
+  - name: coverage
+    type: threshold
+    command: "python3 -m pytest --cov --cov-report=term 2>&1 | tail -5"
+    parse: "regex:TOTAL.*?(\\d+)%"
+    operator: ">="
+    threshold: 80
+    required: false
+    timeout_seconds: 600

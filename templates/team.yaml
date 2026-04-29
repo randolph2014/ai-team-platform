@@ -63,6 +63,11 @@ runtimes:
   #   model: gemini-2.5-pro
 
 agents:
+  - name: requirements-analyst
+    runtime_id: auto
+    role: analyst
+    prompt: agents/requirements-analyst.md
+
   # solution-architect 通常需要更强模型；启用 claude-opus 后可改为
   # runtime_id: claude-opus
   - name: solution-architect
@@ -79,6 +84,11 @@ agents:
     runtime_id: auto
     role: reviewer
     prompt: agents/devils-advocate.md
+
+  - name: planner
+    runtime_id: auto
+    role: planner
+    prompt: agents/planner.md
 
   # tech-lead / qa / reviewer 用 sonnet 系性价比更高；启用 claude-sonnet
   # 后可改为 runtime_id: claude-sonnet
@@ -97,6 +107,21 @@ agents:
     role: reviewer
     prompt: agents/code-reviewer.md
 
+  - name: risk-analyst
+    runtime_id: auto
+    role: analyst
+    prompt: agents/risk-analyst.md
+
+  - name: doc-writer
+    runtime_id: auto
+    role: writer
+    prompt: agents/doc-writer.md
+
+  - name: retrospect
+    runtime_id: auto
+    role: summarizer
+    prompt: agents/retrospect.md
+
 worktree:
   enabled: true
   base_branch: main
@@ -111,11 +136,19 @@ runner:
 pipeline:
   execution_mode: parallel
   stages:
+    - id: analyse
+      name: "需求分析"
+      parallel: false
+      agents: [requirements-analyst]
+      input: requirement
+      output:
+        requirements-analyst: requirement-analysis.md
+
     - id: plan
       name: "方案讨论"
       parallel: true
       agents: [brainstormer, devils-advocate]
-      input: requirement
+      input: [requirement, requirement-analysis.md, requirement-analysis.json]
       output:
         brainstormer: brainstorm.md
         devils-advocate: gap-analysis.md
@@ -142,11 +175,19 @@ pipeline:
       input: [solution-draft.md]
       output_file: codebase-context.md
 
+    - id: task_plan
+      name: "任务规划"
+      parallel: false
+      agents: [planner]
+      input: [requirement, solution-draft.md, codebase-context.md, requirement-analysis.json]
+      output:
+        planner: task-plan.md
+
     - id: develop
       name: "开发"
       parallel: false
       agents: [tech-lead]
-      input: [requirement, solution-draft.md, codebase-context.md]
+      input: [requirement, solution-draft.md, codebase-context.md, task-plan.md, task-plan.json]
       output:
         tech-lead: tech-lead-output.md
       loopback_to: develop
@@ -181,10 +222,34 @@ pipeline:
       loopback_trigger: "Request Changes"
       max_retries: 2
 
+    - id: risk_analysis
+      name: "风险识别"
+      parallel: false
+      agents: [risk-analyst]
+      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, review-report.md, "git-diff"]
+      output:
+        risk-analyst: risk-report.md
+
+    - id: doc
+      name: "文档整理"
+      parallel: false
+      agents: [doc-writer]
+      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, review-report.md, risk-report.md, "git-diff"]
+      output:
+        doc-writer: doc-output.md
+
     - id: accept
       name: "人工验收"
       type: human_review
-      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, review-report.md, "git-diff"]
+      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, review-report.md, risk-report.md, doc-output.md, "git-diff"]
+
+    - id: retrospect
+      name: "结果复盘"
+      parallel: false
+      agents: [retrospect]
+      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, review-report.md, risk-report.md, doc-output.md, "git-diff"]
+      output:
+        retrospect: final-summary.md
 
 # Quality Gates — develop 阶段完成后自动运行。
 # 项目级 .ai/team.yaml 可覆盖此配置。

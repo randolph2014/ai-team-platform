@@ -24,7 +24,8 @@ from .cost_tracker import CostTracker
 from .events import EventBus
 from .models import AgentDefinition, AgentRun, RequirementUnit, RequirementUnitProgress, RunReport, StageRun, model_to_dict, utc_now
 from .requirement_splitter import estimate_prompt_size, should_split, split_requirement
-from .runtimes import runtime_config
+from .runtimes import _cli_config_model, backfill_runtime_models, resolve_auto_cli, runtime_config
+from .truncate_utils import truncate_with_fallback
 from .quality_gates import (
     has_blocking_failure,
     max_retry_count_for_failures,
@@ -126,6 +127,12 @@ class Orchestrator:
         self.bus = event_bus or EventBus()
         self.output_base = output_base or (self.project_root / ".ai" / "team-output")
         self.agents = agent_map(self.config)
+        self._backfill_runtime_models()
+
+    def _backfill_runtime_models(self) -> None:
+        """对未显式声明 model 的 runtime，尝试从 CLI 配置回填，仅用于可观测性。"""
+        runtimes = self.config.get("runtimes", {})
+        backfill_runtime_models(runtimes)
 
     def run(
         self,
@@ -530,7 +537,7 @@ class Orchestrator:
         if configured:
             wanted = set(_as_list(configured))
             return [stage for stage in stages if stage.get("id") in wanted]
-        excluded = {"plan", "plan_confirm", "accept"}
+        excluded = {"plan", "plan_confirm", "accept", "retrospect"}
         return [stage for stage in stages if stage.get("id") not in excluded and stage.get("type") != "human_review"]
 
     def _write_requirement_units(self, output_dir: Path, units: List[RequirementUnit]) -> None:
@@ -590,7 +597,7 @@ class Orchestrator:
     def _stage_cwd(self, stage_id: str, worktree_path: Optional[Path]) -> Path:
         if not worktree_path:
             return self.project_root
-        if stage_id in {"plan", "architect", "context", "code_apply"}:
+        if stage_id in {"analyse", "plan", "plan_confirm", "architect", "context", "task_plan", "code_apply"}:
             return self.project_root
         return worktree_path
 
@@ -793,6 +800,7 @@ class Orchestrator:
                 stage_run.error_message = "; ".join(agent.error_message or agent.agent_name for agent in failed)
             else:
                 stage_run.status = "completed"
+                self._extract_json_artifacts(output_dir, stage_run)
         except Exception as exc:
             stage_run.status = "failed"
             stage_run.error_message = str(exc)
@@ -816,6 +824,7 @@ class Orchestrator:
 
     def _render_loopback_feedback(self, stage_id: str, stage_run: StageRun, retry_count: int, target: str) -> str:
         max_chars = int(self.config.get("runner", {}).get("max_loopback_feedback_chars") or 20000)
+        strategy = self.config.get("runner", {}).get("loopback_truncate_strategy", "smart")
         lines = [f"## Loopback 反馈（第 {retry_count} 次重试）", ""]
         lines.append(f"Stage `{stage_id}` 触发了回退到 `{target}`。以下是该 stage 各 agent 的详细输出：")
         used_chars = 0
@@ -838,14 +847,14 @@ class Orchestrator:
                         break
                     content = path.read_text(encoding="utf-8", errors="replace")
                     if len(content) > remaining:
-                        content = content[:remaining] + "\n\n[...truncated]"
+                        content = truncate_with_fallback(content, remaining, strategy)
                     used_chars += len(content)
                     lines.extend(["", "```text", content, "```"])
         if not stage_run.agents:
             fallback = self._stage_output_text(stage_run)
             if fallback:
                 if len(fallback) > max_chars:
-                    fallback = fallback[:max_chars] + "\n\n[...truncated]"
+                    fallback = truncate_with_fallback(fallback, max_chars, strategy)
                 lines.extend(["", "```text", fallback, "```"])
         lines.extend(["", "请根据以上反馈修复问题，只修改必要的部分，不要改动已通过的文件。"])
         return "\n".join(lines)
@@ -927,7 +936,14 @@ class Orchestrator:
         content = path.read_text(encoding="utf-8", errors="replace")
         if max_chars and len(content) > max_chars:
             content = content[:max_chars] + "\n\n[truncated]"
-        return [f"## Artifact: `{path.name}`", "```markdown", content, "```", ""]
+        suffix = path.suffix.lstrip(".")
+        if suffix in {"json", "yaml", "yml", "toml", "xml", "py", "ts", "js", "tsx", "jsx", "swift", "kt", "java", "go", "rs", "rb", "sh", "bash", "css", "html", "sql", "txt"}:
+            lang = suffix
+        elif suffix == "md":
+            lang = "markdown"
+        else:
+            lang = ""
+        return [f"## Artifact: `{path.name}`", f"```{lang}", content, "```", ""]
 
     def _git_diff(self, cwd: Path) -> str:
         import subprocess
@@ -994,6 +1010,35 @@ class Orchestrator:
             if path.is_file():
                 artifacts.append(str(path.relative_to(output_dir)))
         report.artifacts = sorted(artifacts)
+
+    def _extract_json_artifacts(self, output_dir: Path, stage_run: StageRun) -> None:
+        """从 agent 输出的 Markdown 文件中提取 JSON 代码块，生成伴生 .json 文件。
+
+        支持双输出模式：agent 在 Markdown 末尾以 ```json 代码块输出结构化数据，
+        orchestrator 自动提取为独立 .json 文件，供下游 stage 的 input 引用。
+        """
+        for agent in stage_run.agents:
+            if not agent.output_file:
+                continue
+            output_path = Path(agent.output_file)
+            if not output_path.exists():
+                continue
+            content = output_path.read_text(encoding="utf-8", errors="replace")
+            json_blocks = re.findall(r'```json\s*\n(.*?)```', content, re.DOTALL)
+            for i, block in enumerate(json_blocks):
+                block = block.strip()
+                if not block:
+                    continue
+                try:
+                    parsed = json.loads(block)
+                except json.JSONDecodeError:
+                    continue
+                stem = output_path.stem
+                if len(json_blocks) > 1:
+                    json_path = output_dir / f"{stem}-{i + 1}.json"
+                else:
+                    json_path = output_dir / f"{stem}.json"
+                json_path.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _run_ci_cd_hook(self, worktree_path: Path, report: RunReport, output_dir: Path) -> None:
         ci_cd_config = self.config.get("ci_cd", {})

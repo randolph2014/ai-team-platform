@@ -24,12 +24,21 @@ SKILL_ROOT = Path.home() / ".agents" / "skills" / "ai-team"
 DEFAULT_CONFIG: Dict[str, Any] = {
     "runtimes": {"auto": {"name": "Auto", "cli": "auto"}},
     "agents": [
+        {"name": "requirements-analyst", "runtime_id": "auto", "role": "analyst", "prompt": "agents/requirements-analyst.md"},
         {"name": "solution-architect", "runtime_id": "auto", "role": "architect", "prompt": "agents/solution-architect.md"},
+        {"name": "planner", "runtime_id": "auto", "role": "planner", "prompt": "agents/planner.md"},
         {"name": "tech-lead", "runtime_id": "auto", "role": "lead", "prompt": "agents/tech-lead.md"},
         {"name": "qa-automation", "runtime_id": "auto", "role": "tester", "prompt": "agents/qa-automation.md"},
         {"name": "code-reviewer", "runtime_id": "auto", "role": "reviewer", "prompt": "agents/code-reviewer.md"},
     ],
     "pipeline": [
+        {
+            "id": "analyse",
+            "name": "需求分析",
+            "agents": ["requirements-analyst"],
+            "input": "requirement",
+            "output": {"requirements-analyst": "requirement-analysis.md"},
+        },
         {
             "id": "architect",
             "name": "方案定稿",
@@ -39,10 +48,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         },
         {"id": "context", "name": "代码库扫描", "type": "context_scan", "output_file": "codebase-context.md"},
         {
+            "id": "task_plan",
+            "name": "任务规划",
+            "agents": ["planner"],
+            "input": ["requirement", "solution-draft.md", "codebase-context.md"],
+            "output": {"planner": "task-plan.md"},
+        },
+        {
             "id": "develop",
             "name": "开发",
             "agents": ["tech-lead"],
-            "input": ["requirement", "solution-draft.md", "codebase-context.md"],
+            "input": ["requirement", "solution-draft.md", "codebase-context.md", "task-plan.md"],
             "output": {"tech-lead": "tech-lead-output.md"},
         },
         {"id": "code_apply", "name": "代码应用", "type": "code_apply", "input": ["tech-lead-output.md"]},
@@ -62,6 +78,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "runner": {
         "max_input_chars_per_file": None,
         "max_loopback_feedback_chars": 20000,
+        "loopback_truncate_strategy": "smart",  # smart | head | tail
         "stop_parallel_on_first_error": True,
         "agent_timeout_seconds": 1800,
         "heartbeat_seconds": 60,

@@ -1,0 +1,24 @@
+# Node.js 项目质量门禁模板
+# 用于 develop 阶段后自动验证代码质量
+quality_gates:
+  - name: typescript-check
+    type: command
+    command: "npx tsc --noEmit 2>&1 || true"
+    required: true
+    timeout_seconds: 120
+
+  - name: test
+    type: command
+    command: "npm test 2>&1"
+    required: true
+    max_retries: 1
+    timeout_seconds: 300
+
+  - name: coverage
+    type: threshold
+    command: "npx jest --coverage 2>&1 | grep 'Lines' | head -1"
+    parse: "regex:Lines.*?(\\d+\\.\\d+)%"
+    operator: ">="
+    threshold: 80
+    required: false
+    timeout_seconds: 300

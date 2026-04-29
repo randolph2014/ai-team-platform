@@ -94,6 +94,62 @@ class RequirementUnitProgress(BaseModel):
     current_stage: Optional[str] = None
 
 
+class TargetUser(BaseModel):
+    role: str
+    needs: str
+    scenarios: str
+
+
+class BusinessScenario(BaseModel):
+    name: str
+    trigger: str
+    flow: str
+    frequency: str = "medium"
+
+
+class EdgeCase(BaseModel):
+    case: str
+    impact: str
+    mitigation: str = ""
+
+
+class Constraint(BaseModel):
+    type: Literal["technical", "business", "time", "resource", "security", "compliance", "other"]
+    description: str
+
+
+class AcceptanceCriterion(BaseModel):
+    id: str
+    description: str
+    verification_method: str
+
+
+class RequirementAnalysis(BaseModel):
+    target_users: List[TargetUser] = Field(default_factory=list)
+    business_scenarios: List[BusinessScenario] = Field(default_factory=list)
+    must_have: List[str] = Field(default_factory=list)
+    edge_cases: List[EdgeCase] = Field(default_factory=list)
+    constraints: List[Constraint] = Field(default_factory=list)
+    acceptance_criteria: List[AcceptanceCriterion] = Field(default_factory=list)
+
+
+class PlannedTask(BaseModel):
+    id: str
+    title: str
+    description: str
+    priority: Literal["P0", "P1", "P2", "P3"] = "P2"
+    depends_on: List[str] = Field(default_factory=list)
+    deliverable: Optional[Dict[str, str]] = None
+    estimated_effort: Literal["S", "M", "L", "XL"] = "M"
+    acceptance_criteria: List[str] = Field(default_factory=list)
+
+
+class TaskPlan(BaseModel):
+    tasks: List[PlannedTask] = Field(default_factory=list)
+    execution_order: List[List[str]] = Field(default_factory=list)
+    risk_items: List[str] = Field(default_factory=list)
+
+
 class StageRun(BaseModel):
     stage_id: str
     stage_name: str

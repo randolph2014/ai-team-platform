@@ -1,0 +1,24 @@
+# Go 项目质量门禁模板
+# 用于 develop 阶段后自动验证代码质量
+quality_gates:
+  - name: go-vet
+    type: command
+    command: "go vet ./... 2>&1"
+    required: true
+    timeout_seconds: 120
+
+  - name: go-test
+    type: command
+    command: "go test ./... -v 2>&1"
+    required: true
+    max_retries: 1
+    timeout_seconds: 600
+
+  - name: coverage
+    type: threshold
+    command: "go test ./... -cover 2>&1 | grep 'total:' | head -1"
+    parse: "regex:total:.*?(\\d+\\.\\d+)%"
+    operator: ">="
+    threshold: 80
+    required: false
+    timeout_seconds: 600

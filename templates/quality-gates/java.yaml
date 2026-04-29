@@ -1,0 +1,24 @@
+# Java 项目质量门禁模板
+# 用于 develop 阶段后自动验证代码质量
+quality_gates:
+  - name: maven-compile
+    type: command
+    command: "mvn compile -q 2>&1"
+    required: true
+    timeout_seconds: 300
+
+  - name: maven-test
+    type: command
+    command: "mvn test -q 2>&1"
+    required: true
+    max_retries: 1
+    timeout_seconds: 600
+
+  - name: coverage
+    type: threshold
+    command: "mvn jacoco:report -q 2>&1 && grep -r 'Total' target/site/jacoco/index.html | head -1"
+    parse: "regex:Total.*?(\\d+)%"
+    operator: ">="
+    threshold: 80
+    required: false
+    timeout_seconds: 600
