@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import subprocess
@@ -76,8 +77,81 @@ class CodeApplier:
         self.project_root = project_root.resolve()
         self.changes: List[AppliedChange] = []
 
+    def _parse_json_output(self, content: str) -> Optional[List[Dict]]:
+        """尝试解析 JSON 结构化输出协议。
+
+        支持两种格式:
+        1. 纯 JSON: {"files": [...]}
+        2. Markdown 中的 JSON 代码块: ```json\n{"files": [...]}\n```
+        """
+        # 尝试直接解析
+        try:
+            data = json.loads(content)
+            if isinstance(data, dict) and "files" in data:
+                return data["files"]
+        except json.JSONDecodeError:
+            pass
+
+        # 尝试从 markdown JSON 代码块中提取
+        pattern = re.compile(r"```json\s*\n(.*?)\n\s*```", re.DOTALL)
+        match = pattern.search(content)
+        if match:
+            try:
+                data = json.loads(match.group(1))
+                if isinstance(data, dict) and "files" in data:
+                    return data["files"]
+            except json.JSONDecodeError:
+                pass
+
+        return None
+
+    def _apply_json_files(self, files: List[Dict]) -> List[AppliedChange]:
+        """应用 JSON 结构化文件列表。"""
+        changes = []
+        for file_info in files:
+            filepath = file_info.get("path")
+            action = file_info.get("action", "create")
+            file_content = file_info.get("content")
+
+            if not filepath or file_content is None:
+                logger.warning("JSON 文件条目缺少 path 或 content，已跳过: %s", file_info)
+                continue
+
+            resolved = _resolve_path(self.project_root, filepath)
+            resolved_str = str(resolved)
+            root_str = str(self.project_root)
+
+            if not resolved_str.startswith(root_str + "/") and resolved_str != root_str:
+                logger.warning("文件路径不在项目范围内(已跳过): %s", filepath)
+                continue
+
+            # 规范化 action
+            if action in ("create", "add"):
+                action = "created"
+            elif action in ("modify", "update", "edit"):
+                action = "modified"
+
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.write_text(file_content.strip() + "\n", encoding="utf-8")
+            rel = _safe_relative(resolved, self.project_root)
+            logger.info("代码写入(JSON): %s [%s]", rel, action)
+            changes.append(AppliedChange(rel, action, file_content.count("\n") + 1))
+
+        return changes
+
     def apply(self, content: str) -> List[AppliedChange]:
         self.changes = []
+
+        # 优先尝试 JSON 解析
+        json_files = self._parse_json_output(content)
+        if json_files:
+            logger.info("检测到 JSON 结构化输出，解析到 %d 个文件", len(json_files))
+            self.changes = self._apply_json_files(json_files)
+            if self.changes:
+                return self.changes
+            logger.warning("JSON 解析成功但无有效文件，回退到 markdown 解析")
+
+        # 回退到 markdown 代码块解析
         fences = _extract_code_fences(content)
         applied_paths = set()
 

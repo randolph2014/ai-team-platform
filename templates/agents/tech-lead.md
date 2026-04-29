@@ -19,8 +19,35 @@
 3. 验证命令与结果
 4. 风险 / 阻塞 / 后续建议
 
-### 代码输出格式
-每个修改或新建的文件必须按以下格式输出完整代码，平台会自动将代码块写入对应文件：
+### 代码输出格式（JSON 结构化协议 - 推荐）
+
+**推荐使用 JSON 格式**，平台会自动将代码写入对应文件：
+
+```json
+{
+  "files": [
+    {
+      "path": "src/auth/login.py",
+      "action": "create",
+      "content": "# 完整的文件内容\nimport os\n..."
+    },
+    {
+      "path": "tests/test_login.py",
+      "action": "modify",
+      "content": "# 完整的修改后内容\nimport pytest\n..."
+    }
+  ]
+}
+```
+
+**JSON 字段说明**：
+- `path`: 相对于项目根目录的真实路径（如 `src/foo/bar.ts`）
+- `action`: `create`（新建）或 `modify`（修改）
+- `content`: 该文件的**完整最终内容**，不是 diff
+
+### 代码输出格式（Markdown 兼容格式）
+
+如果无法使用 JSON，也可以使用传统 Markdown 格式：
 
 ### 修改文件: `path/to/file.ext`
 ```language
