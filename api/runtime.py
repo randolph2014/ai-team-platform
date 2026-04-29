@@ -75,6 +75,7 @@ def resume_run_background(
     run_id: str,
     workdir: str,
     yes: bool = False,
+    reject: bool = False,
     config_path: Optional[str] = None,
     execution_mode: Optional[str] = None,
 ) -> Path:
@@ -102,7 +103,7 @@ def resume_run_background(
 
     def target() -> None:
         try:
-            orchestrator.run(requirement=requirement, run_id=run_id, yes=yes, resume=True, execution_mode=execution_mode)
+            orchestrator.run(requirement=requirement, run_id=run_id, yes=yes, reject=reject, resume=True, execution_mode=execution_mode)
         except Exception:
             logger.exception("Resume run %s failed", run_id)
             _persist_background_failure(

@@ -395,6 +395,88 @@ tbody tr:hover td { background: var(--bg-hover); }
 .prompt { color: var(--green); }
 .cursor { display: inline-block; width: 8px; height: 16px; background: var(--green); animation: blink 1s step-end infinite; }
 @keyframes blink { 50% { opacity: 0; } }
+
+/* Artifact Content (inline expandable viewer) */
+.stageArtifacts {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.artifactContentWrapper {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.artifactContentToggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg-secondary);
+  color: var(--accent-hover);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  text-align: left;
+}
+.artifactContentToggle:hover {
+  background: var(--bg-hover);
+}
+.artifactContentBody {
+  border-top: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+.artifactContentLoading,
+.artifactContentError {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.artifactContentError {
+  color: var(--red);
+}
+.artifactContentPre {
+  margin: 0;
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 400px;
+  overflow: auto;
+}
+
+/* Review Actions */
+.reviewActions {
+  margin-top: 10px;
+}
+.reviewActionsButtons {
+  display: flex;
+  gap: 8px;
+}
+.reviewRejectButton {
+  border-color: var(--red) !important;
+  color: var(--red) !important;
+}
+.reviewRejectButton:hover {
+  background: var(--red-bg) !important;
+}
+.reviewActionError {
+  margin-top: 6px;
+  color: var(--red);
+  font-size: 12px;
+}
+
 .gateList { margin-top: 10px; }
 .gateName { font-weight: 700; }
 .gateCommand { color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px; margin-top: 3px; }
@@ -761,6 +843,91 @@ tbody tr:hover td { background: var(--bg-hover); }
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
+}
+
+/* Webhook page */
+.webhookForm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.webhookForm label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.webhookForm input {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 8px 10px;
+  outline: none;
+}
+.webhookForm input:focus {
+  border-color: var(--accent);
+}
+.webhookForm small {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.webhookEventsCheck {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 2px;
+}
+.webhookEventLabel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 400 !important;
+  font-size: 13px;
+  color: var(--text-primary) !important;
+}
+.webhookEventLabel input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.webhookFormActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+.webhookEventTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* Cost page */
+.costPeriodSelector {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.costPeriodLabel {
+  font-size: 14px !important;
+}
+.costRunQuery {
+  display: flex;
+  gap: 8px;
+}
+.costRunQuery input {
+  flex: 1;
+  max-width: 320px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 8px 10px;
+  outline: none;
+}
+.costRunQuery input:focus {
+  border-color: var(--accent);
 }
 
 /* Responsive */

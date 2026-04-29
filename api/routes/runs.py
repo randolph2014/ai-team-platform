@@ -194,6 +194,7 @@ if router:
         run_id: str,
         workdir: str = Query(default="."),
         yes: bool = Query(default=False),
+        reject: bool = Query(default=False),
         config_path: Optional[str] = Query(default=None),
         execution_mode: Optional[str] = Query(default=None),
         user: Dict[str, Any] = _get_auth(),
@@ -225,6 +226,7 @@ if router:
                 run_id=run_id,
                 workdir=workdir,
                 yes=yes,
+                reject=reject,
                 config_path=config_path,
                 execution_mode=execution_mode,
             )

@@ -141,6 +141,7 @@ class Orchestrator:
         only_stage: Optional[str] = None,
         skip_stages: Optional[Sequence[str]] = None,
         yes: bool = False,
+        reject: bool = False,
         production: bool = False,
         merge: bool = False,
         resume: bool = False,
@@ -233,6 +234,7 @@ class Orchestrator:
                     worktree_path,
                     skip_set,
                     yes,
+                    reject,
                     completed_stages,
                     start,
                     execution_mode,
@@ -247,6 +249,7 @@ class Orchestrator:
                     worktree_path=worktree_path,
                     skip_set=skip_set,
                     yes=yes,
+                    reject=reject,
                     completed_stages=completed_stages,
                     start=start,
                     execution_mode=execution_mode,
@@ -298,6 +301,7 @@ class Orchestrator:
         worktree_path: Optional[Path],
         skip_set: set,
         yes: bool,
+        reject: bool,
         completed_stages: List[str],
         start: float,
         execution_mode: Optional[str],
@@ -355,7 +359,7 @@ class Orchestrator:
                 stage_run = self._run_context_stage(stage, report, artifact_dir, worktree_path)
                 stage_runs_to_append = [stage_run]
             elif stage.get("type") == "human_review":
-                stage_run = self._run_human_review_stage(stage, report, artifact_dir, yes=yes)
+                stage_run = self._run_human_review_stage(stage, report, artifact_dir, yes=yes, reject=reject)
                 stage_runs_to_append = [stage_run]
             elif stage.get("type") == "code_apply":
                 stage_run = self._run_code_apply_stage(stage, report, artifact_dir, worktree_path)
@@ -446,6 +450,7 @@ class Orchestrator:
         worktree_path: Optional[Path],
         skip_set: set,
         yes: bool,
+        reject: bool,
         completed_stages: List[str],
         start: float,
         execution_mode: Optional[str],
@@ -490,6 +495,7 @@ class Orchestrator:
                     worktree_path=worktree_path,
                     skip_set=skip_set,
                     yes=yes,
+                    reject=reject,
                     completed_stages=progress.completed_stages,
                     start=start,
                     execution_mode=execution_mode,
@@ -664,7 +670,7 @@ class Orchestrator:
         self.bus.emit("stage:completed", report.run_id, stage_id=stage_id, status=stage_run.status, duration=stage_run.duration_seconds)
         return stage_run
 
-    def _run_human_review_stage(self, stage: Dict[str, Any], report: RunReport, output_dir: Path, yes: bool) -> StageRun:
+    def _run_human_review_stage(self, stage: Dict[str, Any], report: RunReport, output_dir: Path, yes: bool, reject: bool = False) -> StageRun:
         stage_id = stage.get("id", "accept")
         stage_run = StageRun(stage_id=stage_id, stage_name=stage.get("name", stage_id), status="running", type="human_review", started_at=utc_now())
         start = time.monotonic()
@@ -692,7 +698,9 @@ class Orchestrator:
                 self.bus.emit("stage:completed", report.run_id, stage_id=stage_id, status=stage_run.status, duration=stage_run.duration_seconds)
                 return stage_run
 
-        if yes:
+        if reject:
+            decision = "rejected"
+        elif yes:
             decision = "accepted"
         elif sys.stdin.isatty():
             response = input(f"Human review for run {report.run_id}. Accept? [y/N] ").strip().lower()

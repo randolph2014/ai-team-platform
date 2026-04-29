@@ -1,7 +1,8 @@
-import { Activity, Boxes, History, LogOut, PenLine, Settings2 } from 'lucide-react';
+import { Activity, Boxes, CircleDollarSign, History, LogOut, PenLine, Settings2, Webhook } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { checkAuthStatus, clearToken, isLoggedIn } from './lib/api';
 import { NewRunModal } from './components/NewRunModal';
+import { Costs } from './pages/Costs';
 import { Dashboard } from './pages/Dashboard';
 import { Login } from './pages/Login';
 import { PipelineEditor } from './pages/PipelineEditor';
@@ -9,8 +10,9 @@ import { Pipelines } from './pages/Pipelines';
 import { RunDetail } from './pages/RunDetail';
 import { Runs } from './pages/Runs';
 import { Settings } from './pages/Settings';
+import { Webhooks } from './pages/Webhooks';
 
-type Route = 'dashboard' | 'runs' | 'run-detail' | 'pipelines' | 'pipeline-editor' | 'settings' | 'login';
+type Route = 'dashboard' | 'runs' | 'run-detail' | 'pipelines' | 'pipeline-editor' | 'settings' | 'webhooks' | 'costs' | 'login';
 
 function currentRoute(): { route: Route; runId?: string; pipelineId?: string } {
   const path = window.location.pathname;
@@ -21,6 +23,8 @@ function currentRoute(): { route: Route; runId?: string; pipelineId?: string } {
   if (path === '/pipelines/editor' || path === '/pipeline-editor') return { route: 'pipeline-editor' };
   if (path === '/pipelines') return { route: 'pipelines' };
   if (path === '/settings') return { route: 'settings' };
+  if (path === '/webhooks') return { route: 'webhooks' };
+  if (path === '/costs') return { route: 'costs' };
   return { route: 'dashboard' };
 }
 
@@ -80,6 +84,8 @@ export function App() {
     ['dashboard', '/dashboard', Activity, '仪表盘'],
     ['runs', '/runs', History, '执行记录'],
     ['pipelines', '/pipelines', Boxes, 'Pipeline 模板'],
+    ['webhooks', '/webhooks', Webhook, 'Webhook'],
+    ['costs', '/costs', CircleDollarSign, '成本追踪'],
     ['settings', '/settings', Settings2, '设置'],
   ] as const;
 
@@ -119,6 +125,8 @@ export function App() {
         {route.route === 'run-detail' && <RunDetail runId={route.runId ?? ''} />}
         {route.route === 'pipelines' && <Pipelines />}
         {route.route === 'pipeline-editor' && <PipelineEditor pipelineId={route.pipelineId} />}
+        {route.route === 'webhooks' && <Webhooks />}
+        {route.route === 'costs' && <Costs />}
         {route.route === 'settings' && <Settings />}
       </main>
       <NewRunModal open={modalOpen} onClose={() => setModalOpen(false)} onRefreshNeeded={() => {}} />

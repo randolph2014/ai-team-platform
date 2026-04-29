@@ -146,7 +146,15 @@ export function RunDetail({ runId }: { runId: string }) {
         {loadError ? <p className="inlineError">无法加载真实运行记录：{loadError}</p> : null}
       </section>
       <div className="detailGrid">
-        <PipelineTimeline run={run} liveLines={liveLines} />
+        <PipelineTimeline
+          run={run}
+          liveLines={liveLines}
+          onStageAction={() => {
+            fetchRun(runId, workdir || run.project_root)
+              .then(setRun)
+              .catch(() => undefined);
+          }}
+        />
         <aside className="artifactPanel">
           <h2>产物文件</h2>
           {run.artifacts.map((artifact) => (

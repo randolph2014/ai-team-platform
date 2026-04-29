@@ -148,6 +148,17 @@ export async function createRun(workdir: string, requirement: string, configPath
   return response.json();
 }
 
+export async function resumeRun(runId: string, workdir: string, yes: boolean, reject: boolean = false): Promise<{ run_id: string; status: string; output_dir: string }> {
+  const params = new URLSearchParams({ workdir, yes: String(yes) });
+  if (reject) params.set('reject', 'true');
+  const response = await apiFetch(`/runs/${runId}/resume?${params.toString()}`, { method: 'POST' });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Failed to resume' }));
+    throw new Error(error.detail || `恢复运行失败: ${response.status}`);
+  }
+  return response.json();
+}
+
 // --- Settings ---
 
 export async function fetchSettings(workdir?: string): Promise<SettingsResponse> {
