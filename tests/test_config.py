@@ -367,5 +367,52 @@ class TestValidateProductionConfig(unittest.TestCase):
         })
 
 
+class TestDefaultAgentCollaborationWorkflow(unittest.TestCase):
+    def test_default_pipeline_is_context_first_and_has_hard_human_gates(self) -> None:
+        from engine.config import load_config
+
+        loaded = load_config(Path.cwd())
+        stages = loaded.config["pipeline"]
+        stage_ids = [stage["id"] for stage in stages]
+
+        self.assertEqual(
+            stage_ids,
+            [
+                "context_scan",
+                "requirement_analysis",
+                "requirement_synthesis",
+                "requirement_confirm",
+                "planning",
+                "task_plan_confirm",
+                "develop",
+                "qa",
+                "review",
+                "acceptance_confirm",
+                "retrospect",
+            ],
+        )
+        self.assertLess(stage_ids.index("context_scan"), stage_ids.index("requirement_synthesis"))
+        self.assertLess(stage_ids.index("context_scan"), stage_ids.index("planning"))
+
+        gates = {stage["id"]: stage for stage in stages if stage.get("type") == "human_review"}
+        self.assertEqual(set(gates), {"requirement_confirm", "task_plan_confirm", "acceptance_confirm"})
+        for gate in gates.values():
+            self.assertFalse(gate.get("allow_auto_approve"))
+            self.assertTrue(gate.get("requires_reason_on_reject"))
+            self.assertNotIn("skip_if_no_blocker", gate)
+
+    def test_default_pipeline_removes_ambiguous_or_duplicate_stages(self) -> None:
+        from engine.config import load_config
+
+        loaded = load_config(Path.cwd())
+        stage_ids = [stage["id"] for stage in loaded.config["pipeline"]]
+
+        self.assertNotIn("plan_confirm", stage_ids)
+        self.assertNotIn("architect", stage_ids)
+        self.assertNotIn("code_apply", stage_ids)
+        self.assertNotIn("risk_analysis", stage_ids)
+        self.assertNotIn("doc", stage_ids)
+
+
 if __name__ == "__main__":
     unittest.main()

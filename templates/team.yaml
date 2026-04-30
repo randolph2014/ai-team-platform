@@ -133,120 +133,161 @@ runner:
 pipeline:
   execution_mode: parallel
   stages:
-    - id: analyse
-      name: "需求分析"
-      parallel: false
-      agents: [requirements-analyst]
-      input: requirement
-      output:
-        requirements-analyst: requirement-analysis.md
-
-    - id: plan
-      name: "方案讨论"
-      parallel: true
-      agents: [brainstormer, devils-advocate]
-      input: [requirement, requirement-analysis.md, requirement-analysis.json]
-      output:
-        brainstormer: brainstorm.md
-        devils-advocate: gap-analysis.md
-
-    - id: plan_confirm
-      name: "方案确认"
-      type: human_review
-      input: [requirement, brainstorm.md, gap-analysis.md]
-      skip_if_no_blocker: true
-      blocker_source: gap-analysis.md
-      output_file: requirement-decisions.md
-
-    - id: architect
-      name: "方案定稿"
-      parallel: false
-      agents: [solution-architect]
-      input: [requirement, brainstorm.md, gap-analysis.md, requirement-decisions.md]
-      output:
-        solution-architect: solution-draft.md
-
-    - id: context
+    - id: context_scan
       name: "代码库扫描"
       type: context_scan
-      input: [solution-draft.md]
       output_file: codebase-context.md
+      output_json: codebase-context.json
 
-    - id: task_plan
-      name: "任务规划"
+    - id: requirement_analysis
+      name: "需求分析"
+      parallel: true
+      agents: [requirements-analyst, devils-advocate]
+      input: [requirement, codebase-context.md, codebase-context.json]
+      output:
+        requirements-analyst: requirement-analysis.md
+        devils-advocate: requirement-gap-analysis.md
+      required_artifacts:
+        - requirement-analysis.md
+        - requirement-gap-analysis.md
+
+    - id: requirement_synthesis
+      name: "需求综合定稿"
+      parallel: false
+      agents: [requirements-analyst]
+      input:
+        - requirement
+        - codebase-context.md
+        - codebase-context.json
+        - requirement-analysis.md
+        - requirement-gap-analysis.md
+        - human-decision-requirement*.json
+      output:
+        requirements-analyst: requirement-final.md
+      required_artifacts:
+        - requirement-final.md
+
+    - id: requirement_confirm
+      name: "需求人工确认"
+      type: human_review
+      input: [requirement-final.md]
+      output_file: human-decision-requirement.md
+      decision_file: human-decision-requirement.json
+      allow_auto_approve: false
+      requires_reason_on_reject: true
+      reject_to: requirement_synthesis
+
+    - id: planning
+      name: "方案与任务规划"
       parallel: false
       agents: [planner]
-      input: [requirement, solution-draft.md, codebase-context.md, requirement-analysis.json]
+      input:
+        - requirement-final.md
+        - requirement-final.json
+        - codebase-context.md
+        - codebase-context.json
+        - human-decision-requirement.json
+        - human-decision-task-plan*.json
       output:
         planner: task-plan.md
+      required_artifacts:
+        - task-plan.md
+
+    - id: task_plan_confirm
+      name: "任务规划人工确认"
+      type: human_review
+      input: [task-plan.md]
+      output_file: human-decision-task-plan.md
+      decision_file: human-decision-task-plan.json
+      allow_auto_approve: false
+      requires_reason_on_reject: true
+      reject_to: planning
 
     - id: develop
-      name: "开发"
+      name: "开发实施"
       parallel: false
       agents: [tech-lead]
-      input: [requirement, solution-draft.md, codebase-context.md, task-plan.md, task-plan.json]
+      input:
+        - requirement-final.md
+        - requirement-final.json
+        - codebase-context.md
+        - codebase-context.json
+        - task-plan.md
+        - task-plan.json
+        - human-decision-task-plan.json
+        - human-decision-acceptance*.json
       output:
-        tech-lead: tech-lead-output.md
-      loopback_to: develop
-      loopback_trigger: "error:"
-      max_retries: 3
-
-    - id: code_apply
-      name: "代码应用"
-      type: code_apply
-      input: [tech-lead-output.md]
+        tech-lead: implementation-report.md
+      required_artifacts:
+        - implementation-report.md
 
     - id: qa
-      name: "测试"
+      name: "自动测试"
       parallel: false
-      stop_parallel_on_first_error: false
       agents: [qa-automation]
-      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, "git-diff"]
+      input:
+        - requirement-final.md
+        - task-plan.md
+        - implementation-report.md
+        - git-diff
       output:
         qa-automation: test-report.md
+      required_artifacts:
+        - test-report.md
       loopback_to: develop
       loopback_trigger: ["FAILED", "ERROR", "失败", "exit code: 1", "退出码: 1"]
       max_retries: 2
 
     - id: review
-      name: "代码审查"
+      name: "代码审查与风险识别"
       parallel: false
       agents: [code-reviewer]
-      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, "git-diff"]
+      input:
+        - requirement-final.md
+        - task-plan.md
+        - implementation-report.md
+        - test-report.md
+        - git-diff
       output:
         code-reviewer: review-report.md
+      required_artifacts:
+        - review-report.md
       loopback_to: develop
       loopback_trigger: "Request Changes"
       max_retries: 2
 
-    - id: risk_analysis
-      name: "风险识别"
-      parallel: false
-      agents: [risk-analyst]
-      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, review-report.md, "git-diff"]
-      output:
-        risk-analyst: risk-report.md
-
-    - id: doc
-      name: "文档整理"
-      parallel: false
-      agents: [doc-writer]
-      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, review-report.md, risk-report.md, "git-diff"]
-      output:
-        doc-writer: doc-output.md
-
-    - id: accept
-      name: "人工验收"
+    - id: acceptance_confirm
+      name: "最终人工验收"
       type: human_review
-      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, review-report.md, risk-report.md, doc-output.md, "git-diff"]
+      input:
+        - requirement-final.md
+        - task-plan.md
+        - implementation-report.md
+        - test-report.md
+        - review-report.md
+        - git-diff
+      output_file: human-decision-acceptance.md
+      decision_file: human-decision-acceptance.json
+      allow_auto_approve: false
+      requires_reason_on_reject: true
+      reject_to: develop
 
     - id: retrospect
       name: "结果复盘"
       parallel: false
       agents: [retrospect]
-      input: [requirement, solution-draft.md, codebase-context.md, tech-lead-output.md, test-report.md, review-report.md, risk-report.md, doc-output.md, "git-diff"]
+      input:
+        - requirement-final.md
+        - task-plan.md
+        - implementation-report.md
+        - test-report.md
+        - review-report.md
+        - human-decision-acceptance.json
+        - git-diff
       output:
         retrospect: final-summary.md
+      required_artifacts:
+        - final-summary.md
 
 # Quality Gates — develop 阶段完成后自动运行。
 # 项目级 .ai/team.yaml 可覆盖此配置。
