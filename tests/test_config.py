@@ -462,6 +462,17 @@ class TestDefaultAgentCollaborationWorkflow(unittest.TestCase):
         self.assertNotIn("risk_analysis", stage_ids)
         self.assertNotIn("doc", stage_ids)
 
+    def test_default_agents_remove_post_development_risk_and_doc_roles(self) -> None:
+        from engine.config import load_config
+
+        loaded = load_config(Path.cwd())
+        agent_names = {agent["name"] for agent in loaded.config["agents"]}
+
+        self.assertNotIn("risk-analyst", agent_names)
+        self.assertNotIn("doc-writer", agent_names)
+        self.assertIn("code-reviewer", agent_names)
+        self.assertIn("planner", agent_names)
+
     def test_default_pipeline_declares_json_artifact_contracts(self) -> None:
         from engine.config import load_config
 

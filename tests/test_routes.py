@@ -187,6 +187,16 @@ class TestPipelinesRoutes(BaseRoutesTest):
         self.assertIn("id", data[0])
         self.assertIn("name", data[0])
 
+    def test_builtin_templates_use_current_collaboration_workflow(self) -> None:
+        """内置模板不应继续暴露 plan/architect/accept 等旧流程节点。"""
+        response = self.client.get("/api/pipelines/templates")
+        self.assertEqual(response.status_code, 200)
+
+        legacy_stages = {"plan", "architect", "context", "accept", "risk_analysis", "doc", "code_apply"}
+        for template in response.json():
+            stages = template.get("stages", [])
+            self.assertFalse(legacy_stages.intersection(stages), f"{template['id']} still exposes legacy stages")
+
     def test_create_pipeline_saves(self) -> None:
         """POST /api/pipelines 创建新流水线"""
         payload = {

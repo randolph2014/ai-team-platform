@@ -163,7 +163,6 @@ retrospect
 
 输出：
 
-- `solution-plan.md`
 - `solution-plan.json`
 - `task-plan.md`
 - `task-plan.json`
@@ -249,8 +248,8 @@ retrospect
 
 输出：
 
-- `final-summary.md`
-- `final-summary.json`
+- `retrospect-report.md`
+- `retrospect-report.json`
 
 ## 人工 Gate 规范
 
@@ -315,14 +314,14 @@ codebase-context.md / codebase-context.json
 requirement-analysis/*.md / requirement-analysis/*.json
 requirement-final.md / requirement-final.json
 human-decision-requirement.md / human-decision-requirement.json
-solution-plan.md / solution-plan.json
+solution-plan.json
 task-plan.md / task-plan.json
 human-decision-task-plan.md / human-decision-task-plan.json
 implementation-report.md / implementation-report.json
 test-report.md / test-report.json
 review-report.md / review-report.json
 human-decision-acceptance.md / human-decision-acceptance.json
-final-summary.md / final-summary.json
+retrospect-report.md / retrospect-report.json
 ```
 
 通用 artifact 字段：

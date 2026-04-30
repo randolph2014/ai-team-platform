@@ -280,9 +280,12 @@ pipeline:
         - human-decision-acceptance.json
         - git-diff
       output:
-        retrospect: final-summary.md
+        retrospect: retrospect-report.md
+      json_artifacts:
+        - retrospect-report.json
       required_artifacts:
-        - final-summary.md
+        - retrospect-report.md
+        - retrospect-report.json
 ```
 
 - [ ] **Step 4: Update `engine/config.py` fallback `DEFAULT_CONFIG`**
@@ -1242,7 +1245,7 @@ class TestPromptContracts(unittest.TestCase):
             "tech-lead.md": ["implementation-report.json", "git diff", "只修改"],
             "qa-automation.md": ["test-report.json", "acceptance_coverage"],
             "code-reviewer.md": ["review-report.json", "风险", "Request Changes"],
-            "retrospect.md": ["final-summary.json", "交付摘要"],
+            "retrospect.md": ["retrospect-report.json", "交付摘要"],
         }
         for filename, needles in expected.items():
             content = (prompt_dir / filename).read_text(encoding="utf-8")
@@ -1290,7 +1293,7 @@ Ensure it requires:
 
 ```text
 必须基于 requirement-final.json 和 codebase-context.json 输出：
-1. solution-plan.md / solution-plan.json
+1. solution-plan.json
 2. task-plan.md / task-plan.json
 
 task-plan.json 必须包含：

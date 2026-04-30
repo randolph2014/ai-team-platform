@@ -104,16 +104,6 @@ agents:
     role: reviewer
     prompt: agents/code-reviewer.md
 
-  - name: risk-analyst
-    runtime_id: auto
-    role: analyst
-    prompt: agents/risk-analyst.md
-
-  - name: doc-writer
-    runtime_id: auto
-    role: writer
-    prompt: agents/doc-writer.md
-
   - name: retrospect
     runtime_id: auto
     role: summarizer
