@@ -78,6 +78,23 @@ class QualityGateRun(BaseModel):
     duration_seconds: Optional[float] = None
 
 
+HumanDecisionValue = Literal["waiting", "approved", "rejected"]
+
+
+class HumanDecision(BaseModel):
+    stage_id: str
+    decision: HumanDecisionValue
+    reason: str = ""
+    required_changes: List[str] = Field(default_factory=list)
+    target_stage: Optional[str] = None
+    decided_by: str = "human"
+    decided_at: str = Field(default_factory=utc_now)
+
+    def validate_for_stage(self, requires_reason_on_reject: bool = True) -> None:
+        if self.decision == "rejected" and requires_reason_on_reject and not self.reason.strip():
+            raise ValueError("reject reason is required")
+
+
 class RequirementUnit(BaseModel):
     id: str
     title: str
@@ -163,6 +180,8 @@ class StageRun(BaseModel):
     output_dir: Optional[str] = None
     agents: List[AgentRun] = Field(default_factory=list)
     quality_gates: List[QualityGateRun] = Field(default_factory=list)
+    human_decision: Optional[HumanDecision] = None
+    loopback_to: Optional[str] = None
     error_message: Optional[str] = None
 
 
@@ -182,6 +201,7 @@ class RunReport(BaseModel):
     merge_result: Optional[Dict[str, Any]] = None
     stages: List[StageRun] = Field(default_factory=list)
     units: List[RequirementUnitProgress] = Field(default_factory=list)
+    human_decisions: List[HumanDecision] = Field(default_factory=list)
     artifacts: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     error_message: Optional[str] = None

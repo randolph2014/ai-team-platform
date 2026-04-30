@@ -22,7 +22,14 @@ from .config import (
 from .context_scanner import scan_codebase
 from .cost_tracker import CostTracker
 from .events import EventBus
-from .models import AgentDefinition, AgentRun, RequirementUnit, RequirementUnitProgress, RunReport, StageRun, model_to_dict, utc_now
+from .human_gate import (
+    is_hard_human_gate,
+    normalize_decision,
+    render_reject_feedback,
+    waiting_decision,
+    write_decision_artifacts,
+)
+from .models import AgentDefinition, AgentRun, HumanDecision, RequirementUnit, RequirementUnitProgress, RunReport, StageRun, model_to_dict, utc_now
 from .requirement_splitter import estimate_prompt_size, should_split, split_requirement
 from .runtimes import _cli_config_model, backfill_runtime_models, resolve_auto_cli, runtime_config
 from .truncate_utils import truncate_with_fallback
@@ -146,6 +153,7 @@ class Orchestrator:
         merge: bool = False,
         resume: bool = False,
         execution_mode: Optional[str] = None,
+        human_decision: Optional[HumanDecision] = None,
     ) -> RunReport:
         if execution_mode and execution_mode not in {"serial", "parallel", "auto"}:
             raise ConfigError("execution_mode must be one of: serial, parallel, auto")
@@ -182,6 +190,8 @@ class Orchestrator:
             started_at=utc_now(),
             warnings=self.config_warnings,
         )
+        if checkpoint:
+            report.human_decisions = self._load_human_decisions_from_checkpoint(checkpoint, report)
 
         # Resume 模式：恢复已完成的 stages
         completed_stages: List[str] = []
@@ -238,6 +248,7 @@ class Orchestrator:
                     completed_stages,
                     start,
                     execution_mode,
+                    human_decision=human_decision,
                     resume=resume,
                 )
             else:
@@ -253,6 +264,7 @@ class Orchestrator:
                     completed_stages=completed_stages,
                     start=start,
                     execution_mode=execution_mode,
+                    human_decision=human_decision,
                     resume=resume,
                 )
             if sequence_status == "waiting":
@@ -309,12 +321,14 @@ class Orchestrator:
         checkpoint_mode: str = "single",
         checkpoint_units: Optional[List[RequirementUnitProgress]] = None,
         unit_progress: Optional[RequirementUnitProgress] = None,
+        human_decision: Optional[HumanDecision] = None,
     ) -> str:
         stage_index_by_id = {stage.get("id"): index for index, stage in enumerate(stages)}
         loop_counts: Dict[str, int] = {}
         loopback_errors: Dict[str, List[str]] = {}
         index = 0
         extra_feedback = ""
+        pending_human_decision = human_decision
         skip_completed = resume
         max_duration_seconds = int(self.config.get("runner", {}).get("max_run_duration_seconds") or 7200)
         logger = get_logger("orchestrator", run_id=report.run_id)
@@ -343,7 +357,15 @@ class Orchestrator:
                     completed_stages.append(stage_id)
                 if unit_progress:
                     unit_progress.completed_stages = list(completed_stages)
-                self._save_checkpoint(report_dir, report.run_id, completed_stages, worktree_path, mode=checkpoint_mode, units=checkpoint_units)
+                self._save_checkpoint(
+                    report_dir,
+                    report.run_id,
+                    completed_stages,
+                    worktree_path,
+                    mode=checkpoint_mode,
+                    units=checkpoint_units,
+                    human_decisions=report.human_decisions,
+                )
                 index += 1
                 self._write_report(report, report_dir)
                 continue
@@ -352,14 +374,25 @@ class Orchestrator:
                 unit_progress.status = "in_progress"
                 unit_progress.current_stage = stage_id
                 unit_progress.completed_stages = list(completed_stages)
-                self._save_checkpoint(report_dir, report.run_id, completed_stages, worktree_path, mode=checkpoint_mode, units=checkpoint_units)
+                self._save_checkpoint(
+                    report_dir,
+                    report.run_id,
+                    completed_stages,
+                    worktree_path,
+                    mode=checkpoint_mode,
+                    units=checkpoint_units,
+                    human_decisions=report.human_decisions,
+                )
 
             stage_runs_to_append: List[StageRun]
             if stage.get("type") == "context_scan":
                 stage_run = self._run_context_stage(stage, report, artifact_dir, worktree_path)
                 stage_runs_to_append = [stage_run]
             elif stage.get("type") == "human_review":
-                stage_run = self._run_human_review_stage(stage, report, artifact_dir, yes=yes, reject=reject)
+                stage_decision = pending_human_decision
+                stage_run = self._run_human_review_stage(stage, report, artifact_dir, yes=yes, reject=reject, human_decision=stage_decision)
+                if stage_decision is not None and is_hard_human_gate(stage):
+                    pending_human_decision = None
                 stage_runs_to_append = [stage_run]
             elif stage.get("type") == "code_apply":
                 stage_run = self._run_code_apply_stage(stage, report, artifact_dir, worktree_path)
@@ -379,21 +412,64 @@ class Orchestrator:
             self._refresh_artifacts(report, report_dir)
             self._write_report(report, report_dir)
 
+            if stage_run.status == "waiting":
+                if unit_progress:
+                    unit_progress.current_stage = stage_id
+                self._save_checkpoint(
+                    report_dir,
+                    report.run_id,
+                    completed_stages,
+                    worktree_path,
+                    mode=checkpoint_mode,
+                    units=checkpoint_units,
+                    human_decisions=report.human_decisions,
+                )
+                return "waiting"
+
+            if stage_run.status not in {"completed", "skipped"}:
+                raise OrchestratorError(stage_run.error_message or f"Stage failed: {stage_id}")
+
+            if stage_run.human_decision and stage_run.human_decision.decision == "rejected":
+                target = stage_run.human_decision.target_stage
+                if not target or target not in stage_index_by_id:
+                    raise OrchestratorError(f"Human reject target not found: {target}")
+                count = self._human_reject_count(report, stage_id)
+                target_index = stage_index_by_id[target]
+                target_stage_ids = {s.get("id") for s in stages[target_index:]}
+                completed_stages[:] = [item for item in completed_stages if item not in target_stage_ids]
+                if unit_progress:
+                    unit_progress.completed_stages = list(completed_stages)
+                extra_feedback = render_reject_feedback(stage_run.human_decision, count)
+                feedback_file = artifact_dir / f"human-feedback-{stage_id}-{count}.md"
+                feedback_file.write_text(extra_feedback, encoding="utf-8")
+                self._save_checkpoint(
+                    report_dir,
+                    report.run_id,
+                    completed_stages,
+                    worktree_path,
+                    mode=checkpoint_mode,
+                    units=checkpoint_units,
+                    human_decisions=report.human_decisions,
+                )
+                self._write_report(report, report_dir)
+                index = target_index
+                continue
+
             if stage_run.status in {"completed", "skipped"}:
                 if stage_id not in completed_stages:
                     completed_stages.append(stage_id)
                 if unit_progress:
                     unit_progress.completed_stages = list(completed_stages)
                     unit_progress.current_stage = None
-                self._save_checkpoint(report_dir, report.run_id, completed_stages, worktree_path, mode=checkpoint_mode, units=checkpoint_units)
-            elif stage_run.status == "waiting":
-                if unit_progress:
-                    unit_progress.current_stage = stage_id
-                self._save_checkpoint(report_dir, report.run_id, completed_stages, worktree_path, mode=checkpoint_mode, units=checkpoint_units)
-                return "waiting"
-
-            if stage_run.status not in {"completed", "skipped"}:
-                raise OrchestratorError(stage_run.error_message or f"Stage failed: {stage_id}")
+                self._save_checkpoint(
+                    report_dir,
+                    report.run_id,
+                    completed_stages,
+                    worktree_path,
+                    mode=checkpoint_mode,
+                    units=checkpoint_units,
+                    human_decisions=report.human_decisions,
+                )
 
             output_content = self._stage_output_text(stage_run)
             if stage.get("loopback_to") and stage.get("loopback_trigger") and _triggered(output_content, stage.get("loopback_trigger")):
@@ -432,7 +508,15 @@ class Orchestrator:
                 extra_feedback = self._render_loopback_feedback(stage_id, stage_run, count, target)
                 feedback_file = artifact_dir / f"loopback-feedback-{stage_id}-{count}.md"
                 feedback_file.write_text(extra_feedback, encoding="utf-8")
-                self._save_checkpoint(report_dir, report.run_id, completed_stages, worktree_path, mode=checkpoint_mode, units=checkpoint_units)
+                self._save_checkpoint(
+                    report_dir,
+                    report.run_id,
+                    completed_stages,
+                    worktree_path,
+                    mode=checkpoint_mode,
+                    units=checkpoint_units,
+                    human_decisions=report.human_decisions,
+                )
                 self._write_report(report, report_dir)
                 index = target_index
                 continue
@@ -454,6 +538,7 @@ class Orchestrator:
         completed_stages: List[str],
         start: float,
         execution_mode: Optional[str],
+        human_decision: Optional[HumanDecision],
         resume: bool,
     ) -> str:
         unit_stages = self._unit_stages(stages)
@@ -483,7 +568,15 @@ class Orchestrator:
             (unit_dir / "requirement.md").write_text(unit.requirement_text, encoding="utf-8")
             (unit_dir / "unit.json").write_text(json.dumps(model_to_dict(unit), ensure_ascii=False, indent=2), encoding="utf-8")
             progress.status = "in_progress"
-            self._save_checkpoint(output_dir, report.run_id, completed_stages, worktree_path, mode="multi-unit", units=report.units)
+            self._save_checkpoint(
+                output_dir,
+                report.run_id,
+                completed_stages,
+                worktree_path,
+                mode="multi-unit",
+                units=report.units,
+                human_decisions=report.human_decisions,
+            )
             self._write_report(report, output_dir)
 
             try:
@@ -503,17 +596,34 @@ class Orchestrator:
                     checkpoint_mode="multi-unit",
                     checkpoint_units=report.units,
                     unit_progress=progress,
+                    human_decision=human_decision,
                 )
             except Exception:
                 progress.status = "failed"
-                self._save_checkpoint(output_dir, report.run_id, completed_stages, worktree_path, mode="multi-unit", units=report.units)
+                self._save_checkpoint(
+                    output_dir,
+                    report.run_id,
+                    completed_stages,
+                    worktree_path,
+                    mode="multi-unit",
+                    units=report.units,
+                    human_decisions=report.human_decisions,
+                )
                 raise
             if status == "waiting":
                 return "waiting"
             progress.status = "completed"
             progress.current_stage = None
             completed_unit_ids.add(unit.id)
-            self._save_checkpoint(output_dir, report.run_id, completed_stages, worktree_path, mode="multi-unit", units=report.units)
+            self._save_checkpoint(
+                output_dir,
+                report.run_id,
+                completed_stages,
+                worktree_path,
+                mode="multi-unit",
+                units=report.units,
+                human_decisions=report.human_decisions,
+            )
             self._write_report(report, output_dir)
 
         return "completed"
@@ -561,6 +671,34 @@ class Orchestrator:
         by_id = {item.get("unit_id"): RequirementUnitProgress(**item) for item in checkpoint.get("units", []) if isinstance(item, dict)}
         return [by_id.get(unit.id, RequirementUnitProgress(unit_id=unit.id, status="pending")) for unit in units]
 
+    def _human_reject_count(self, report: RunReport, stage_id: str) -> int:
+        return sum(
+            1
+            for decision in report.human_decisions
+            if decision.stage_id == stage_id and decision.decision == "rejected"
+        )
+
+    def _load_human_decisions_from_checkpoint(self, checkpoint: Dict[str, Any], report: RunReport) -> List[HumanDecision]:
+        decisions: List[HumanDecision] = []
+        raw_items = checkpoint.get("human_decisions", [])
+        if raw_items is None:
+            return decisions
+        if not isinstance(raw_items, list):
+            report.warnings.append("checkpoint human_decisions is malformed and was skipped")
+            return decisions
+        for index, item in enumerate(raw_items):
+            try:
+                decision = (
+                    HumanDecision.model_validate(item)
+                    if hasattr(HumanDecision, "model_validate")
+                    else HumanDecision(**item)
+                )
+            except Exception as exc:
+                report.warnings.append(f"checkpoint human_decisions[{index}] is malformed and was skipped: {exc}")
+                continue
+            decisions.append(decision)
+        return decisions
+
     def _save_checkpoint(
         self,
         output_dir: Path,
@@ -569,6 +707,7 @@ class Orchestrator:
         worktree_path: Optional[Path],
         mode: str = "single",
         units: Optional[List[RequirementUnitProgress]] = None,
+        human_decisions: Optional[List[HumanDecision]] = None,
     ) -> None:
         """保存 checkpoint 到文件"""
         checkpoint_data = {
@@ -576,6 +715,7 @@ class Orchestrator:
             "mode": mode,
             "completed_stages": completed_stages,
             "units": [model_to_dict(unit) for unit in units] if units is not None else [],
+            "human_decisions": [model_to_dict(item) for item in human_decisions or []],
             "worktree_path": str(worktree_path) if worktree_path else None,
             "timestamp": utc_now(),
         }
@@ -670,11 +810,55 @@ class Orchestrator:
         self.bus.emit("stage:completed", report.run_id, stage_id=stage_id, status=stage_run.status, duration=stage_run.duration_seconds)
         return stage_run
 
-    def _run_human_review_stage(self, stage: Dict[str, Any], report: RunReport, output_dir: Path, yes: bool, reject: bool = False) -> StageRun:
+    def _run_human_review_stage(
+        self,
+        stage: Dict[str, Any],
+        report: RunReport,
+        output_dir: Path,
+        yes: bool,
+        reject: bool = False,
+        human_decision: Optional[HumanDecision] = None,
+    ) -> StageRun:
         stage_id = stage.get("id", "accept")
         stage_run = StageRun(stage_id=stage_id, stage_name=stage.get("name", stage_id), status="running", type="human_review", started_at=utc_now())
         start = time.monotonic()
         self.bus.emit("stage:started", report.run_id, stage_id=stage_id, stage_name=stage_run.stage_name, iteration=stage_run.iteration)
+        if is_hard_human_gate(stage):
+            if human_decision is None:
+                decision = waiting_decision(stage)
+                write_decision_artifacts(stage, output_dir, decision)
+                stage_run.status = "waiting"
+                stage_run.human_decision = decision
+                stage_run.completed_at = utc_now()
+                stage_run.duration_seconds = _duration(start)
+                self.bus.emit("stage:completed", report.run_id, stage_id=stage_id, status=stage_run.status, duration=stage_run.duration_seconds)
+                return stage_run
+
+            try:
+                decision = normalize_decision(stage, human_decision)
+            except ValueError as exc:
+                stage_run.status = "failed"
+                stage_run.error_message = str(exc)
+                stage_run.completed_at = utc_now()
+                stage_run.duration_seconds = _duration(start)
+                self.bus.emit("stage:completed", report.run_id, stage_id=stage_id, status=stage_run.status, duration=stage_run.duration_seconds)
+                return stage_run
+
+            stage_run.human_decision = decision
+            report.human_decisions.append(decision)
+            write_decision_artifacts(stage, output_dir, decision, history_index=len(report.human_decisions))
+            if decision.decision == "approved":
+                stage_run.status = "completed"
+            elif decision.decision == "rejected":
+                stage_run.status = "completed"
+                stage_run.loopback_to = decision.target_stage
+            else:
+                stage_run.status = "waiting"
+            stage_run.completed_at = utc_now()
+            stage_run.duration_seconds = _duration(start)
+            self.bus.emit("stage:completed", report.run_id, stage_id=stage_id, status=stage_run.status, duration=stage_run.duration_seconds)
+            return stage_run
+
         blocker_content = ""
         if stage.get("skip_if_no_blocker"):
             blocker_source = stage.get("blocker_source")

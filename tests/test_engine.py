@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 from engine.config import load_config, resolve_prompt_path, agent_map
 from engine.context_scanner import ContextScanner, is_sensitive_path
+from engine.human_gate import normalize_decision
+from engine.models import HumanDecision
 from engine.orchestrator import Orchestrator, load_report, find_run_reports
 from engine.quality_gates import run_quality_gate
 
@@ -1126,3 +1128,303 @@ worktree:
             self.assertEqual(data["mode"], "multi-unit")
             self.assertEqual(data["units"][1]["unit_id"], "unit-2")
             self.assertEqual(data["units"][1]["current_stage"], "qa")
+
+
+class TestHardHumanGateWorkflow(unittest.TestCase):
+    def _write_config(self, root: Path) -> Path:
+        config = root / "team.yaml"
+        config.write_text(
+            """
+runtimes:
+  Req:
+    cli: mock
+    response: "final requirement"
+  Plan:
+    cli: mock
+    response: "task plan"
+agents:
+  - name: req
+    runtime_id: Req
+    role: analyst
+    prompt: agents/req.md
+  - name: planner
+    runtime_id: Plan
+    role: planner
+    prompt: agents/planner.md
+pipeline:
+  - id: requirement_synthesis
+    name: Requirement Synthesis
+    agents: [req]
+    input: requirement
+    output:
+      req: requirement-final.md
+  - id: requirement_confirm
+    name: Requirement Confirm
+    type: human_review
+    output_file: human-decision-requirement.md
+    decision_file: human-decision-requirement.json
+    allow_auto_approve: false
+    requires_reason_on_reject: true
+    reject_to: requirement_synthesis
+  - id: planning
+    name: Planning
+    agents: [planner]
+    input: [requirement-final.md, human-decision-requirement.json]
+    output:
+      planner: task-plan.md
+worktree:
+  enabled: false
+""",
+            encoding="utf-8",
+        )
+        (root / "agents").mkdir()
+        (root / "agents" / "req.md").write_text("You finalize requirements.", encoding="utf-8")
+        (root / "agents" / "planner.md").write_text("You plan tasks.", encoding="utf-8")
+        return config
+
+    def test_hard_human_gate_waits_even_when_yes_true(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_config(root)
+
+            report = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-waits", yes=True)
+
+            self.assertEqual(report.status, "waiting")
+            gate = report.stages[-1]
+            self.assertEqual(gate.stage_id, "requirement_confirm")
+            self.assertEqual(gate.status, "waiting")
+            output_dir = Path(report.output_dir)
+            self.assertTrue((output_dir / "checkpoint.json").exists())
+            decision = json.loads((output_dir / "human-decision-requirement.json").read_text(encoding="utf-8"))
+            self.assertEqual(decision["decision"], "waiting")
+
+    def test_reject_decision_requires_reason_and_loops_back_to_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_config(root)
+            waiting = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-reject")
+            self.assertEqual(waiting.status, "waiting")
+
+            decision = HumanDecision(
+                stage_id="requirement_confirm",
+                decision="rejected",
+                reason="需求没有说明登录失败提示",
+                required_changes=["补充登录失败提示验收标准"],
+                target_stage="requirement_synthesis",
+            )
+            resumed = Orchestrator(root, config_path=str(config)).run(
+                "ship auth",
+                run_id="gate-reject",
+                resume=True,
+                human_decision=decision,
+            )
+
+            self.assertEqual(resumed.status, "waiting")
+            stage_ids = [stage.stage_id for stage in resumed.stages]
+            self.assertGreaterEqual(stage_ids.count("requirement_synthesis"), 2)
+            feedback = Path(resumed.output_dir) / "human-feedback-requirement_confirm-1.md"
+            self.assertTrue(feedback.exists())
+            self.assertIn("需求没有说明登录失败提示", feedback.read_text(encoding="utf-8"))
+
+    def test_reject_decision_target_must_match_stage_reject_to(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_config(root)
+            waiting = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-invalid-target")
+            self.assertEqual(waiting.status, "waiting")
+
+            decision = HumanDecision(
+                stage_id="requirement_confirm",
+                decision="rejected",
+                reason="需求没有说明登录失败提示",
+                target_stage="planning",
+            )
+            resumed = Orchestrator(root, config_path=str(config)).run(
+                "ship auth",
+                run_id="gate-invalid-target",
+                resume=True,
+                human_decision=decision,
+            )
+
+            self.assertEqual(resumed.status, "failed")
+            self.assertEqual(resumed.stages[-1].stage_id, "requirement_confirm")
+            self.assertEqual(resumed.stages[-1].status, "failed")
+            self.assertIn("target_stage", resumed.stages[-1].error_message or "")
+            self.assertIn("reject_to", resumed.stages[-1].error_message or "")
+            self.assertNotIn("planning", [stage.stage_id for stage in resumed.stages])
+
+    def test_normalize_decision_does_not_mutate_input(self) -> None:
+        stage = {"id": "requirement_confirm", "type": "human_review", "reject_to": "requirement_synthesis"}
+        original = HumanDecision(
+            stage_id="requirement_confirm",
+            decision="rejected",
+            reason="需求没有说明登录失败提示",
+            required_changes=["补充登录失败提示验收标准"],
+        )
+
+        normalized = normalize_decision(stage, original)
+        original.required_changes.append("补充账号锁定提示")
+
+        self.assertEqual(normalized.target_stage, "requirement_synthesis")
+        self.assertIsNone(original.target_stage)
+        self.assertEqual(normalized.required_changes, ["补充登录失败提示验收标准"])
+        self.assertIsNot(normalized.required_changes, original.required_changes)
+
+    def test_multiple_rejects_keep_distinct_feedback_and_decision_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_config(root)
+            waiting = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-multi-reject")
+            self.assertEqual(waiting.status, "waiting")
+
+            first = HumanDecision(
+                stage_id="requirement_confirm",
+                decision="rejected",
+                reason="第一次拒绝：缺少登录失败提示",
+                required_changes=["补充登录失败提示"],
+                target_stage="requirement_synthesis",
+            )
+            waiting_again = Orchestrator(root, config_path=str(config)).run(
+                "ship auth",
+                run_id="gate-multi-reject",
+                resume=True,
+                human_decision=first,
+            )
+            self.assertEqual(waiting_again.status, "waiting")
+
+            second = HumanDecision(
+                stage_id="requirement_confirm",
+                decision="rejected",
+                reason="第二次拒绝：缺少账号锁定提示",
+                required_changes=["补充账号锁定提示"],
+                target_stage="requirement_synthesis",
+            )
+            waiting_third = Orchestrator(root, config_path=str(config)).run(
+                "ship auth",
+                run_id="gate-multi-reject",
+                resume=True,
+                human_decision=second,
+            )
+
+            self.assertEqual(waiting_third.status, "waiting")
+            output_dir = Path(waiting_third.output_dir)
+            self.assertEqual(
+                [item.reason for item in waiting_third.human_decisions],
+                ["第一次拒绝：缺少登录失败提示", "第二次拒绝：缺少账号锁定提示"],
+            )
+            checkpoint = json.loads((output_dir / "checkpoint.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["reason"] for item in checkpoint["human_decisions"]],
+                ["第一次拒绝：缺少登录失败提示", "第二次拒绝：缺少账号锁定提示"],
+            )
+
+            feedback_files = sorted(output_dir.glob("human-feedback-requirement_confirm-*.md"))
+            self.assertGreaterEqual(len(feedback_files), 2)
+            feedback_contents = [path.read_text(encoding="utf-8") for path in feedback_files]
+            self.assertTrue(any("第一次拒绝：缺少登录失败提示" in content for content in feedback_contents))
+            self.assertTrue(any("第二次拒绝：缺少账号锁定提示" in content for content in feedback_contents))
+
+            history_files = sorted(output_dir.glob("human-decision-requirement-*.json"))
+            self.assertGreaterEqual(len(history_files), 2)
+            history_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in history_files]
+            rejected_reasons = [item.get("reason") for item in history_payloads if item.get("decision") == "rejected"]
+            self.assertIn("第一次拒绝：缺少登录失败提示", rejected_reasons)
+            self.assertIn("第二次拒绝：缺少账号锁定提示", rejected_reasons)
+
+    def test_malformed_checkpoint_human_decisions_are_skipped_with_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_config(root)
+            waiting = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-malformed-history")
+            self.assertEqual(waiting.status, "waiting")
+            checkpoint_path = Path(waiting.output_dir) / "checkpoint.json"
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            checkpoint["human_decisions"] = [
+                {"stage_id": "requirement_confirm", "decision": "approved", "reason": "old ok"},
+                {"stage_id": "requirement_confirm", "decision": "invalid"},
+                "not-a-dict",
+            ]
+            checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            approved = HumanDecision(stage_id="requirement_confirm", decision="approved", reason="继续")
+            report = Orchestrator(root, config_path=str(config)).run(
+                "ship auth",
+                run_id="gate-malformed-history",
+                resume=True,
+                human_decision=approved,
+            )
+
+            self.assertEqual(report.status, "completed")
+            self.assertIn("planning", [stage.stage_id for stage in report.stages])
+            warning_text = "\n".join(report.warnings)
+            self.assertIn("checkpoint", warning_text)
+            self.assertIn("human_decisions", warning_text)
+            self.assertEqual([item.decision for item in report.human_decisions], ["approved", "approved"])
+
+    def test_reject_decision_does_not_save_gate_completed_before_loopback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_config(root)
+            waiting = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-checkpoint-order")
+            self.assertEqual(waiting.status, "waiting")
+            snapshots = []
+            original_save_checkpoint = Orchestrator._save_checkpoint
+
+            def capture_save_checkpoint(self, output_dir, run_id, completed_stages, worktree_path, **kwargs):
+                snapshots.append(list(completed_stages))
+                return original_save_checkpoint(self, output_dir, run_id, completed_stages, worktree_path, **kwargs)
+
+            decision = HumanDecision(
+                stage_id="requirement_confirm",
+                decision="rejected",
+                reason="需求没有说明登录失败提示",
+                target_stage="requirement_synthesis",
+            )
+            with patch.object(Orchestrator, "_save_checkpoint", new=capture_save_checkpoint):
+                resumed = Orchestrator(root, config_path=str(config)).run(
+                    "ship auth",
+                    run_id="gate-checkpoint-order",
+                    resume=True,
+                    human_decision=decision,
+                )
+
+            self.assertEqual(resumed.status, "waiting")
+            self.assertTrue(snapshots)
+            self.assertFalse(any("requirement_confirm" in snapshot for snapshot in snapshots))
+
+    def test_resume_preserves_human_decision_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_config(root)
+            waiting = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-history")
+            self.assertEqual(waiting.status, "waiting")
+
+            rejected = HumanDecision(
+                stage_id="requirement_confirm",
+                decision="rejected",
+                reason="需求没有说明登录失败提示",
+                required_changes=["补充登录失败提示验收标准"],
+                target_stage="requirement_synthesis",
+            )
+            waiting_again = Orchestrator(root, config_path=str(config)).run(
+                "ship auth",
+                run_id="gate-history",
+                resume=True,
+                human_decision=rejected,
+            )
+            self.assertEqual(waiting_again.status, "waiting")
+            self.assertEqual([item.decision for item in waiting_again.human_decisions], ["rejected"])
+            checkpoint = json.loads((Path(waiting_again.output_dir) / "checkpoint.json").read_text(encoding="utf-8"))
+            self.assertEqual([item["decision"] for item in checkpoint["human_decisions"]], ["rejected"])
+
+            approved = HumanDecision(stage_id="requirement_confirm", decision="approved", reason="已补充")
+            completed = Orchestrator(root, config_path=str(config)).run(
+                "ship auth",
+                run_id="gate-history",
+                resume=True,
+                human_decision=approved,
+            )
+
+            self.assertEqual(completed.status, "completed")
+            self.assertIn("planning", [stage.stage_id for stage in completed.stages])
+            self.assertEqual([item.decision for item in completed.human_decisions], ["rejected", "approved"])
