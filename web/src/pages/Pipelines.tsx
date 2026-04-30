@@ -6,15 +6,33 @@ import type { Pipeline, PipelineTemplate } from '../lib/types';
 const DEFAULT_YAML = `name: my-pipeline
 description: A new pipeline
 stages:
-  - id: plan
-    name: 方案讨论
-    agents: [brainstormer, devils-advocate]
+  - id: context_scan
+    name: 代码库扫描
+    type: context_scan
+  - id: requirement_synthesis
+    name: 需求综合定稿
+    agents: [requirements-analyst]
+  - id: requirement_confirm
+    name: 需求人工确认
+    type: human_review
+  - id: planning
+    name: 方案与任务规划
+    agents: [planner]
+  - id: task_plan_confirm
+    name: 任务规划人工确认
+    type: human_review
   - id: develop
-    name: 开发
+    name: 开发实施
     agents: [tech-lead]
-  - id: verify
-    name: 测试审查
-    agents: [qa, reviewer]
+  - id: qa
+    name: 自动测试
+    agents: [qa-automation]
+  - id: review
+    name: 代码审查与风险识别
+    agents: [code-reviewer]
+  - id: acceptance_confirm
+    name: 最终人工验收
+    type: human_review
 `;
 
 function cleanScalar(value: string): string {
@@ -40,10 +58,30 @@ function parseInlineList(value: string): string[] {
     .filter(Boolean);
 }
 
+const ARRAY_STAGE_FIELDS = new Set(['agents', 'input', 'json_artifacts', 'required_artifacts', 'loopback_trigger']);
+const BOOLEAN_STAGE_FIELDS = new Set(['is_parallel', 'parallel', 'allow_auto_approve', 'allow_auto_skip', 'requires_reason_on_reject']);
+const NUMBER_STAGE_FIELDS = new Set(['max_retries']);
+
+function parseStageFieldValue(key: string, value: string): unknown {
+  const trimmed = value.trim();
+  if (ARRAY_STAGE_FIELDS.has(key)) {
+    return parseInlineList(trimmed);
+  }
+  if (BOOLEAN_STAGE_FIELDS.has(key)) {
+    return trimmed === 'true';
+  }
+  if (NUMBER_STAGE_FIELDS.has(key)) {
+    const numberValue = Number(trimmed);
+    return Number.isFinite(numberValue) ? numberValue : cleanScalar(trimmed);
+  }
+  return cleanScalar(trimmed);
+}
+
 function parsePipelineYaml(text: string): Record<string, unknown> {
   const config: Record<string, unknown> = {};
   const stages: Array<Record<string, unknown>> = [];
   let currentStage: Record<string, unknown> | null = null;
+  let nestedKey: string | null = null;
 
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.replace(/\s+$/, '');
@@ -59,18 +97,38 @@ function parsePipelineYaml(text: string): Record<string, unknown> {
     if (stageStart) {
       currentStage = { id: cleanScalar(stageStart[1]), agents: [] };
       stages.push(currentStage);
+      nestedKey = null;
       continue;
     }
 
     const stageField = line.match(/^\s{4}([a-zA-Z_][\w-]*):\s*(.*)$/);
     if (stageField && currentStage) {
       const [, key, value] = stageField;
-      if (key === 'agents' || key === 'input') {
-        currentStage[key] = parseInlineList(value);
-      } else if (key === 'is_parallel' || key === 'parallel') {
-        currentStage[key === 'parallel' ? 'is_parallel' : key] = value.trim() === 'true';
+      nestedKey = null;
+      if (!value.trim()) {
+        currentStage[key] = ARRAY_STAGE_FIELDS.has(key) ? [] : {};
+        nestedKey = key;
+      } else if (key === 'parallel') {
+        currentStage.parallel = value.trim() === 'true';
+        currentStage.is_parallel = value.trim() === 'true';
       } else {
-        currentStage[key] = cleanScalar(value);
+        currentStage[key] = parseStageFieldValue(key, value);
+      }
+      continue;
+    }
+
+    const nestedListItem = line.match(/^\s{6}-\s+(.+)$/);
+    if (nestedListItem && currentStage && nestedKey && Array.isArray(currentStage[nestedKey])) {
+      (currentStage[nestedKey] as string[]).push(cleanScalar(nestedListItem[1]));
+      continue;
+    }
+
+    const nestedField = line.match(/^\s{6}([a-zA-Z_][\w-]*):\s*(.*)$/);
+    if (nestedField && currentStage && nestedKey) {
+      const nestedValue = currentStage[nestedKey];
+      if (nestedValue && typeof nestedValue === 'object' && !Array.isArray(nestedValue)) {
+        const [, key, value] = nestedField;
+        (nestedValue as Record<string, unknown>)[key] = cleanScalar(value);
       }
     }
   }
@@ -82,12 +140,49 @@ function parsePipelineYaml(text: string): Record<string, unknown> {
   return config;
 }
 
+function cloneConfig(config: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(config)) as Record<string, unknown>;
+}
+
+function templateConfig(template: PipelineTemplate): Record<string, unknown> {
+  if (template.yaml_config) {
+    return cloneConfig(template.yaml_config);
+  }
+  return {
+    name: template.name,
+    description: template.description,
+    version: '1.0',
+    stages: template.stages.map((stage) => ({ id: stage, name: stage, agents: [] })),
+  };
+}
+
+function stringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(String);
+  }
+  return typeof value === 'string' && value ? [value] : [];
+}
+
+function writeArrayField(lines: string[], key: string, value: unknown) {
+  const items = stringArray(value);
+  if (items.length > 0) {
+    lines.push(`    ${key}: [${items.join(', ')}]`);
+  }
+}
+
+function writeScalarField(lines: string[], key: string, value: unknown) {
+  if (value !== undefined && value !== null && value !== '') {
+    lines.push(`    ${key}: ${String(value)}`);
+  }
+}
+
 function pipelineConfigToYaml(config: Record<string, unknown>, fallbackName: string, fallbackDescription: string): string {
   const lines: string[] = [];
   const name = typeof config.name === 'string' ? config.name : fallbackName;
   const description = typeof config.description === 'string' ? config.description : fallbackDescription;
   lines.push(`name: ${name}`);
   if (description) lines.push(`description: ${description}`);
+  if (typeof config.version === 'string') lines.push(`version: ${config.version}`);
   lines.push('stages:');
   const stages = Array.isArray(config.stages) ? config.stages : [];
   for (const stage of stages) {
@@ -97,15 +192,32 @@ function pipelineConfigToYaml(config: Record<string, unknown>, fallbackName: str
     if (!id) continue;
     lines.push(`  - id: ${id}`);
     if (typeof record.name === 'string') lines.push(`    name: ${record.name}`);
-    if (Array.isArray(record.agents) && record.agents.length > 0) {
-      lines.push(`    agents: [${record.agents.join(', ')}]`);
+    writeScalarField(lines, 'type', record.type);
+    writeArrayField(lines, 'agents', record.agents);
+    if (record.parallel === true || record.is_parallel === true) lines.push('    parallel: true');
+    writeArrayField(lines, 'input', record.input);
+    if (record.output && typeof record.output === 'object' && !Array.isArray(record.output)) {
+      lines.push('    output:');
+      for (const [key, value] of Object.entries(record.output)) {
+        lines.push(`      ${key}: ${String(value)}`);
+      }
     }
-    if (record.is_parallel === true) lines.push('    is_parallel: true');
-    if (Array.isArray(record.input) && record.input.length > 0) {
-      lines.push(`    input: [${record.input.join(', ')}]`);
-    } else if (typeof record.input === 'string') {
-      lines.push(`    input: ${record.input}`);
+    writeArrayField(lines, 'json_artifacts', record.json_artifacts);
+    writeArrayField(lines, 'required_artifacts', record.required_artifacts);
+    writeScalarField(lines, 'output_file', record.output_file);
+    writeScalarField(lines, 'output_json', record.output_json);
+    writeScalarField(lines, 'decision_file', record.decision_file);
+    writeScalarField(lines, 'allow_auto_approve', record.allow_auto_approve);
+    writeScalarField(lines, 'allow_auto_skip', record.allow_auto_skip);
+    writeScalarField(lines, 'requires_reason_on_reject', record.requires_reason_on_reject);
+    writeScalarField(lines, 'reject_to', record.reject_to);
+    writeScalarField(lines, 'loopback_to', record.loopback_to);
+    if (Array.isArray(record.loopback_trigger)) {
+      writeArrayField(lines, 'loopback_trigger', record.loopback_trigger);
+    } else {
+      writeScalarField(lines, 'loopback_trigger', record.loopback_trigger);
     }
+    writeScalarField(lines, 'max_retries', record.max_retries);
   }
   return lines.length > 2 ? `${lines.join('\n')}\n` : DEFAULT_YAML;
 }
@@ -117,11 +229,7 @@ function pipelineToYaml(pipeline: Pipeline | null): string {
 
 function templateToYaml(template: PipelineTemplate): string {
   return pipelineConfigToYaml(
-    {
-      name: template.name,
-      description: template.description,
-      stages: template.stages.map((stage) => ({ id: stage, name: stage })),
-    },
+    templateConfig(template),
     template.name,
     template.description,
   );
@@ -234,7 +342,7 @@ export function Pipelines() {
       id: template.id,
       name: template.name,
       description: template.description,
-      yaml_config: parsePipelineYaml(templateToYaml(template)),
+      yaml_config: templateConfig(template),
       stage_count: template.stages.length,
     };
     setEditingPipeline(pipelineFromTemplate);

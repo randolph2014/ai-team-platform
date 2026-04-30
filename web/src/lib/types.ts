@@ -165,6 +165,7 @@ export interface PipelineTemplate {
   name: string;
   description: string;
   stages: string[];
+  yaml_config?: Record<string, unknown>;
 }
 
 export interface Webhook {

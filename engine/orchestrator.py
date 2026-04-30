@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 import time
 import uuid
@@ -11,8 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from .agent_runner import AgentRunner
-from .artifact_contracts import has_artifact_validation_failure, validate_required_artifacts
-from .code_applier import CodeApplier
+from .artifact_contracts import has_artifact_validation_failure, stage_schema_hint, validate_required_artifacts
 from .config import (
     ConfigError,
     agent_map,
@@ -20,7 +20,7 @@ from .config import (
     read_prompt,
     validate_production_config,
 )
-from .context_scanner import scan_codebase
+from .context_scanner import scan_codebase, scan_to_json
 from .cost_tracker import CostTracker
 from .events import EventBus
 from .human_gate import (
@@ -218,8 +218,18 @@ class Orchestrator:
             report.worktree_path = str(worktree_path)
             self._write_report(report, output_dir)
 
+        all_stages = list(self.config.get("pipeline", []))
         skip_set = set(skip_stages or [])
-        stages = [stage for stage in self.config.get("pipeline", []) if not only_stage or stage.get("id") == only_stage]
+        selection_error = self._validate_stage_selection(all_stages, only_stage, skip_set)
+        if selection_error:
+            report.status = "failed"
+            report.error_message = selection_error
+            report.completed_at = utc_now()
+            report.duration_seconds = _duration(start)
+            record_run("failed")
+            self._write_report(report, output_dir)
+            return report
+        stages = [stage for stage in all_stages if not only_stage or stage.get("id") == only_stage]
         split_units: List[RequirementUnit] = []
         if resume and checkpoint and checkpoint.get("mode") == "multi-unit":
             split_units = self._load_requirement_units(output_dir)
@@ -238,7 +248,7 @@ class Orchestrator:
 
         try:
             if split_units:
-                sequence_status = self._run_requirement_units(
+                sequence_status = self._run_multi_unit_pipeline(
                     split_units,
                     stages,
                     report,
@@ -324,8 +334,10 @@ class Orchestrator:
         checkpoint_units: Optional[List[RequirementUnitProgress]] = None,
         unit_progress: Optional[RequirementUnitProgress] = None,
         human_decision: Optional[HumanDecision] = None,
+        external_reject_targets: Optional[set[str]] = None,
     ) -> str:
         stage_index_by_id = {stage.get("id"): index for index, stage in enumerate(stages)}
+        external_reject_targets = external_reject_targets or set()
         loop_counts: Dict[str, int] = {}
         loopback_errors: Dict[str, List[str]] = {}
         index = 0
@@ -397,7 +409,16 @@ class Orchestrator:
                     pending_human_decision = None
                 stage_runs_to_append = [stage_run]
             elif stage.get("type") == "code_apply":
-                stage_run = self._run_code_apply_stage(stage, report, artifact_dir, worktree_path)
+                stage_run = StageRun(
+                    stage_id=stage_id,
+                    stage_name=stage.get("name", stage_id),
+                    status="failed",
+                    type="code_apply",
+                    error_message="code_apply stage type is deprecated; use develop to implement code changes directly",
+                    started_at=utc_now(),
+                    completed_at=utc_now(),
+                    duration_seconds=0,
+                )
                 stage_runs_to_append = [stage_run]
             else:
                 cwd = self._stage_cwd(stage_id, worktree_path)
@@ -433,17 +454,31 @@ class Orchestrator:
 
             if stage_run.human_decision and stage_run.human_decision.decision == "rejected":
                 target = stage_run.human_decision.target_stage
-                if not target or target not in stage_index_by_id:
+                if not target:
                     raise OrchestratorError(f"Human reject target not found: {target}")
                 count = self._human_reject_count(report, stage_id)
+                extra_feedback = render_reject_feedback(stage_run.human_decision, count)
+                feedback_file = artifact_dir / f"human-feedback-{stage_id}-{count}.md"
+                feedback_file.write_text(extra_feedback, encoding="utf-8")
+                if target not in stage_index_by_id:
+                    if target in external_reject_targets:
+                        self._save_checkpoint(
+                            report_dir,
+                            report.run_id,
+                            completed_stages,
+                            worktree_path,
+                            mode=checkpoint_mode,
+                            units=checkpoint_units,
+                            human_decisions=report.human_decisions,
+                        )
+                        self._write_report(report, report_dir)
+                        return f"loopback:{stage_id}:{target}"
+                    raise OrchestratorError(f"Human reject target not found: {target}")
                 target_index = stage_index_by_id[target]
                 target_stage_ids = {s.get("id") for s in stages[target_index:]}
                 completed_stages[:] = [item for item in completed_stages if item not in target_stage_ids]
                 if unit_progress:
                     unit_progress.completed_stages = list(completed_stages)
-                extra_feedback = render_reject_feedback(stage_run.human_decision, count)
-                feedback_file = artifact_dir / f"human-feedback-{stage_id}-{count}.md"
-                feedback_file.write_text(extra_feedback, encoding="utf-8")
                 self._save_checkpoint(
                     report_dir,
                     report.run_id,
@@ -527,6 +562,151 @@ class Orchestrator:
 
         return "completed"
 
+    def _validate_stage_selection(self, stages: List[Dict[str, Any]], only_stage: Optional[str], skip_set: set) -> Optional[str]:
+        hard_gate_ids = {str(stage.get("id")) for stage in stages if is_hard_human_gate(stage)}
+        if not hard_gate_ids:
+            return None
+        if only_stage:
+            gates = ", ".join(sorted(hard_gate_ids))
+            return f"only_stage cannot be used because this pipeline contains hard human gates: {gates}"
+        skipped_hard_gates = hard_gate_ids.intersection(skip_set)
+        if skipped_hard_gates:
+            return f"skip_stages cannot skip hard human gates: {', '.join(sorted(skipped_hard_gates))}"
+        return None
+
+    def _run_multi_unit_pipeline(
+        self,
+        units: List[RequirementUnit],
+        stages: List[Dict[str, Any]],
+        report: RunReport,
+        output_dir: Path,
+        worktree_path: Optional[Path],
+        skip_set: set,
+        yes: bool,
+        reject: bool,
+        completed_stages: List[str],
+        start: float,
+        execution_mode: Optional[str],
+        human_decision: Optional[HumanDecision],
+        resume: bool,
+    ) -> str:
+        pre_stages, unit_stages, post_stages = self._partition_multi_unit_stages(stages)
+
+        if pre_stages:
+            status = self._run_stage_sequence(
+                pre_stages,
+                report,
+                artifact_dir=output_dir,
+                report_dir=output_dir,
+                worktree_path=worktree_path,
+                skip_set=skip_set,
+                yes=yes,
+                reject=reject,
+                completed_stages=completed_stages,
+                start=start,
+                execution_mode=execution_mode,
+                human_decision=self._decision_for_stages(human_decision, pre_stages),
+                resume=resume,
+                checkpoint_mode="multi-unit",
+                checkpoint_units=report.units,
+            )
+            if status == "waiting":
+                return status
+
+        unit_stage_ids = {str(stage.get("id")) for stage in unit_stages}
+        while True:
+            status = self._run_requirement_units(
+                units,
+                unit_stages,
+                report,
+                output_dir,
+                worktree_path,
+                skip_set,
+                yes,
+                reject,
+                completed_stages,
+                start,
+                execution_mode,
+                human_decision=self._decision_for_stages(human_decision, unit_stages),
+                resume=resume,
+            )
+            if status == "waiting":
+                return status
+
+            self._write_unit_summary_artifacts(output_dir, report.units)
+            for stage in unit_stages:
+                stage_id = str(stage.get("id"))
+                if stage_id not in completed_stages:
+                    completed_stages.append(stage_id)
+
+            if not post_stages:
+                return "completed"
+
+            status = self._run_stage_sequence(
+                post_stages,
+                report,
+                artifact_dir=output_dir,
+                report_dir=output_dir,
+                worktree_path=worktree_path,
+                skip_set=skip_set,
+                yes=yes,
+                reject=reject,
+                completed_stages=completed_stages,
+                start=start,
+                execution_mode=execution_mode,
+                human_decision=self._decision_for_stages(human_decision, post_stages),
+                resume=True,
+                checkpoint_mode="multi-unit",
+                checkpoint_units=report.units,
+                external_reject_targets=unit_stage_ids,
+            )
+            if status == "waiting":
+                return status
+            if status.startswith("loopback:"):
+                _, from_stage, target = status.split(":", 2)
+                self._reset_requirement_unit_progress(report.units)
+                completed_stages[:] = [stage_id for stage_id in completed_stages if stage_id not in unit_stage_ids]
+                self._save_checkpoint(
+                    output_dir,
+                    report.run_id,
+                    completed_stages,
+                    worktree_path,
+                    mode="multi-unit",
+                    units=report.units,
+                    human_decisions=report.human_decisions,
+                )
+                self._write_report(report, output_dir)
+                self.bus.emit("loopback:triggered", report.run_id, from_stage=from_stage, to_stage=target, iteration=1)
+                resume = False
+                human_decision = None
+                continue
+
+            return "completed"
+
+    def _decision_for_stages(self, decision: Optional[HumanDecision], stages: List[Dict[str, Any]]) -> Optional[HumanDecision]:
+        if decision is None:
+            return None
+        stage_ids = {stage.get("id") for stage in stages}
+        return decision if decision.stage_id in stage_ids else None
+
+    def _partition_multi_unit_stages(
+        self,
+        stages: List[Dict[str, Any]],
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+        unit_stages = self._unit_stages(stages)
+        if not unit_stages:
+            raise OrchestratorError("No stages available for requirement units")
+        unit_ids = {stage.get("id") for stage in unit_stages}
+        first_unit_index = next(index for index, stage in enumerate(stages) if stage.get("id") in unit_ids)
+        last_unit_index = max(index for index, stage in enumerate(stages) if stage.get("id") in unit_ids)
+        return stages[:first_unit_index], unit_stages, stages[last_unit_index + 1 :]
+
+    def _reset_requirement_unit_progress(self, units: List[RequirementUnitProgress]) -> None:
+        for progress in units:
+            progress.status = "pending"
+            progress.current_stage = None
+            progress.completed_stages = []
+
     def _run_requirement_units(
         self,
         units: List[RequirementUnit],
@@ -569,6 +749,7 @@ class Orchestrator:
             unit_dir.mkdir(parents=True, exist_ok=True)
             (unit_dir / "requirement.md").write_text(unit.requirement_text, encoding="utf-8")
             (unit_dir / "unit.json").write_text(json.dumps(model_to_dict(unit), ensure_ascii=False, indent=2), encoding="utf-8")
+            self._prepare_unit_artifacts(output_dir, unit_dir)
             progress.status = "in_progress"
             self._save_checkpoint(
                 output_dir,
@@ -654,9 +835,115 @@ class Orchestrator:
         configured = self.config.get("runner", {}).get("unit_stage_ids")
         if configured:
             wanted = set(_as_list(configured))
-            return [stage for stage in stages if stage.get("id") in wanted]
-        excluded = {"plan", "plan_confirm", "accept", "retrospect"}
-        return [stage for stage in stages if stage.get("id") not in excluded and stage.get("type") != "human_review"]
+            selected = [stage for stage in stages if stage.get("id") in wanted]
+        else:
+            wanted = {"develop", "qa", "review"}
+            selected = [stage for stage in stages if stage.get("id") in wanted]
+            if not selected:
+                excluded = {"plan", "plan_confirm", "accept", "retrospect"}
+                selected = [stage for stage in stages if stage.get("id") not in excluded and stage.get("type") != "human_review"]
+        hard_unit_gates = [str(stage.get("id")) for stage in selected if is_hard_human_gate(stage)]
+        if hard_unit_gates:
+            raise OrchestratorError(f"Hard human gates cannot run inside requirement units: {', '.join(hard_unit_gates)}")
+        return [self._unit_stage_copy(stage) for stage in selected if stage.get("type") != "human_review"]
+
+    def _unit_stage_copy(self, stage: Dict[str, Any]) -> Dict[str, Any]:
+        copied = dict(stage)
+        inputs = _as_list(copied.get("input") or "requirement")
+        for required in reversed(["requirement", "unit.json"]):
+            if required not in inputs:
+                inputs.insert(0, required)
+        copied["input"] = inputs
+        return copied
+
+    def _prepare_unit_artifacts(self, output_dir: Path, unit_dir: Path) -> None:
+        skip_names = {"requirement.md", "checkpoint.json", "report.json", "requirement-units.json"}
+        for path in output_dir.iterdir():
+            if not path.is_file():
+                continue
+            if path.name in skip_names:
+                continue
+            if path.suffix not in {".md", ".json"}:
+                continue
+            shutil.copy2(path, unit_dir / path.name)
+
+    def _write_unit_summary_artifacts(self, output_dir: Path, units: List[RequirementUnitProgress]) -> None:
+        unit_payloads: List[Dict[str, Any]] = []
+        for progress in units:
+            unit_dir = output_dir / "requirement-units" / progress.unit_id
+            payload = {
+                "unit_id": progress.unit_id,
+                "status": progress.status,
+                "artifacts": {},
+            }
+            for name in ("implementation-report.md", "test-report.md", "review-report.md"):
+                path = unit_dir / name
+                if path.exists():
+                    payload["artifacts"][name] = str(path.relative_to(output_dir))
+            unit_payloads.append(payload)
+
+        summary_lines = ["# Multi-unit Execution Summary", ""]
+        for payload in unit_payloads:
+            summary_lines.extend([f"## {payload['unit_id']}", "", f"- Status: `{payload['status']}`"])
+            for name, relative_path in payload["artifacts"].items():
+                summary_lines.append(f"- {name}: `{relative_path}`")
+            summary_lines.append("")
+        summary_text = "\n".join(summary_lines).rstrip() + "\n"
+
+        (output_dir / "implementation-report.md").write_text(summary_text, encoding="utf-8")
+        (output_dir / "test-report.md").write_text(summary_text, encoding="utf-8")
+        (output_dir / "review-report.md").write_text(summary_text, encoding="utf-8")
+
+        evidence = [{"source": "requirement-units", "finding": item} for item in unit_payloads]
+        (output_dir / "implementation-report.json").write_text(
+            json.dumps(
+                {
+                    "status": "completed",
+                    "summary": "multi-unit implementation completed",
+                    "changed_files": [],
+                    "tests_run": [],
+                    "acceptance_coverage": [],
+                    "evidence": evidence,
+                    "risks": [],
+                    "units": unit_payloads,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (output_dir / "test-report.json").write_text(
+            json.dumps(
+                {
+                    "status": "completed",
+                    "summary": "multi-unit test reports completed",
+                    "commands": [],
+                    "results": [],
+                    "acceptance_coverage": [],
+                    "evidence": evidence,
+                    "units": unit_payloads,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (output_dir / "review-report.json").write_text(
+            json.dumps(
+                {
+                    "status": "completed",
+                    "summary": "multi-unit review reports completed",
+                    "verdict": "Approve",
+                    "findings": [],
+                    "evidence": evidence,
+                    "risks": [],
+                    "units": unit_payloads,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     def _write_requirement_units(self, output_dir: Path, units: List[RequirementUnit]) -> None:
         payload = {"units": [model_to_dict(unit) for unit in units]}
@@ -745,52 +1032,9 @@ class Orchestrator:
     def _stage_cwd(self, stage_id: str, worktree_path: Optional[Path]) -> Path:
         if not worktree_path:
             return self.project_root
-        if stage_id in {"analyse", "plan", "plan_confirm", "architect", "context", "task_plan", "code_apply"}:
+        if stage_id in {"analyse", "plan", "plan_confirm", "architect", "context", "task_plan"}:
             return self.project_root
         return worktree_path
-
-    def _run_code_apply_stage(self, stage: Dict[str, Any], report: RunReport, output_dir: Path, worktree_path: Optional[Path]) -> StageRun:
-        stage_id = stage.get("id", "code_apply")
-        stage_run = StageRun(stage_id=stage_id, stage_name=stage.get("name", stage_id), status="running", type="code_apply", started_at=utc_now())
-        start = time.monotonic()
-        logger = get_logger("orchestrator", run_id=report.run_id)
-        self.bus.emit("stage:started", report.run_id, stage_id=stage_id, stage_name=stage_run.stage_name, iteration=stage_run.iteration)
-        apply_root = worktree_path or self.project_root
-        source_files = stage.get("input") or ["tech-lead-output.md"]
-        source_files = _as_list(source_files)
-        applier = CodeApplier(apply_root)
-        total_changes = 0
-        try:
-            for source_name in source_files:
-                source_path = output_dir / source_name
-                if not source_path.exists():
-                    continue
-                content = source_path.read_text(encoding="utf-8")
-                changes = applier.apply(content)
-                total_changes += len(changes)
-                for change in changes:
-                    self.bus.emit("agent:output", report.run_id, stage_id=stage_id, agent_name="code-applier", text=f"[{change.action}] {change.filepath} ({change.lines} lines)")
-
-            # 自动 commit 变更到 worktree 分支
-            if total_changes > 0 and worktree_path:
-                worktree_mgr = WorktreeManager(self.project_root, self.config.get("worktree"))
-                commit_msg = f"[ai-team] code_apply - {report.run_id}"
-                committed = worktree_mgr.commit_all(worktree_path, commit_msg)
-                if committed:
-                    logger.info("code_apply 自动提交: %s", commit_msg)
-                    self.bus.emit("worktree:committed", report.run_id, message=commit_msg)
-                else:
-                    logger.warning("code_apply 自动提交失败（可能无变更）")
-
-            stage_run.status = "completed"
-            stage_run.output_dir = str(output_dir)
-        except Exception as exc:
-            stage_run.status = "failed"
-            stage_run.error_message = str(exc)
-        stage_run.completed_at = utc_now()
-        stage_run.duration_seconds = _duration(start)
-        self.bus.emit("stage:completed", report.run_id, stage_id=stage_id, status=stage_run.status, duration=stage_run.duration_seconds)
-        return stage_run
 
     def _run_context_stage(self, stage: Dict[str, Any], report: RunReport, output_dir: Path, worktree_path: Optional[Path]) -> StageRun:
         stage_id = stage.get("id", "context")
@@ -798,11 +1042,20 @@ class Orchestrator:
         start = time.monotonic()
         self.bus.emit("stage:started", report.run_id, stage_id=stage_id, stage_name=stage_run.stage_name, iteration=stage_run.iteration)
         output_file = output_dir / (stage.get("output_file") or "codebase-context.md")
-        solution_path = output_dir / "solution-draft.md"
+        output_json = output_dir / str(stage.get("output_json")) if stage.get("output_json") else None
         scan_root = worktree_path or self.project_root
         try:
-            scan_codebase(scan_root, solution_path if solution_path.exists() else None, output_file, self.config.get("context_scanner"))
-            stage_run.status = "completed"
+            scan_codebase(scan_root, None, output_file, self.config.get("context_scanner"))
+            if output_json:
+                output_json.write_text(scan_to_json(scan_root, self.config.get("context_scanner")), encoding="utf-8")
+            validations = validate_required_artifacts(stage, output_dir)
+            stage_run.artifact_validations.extend(validations)
+            if has_artifact_validation_failure(validations):
+                failed = "; ".join(f"{item.artifact}: {item.message}" for item in validations if item.status == "failed")
+                stage_run.status = "failed"
+                stage_run.error_message = failed
+            else:
+                stage_run.status = "completed"
             stage_run.output_dir = str(output_dir)
         except Exception as exc:
             stage_run.status = "failed"
@@ -863,6 +1116,13 @@ class Orchestrator:
 
         blocker_content = ""
         if stage.get("skip_if_no_blocker"):
+            if not stage.get("allow_auto_skip"):
+                stage_run.status = "failed"
+                stage_run.error_message = "skip_if_no_blocker requires allow_auto_skip: true"
+                stage_run.completed_at = utc_now()
+                stage_run.duration_seconds = _duration(start)
+                self.bus.emit("stage:completed", report.run_id, stage_id=stage_id, status=stage_run.status, duration=stage_run.duration_seconds)
+                return stage_run
             blocker_source = stage.get("blocker_source")
             if blocker_source:
                 source_path = output_dir / str(blocker_source)
@@ -886,7 +1146,7 @@ class Orchestrator:
 
         if reject:
             decision = "rejected"
-        elif yes:
+        elif yes and stage.get("allow_auto_approve"):
             decision = "accepted"
         elif sys.stdin.isatty():
             response = input(f"Human review for run {report.run_id}. Accept? [y/N] ").strip().lower()
@@ -1122,7 +1382,7 @@ class Orchestrator:
             cwd=cwd,
             input_items=stage.get("input") or "requirement",
             extra_feedback=extra_feedback,
-            schema_hint={"required": ["status", "summary", "evidence"]},
+            schema_hint=stage_schema_hint(stage),
             max_chars=max_chars,
             base_branch=self.config.get("worktree", {}).get("base_branch"),
             max_diff_chars=max_chars,

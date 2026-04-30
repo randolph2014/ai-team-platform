@@ -79,6 +79,7 @@ pipeline:
   - id: accept
     name: Accept
     type: human_review
+    allow_auto_approve: true
 quality_gates:
   - name: smoke
     type: command
@@ -615,6 +616,7 @@ pipeline:
   - id: accept
     name: Accept
     type: human_review
+    allow_auto_approve: true
 worktree:
   enabled: false
 """,
@@ -625,8 +627,8 @@ worktree:
             report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("implement feature", yes=True)
             self.assertEqual(report.status, "completed")
 
-    def test_orchestrator_with_code_apply_stage(self) -> None:
-        """测试 code_apply stage 类型正常工作"""
+    def test_code_apply_stage_type_is_deprecated(self) -> None:
+        """code_apply 不再作为独立开发阶段执行，避免和 develop 语义重复。"""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
@@ -655,6 +657,7 @@ pipeline:
   - id: accept
     name: Accept
     type: human_review
+    allow_auto_approve: true
 worktree:
   enabled: false
 quality_gates: []
@@ -664,9 +667,10 @@ quality_gates: []
             (root / ".ai" / "agents").mkdir()
             (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
             report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("create a file", yes=True)
-            self.assertEqual(report.status, "completed")
-            stage_ids = [s.stage_id for s in report.stages]
-            self.assertIn("code_apply", stage_ids)
+            self.assertEqual(report.status, "failed")
+            self.assertEqual(report.stages[-1].stage_id, "code_apply")
+            self.assertIn("deprecated", report.stages[-1].error_message or "")
+            self.assertFalse((root / "output.txt").exists())
 
     def test_orchestrator_with_skip_stages(self) -> None:
         """测试 skip_stages 跳过指定 stage"""
@@ -700,6 +704,7 @@ pipeline:
   - id: accept
     name: Accept
     type: human_review
+    allow_auto_approve: true
 worktree:
   enabled: false
 quality_gates: []
@@ -714,6 +719,55 @@ quality_gates: []
             review_stages = [s for s in report.stages if s.stage_id == "review"]
             self.assertEqual(len(review_stages), 1)
             self.assertEqual(review_stages[0].status, "skipped")
+
+    def test_human_review_yes_requires_explicit_auto_approve_opt_in(self) -> None:
+        """普通 human_review 默认也不能被 --yes 自动通过。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / "test-config.yaml").write_text(
+                """
+runtimes: {}
+agents: []
+pipeline:
+  - id: accept
+    name: Accept
+    type: human_review
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("manual decision", yes=True)
+
+            self.assertEqual(report.status, "waiting")
+            self.assertEqual(report.stages[-1].stage_id, "accept")
+
+    def test_skip_if_no_blocker_requires_explicit_auto_skip_opt_in(self) -> None:
+        """skip_if_no_blocker 不能再默认自动跳过人工确认。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / "test-config.yaml").write_text(
+                """
+runtimes: {}
+agents: []
+pipeline:
+  - id: plan_confirm
+    name: Plan Confirm
+    type: human_review
+    skip_if_no_blocker: true
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("manual decision")
+
+            self.assertEqual(report.status, "failed")
+            self.assertIn("allow_auto_skip", report.error_message or "")
 
     def test_plan_confirm_skips_when_gap_analysis_has_no_blockers(self) -> None:
         """plan_confirm 在无 blocker 时自动 skipped，并继续后续 stage"""
@@ -752,6 +806,7 @@ pipeline:
     type: human_review
     input: [requirement, brainstorm.md, gap-analysis.md]
     skip_if_no_blocker: true
+    allow_auto_skip: true
     blocker_source: gap-analysis.md
     output_file: requirement-decisions.md
   - id: develop
@@ -806,6 +861,8 @@ pipeline:
     type: human_review
     input: [requirement, gap-analysis.md]
     skip_if_no_blocker: true
+    allow_auto_skip: true
+    allow_auto_approve: true
     blocker_source: gap-analysis.md
     output_file: requirement-decisions.md
 worktree:
@@ -863,6 +920,8 @@ pipeline:
     type: human_review
     input: [requirement, gap-analysis.md]
     skip_if_no_blocker: true
+    allow_auto_skip: true
+    allow_auto_approve: true
     blocker_source: gap-analysis.md
     output_file: requirement-decisions.md
   - id: develop
@@ -1099,6 +1158,229 @@ worktree:
             self.assertEqual([unit.unit_id for unit in report.units], ["db", "api"])
             self.assertTrue((Path(report.output_dir) / "requirement-units" / "db" / "tech-lead-output.md").exists())
             self.assertTrue((Path(report.output_dir) / "requirement-units" / "api" / "tech-lead-output.md").exists())
+
+    def test_multi_unit_runs_global_hard_gate_before_unit_development(self) -> None:
+        """大需求拆分后仍必须先经过全局人工确认，不能直接进入单元开发。"""
+        splitter_response = json.dumps(
+            {
+                "units": [
+                    {
+                        "id": "unit-1",
+                        "title": "认证",
+                        "description": "实现登录",
+                        "priority": 1,
+                        "depends_on": [],
+                        "requirement_text": "实现登录",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / "test-config.yaml").write_text(
+                f"""
+runtimes:
+  Splitter:
+    cli: mock
+    response: '{splitter_response}'
+  Req:
+    cli: mock
+    response: "final requirement"
+  Dev:
+    cli: mock
+    response: "done"
+agents:
+  - name: solution-architect
+    runtime_id: Splitter
+    role: architect
+    prompt: agents/solution-architect.md
+  - name: req
+    runtime_id: Req
+    role: analyst
+    prompt: agents/req.md
+  - name: dev
+    runtime_id: Dev
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: requirement_synthesis
+    name: Requirement Synthesis
+    agents: [req]
+    input: requirement
+    output:
+      req: requirement-final.md
+  - id: requirement_confirm
+    name: Requirement Confirm
+    type: human_review
+    output_file: human-decision-requirement.md
+    decision_file: human-decision-requirement.json
+    allow_auto_approve: false
+    requires_reason_on_reject: true
+    reject_to: requirement_synthesis
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: requirement
+    output:
+      dev: tech-lead-output.md
+runner:
+  auto_split_requirements: true
+  context_threshold_chars: 10
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            for name in ["solution-architect", "req", "dev"]:
+                (root / ".ai" / "agents" / f"{name}.md").write_text(f"You are {name}.", encoding="utf-8")
+
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("x" * 30, yes=True)
+
+            self.assertEqual(report.status, "waiting")
+            self.assertEqual(report.mode, "multi-unit")
+            self.assertEqual(report.stages[-1].stage_id, "requirement_confirm")
+            self.assertFalse((Path(report.output_dir) / "requirement-units" / "unit-1" / "tech-lead-output.md").exists())
+
+    def test_multi_unit_acceptance_reject_reruns_unit_stages_not_root_develop(self) -> None:
+        """最终验收拒绝时，develop/qa/review 仍按单元目录回流，不能退化成根目录执行。"""
+        splitter_response = json.dumps(
+            {
+                "units": [
+                    {
+                        "id": "unit-1",
+                        "title": "认证",
+                        "description": "实现登录",
+                        "priority": 1,
+                        "depends_on": [],
+                        "requirement_text": "实现登录",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / "test-config.yaml").write_text(
+                f"""
+runtimes:
+  Splitter:
+    cli: mock
+    response: '{splitter_response}'
+  Mock:
+    cli: mock
+    response: "done"
+agents:
+  - name: solution-architect
+    runtime_id: Splitter
+    role: architect
+    prompt: agents/solution-architect.md
+  - name: req
+    runtime_id: Mock
+    role: analyst
+    prompt: agents/req.md
+  - name: dev
+    runtime_id: Mock
+    role: developer
+    prompt: agents/dev.md
+  - name: qa
+    runtime_id: Mock
+    role: tester
+    prompt: agents/qa.md
+  - name: reviewer
+    runtime_id: Mock
+    role: reviewer
+    prompt: agents/reviewer.md
+pipeline:
+  - id: requirement_synthesis
+    name: Requirement Synthesis
+    agents: [req]
+    input: requirement
+    output:
+      req: requirement-final.md
+  - id: requirement_confirm
+    name: Requirement Confirm
+    type: human_review
+    output_file: human-decision-requirement.md
+    decision_file: human-decision-requirement.json
+    allow_auto_approve: false
+    requires_reason_on_reject: true
+    reject_to: requirement_synthesis
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: requirement
+    output:
+      dev: tech-lead-output.md
+  - id: qa
+    name: QA
+    agents: [qa]
+    input: [requirement, tech-lead-output.md]
+    output:
+      qa: test-report.md
+  - id: review
+    name: Review
+    agents: [reviewer]
+    input: [requirement, tech-lead-output.md, test-report.md]
+    output:
+      reviewer: review-report.md
+  - id: acceptance_confirm
+    name: Acceptance Confirm
+    type: human_review
+    output_file: human-decision-acceptance.md
+    decision_file: human-decision-acceptance.json
+    allow_auto_approve: false
+    requires_reason_on_reject: true
+    reject_to: develop
+runner:
+  auto_split_requirements: true
+  context_threshold_chars: 10
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            for name in ["solution-architect", "req", "dev", "qa", "reviewer"]:
+                (root / ".ai" / "agents" / f"{name}.md").write_text(f"You are {name}.", encoding="utf-8")
+
+            first_wait = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("x" * 30, run_id="multi-unit-acceptance")
+            self.assertEqual(first_wait.status, "waiting")
+            self.assertEqual(first_wait.stages[-1].stage_id, "requirement_confirm")
+
+            approved_requirement = HumanDecision(stage_id="requirement_confirm", decision="approved", reason="需求确认")
+            acceptance_wait = Orchestrator(root, config_path=str(root / "test-config.yaml")).run(
+                "x" * 30,
+                run_id="multi-unit-acceptance",
+                resume=True,
+                human_decision=approved_requirement,
+            )
+            self.assertEqual(acceptance_wait.status, "waiting")
+            self.assertEqual(acceptance_wait.stages[-1].stage_id, "acceptance_confirm")
+
+            rejected_acceptance = HumanDecision(
+                stage_id="acceptance_confirm",
+                decision="rejected",
+                reason="验收未通过",
+                required_changes=["补充登录失败提示"],
+                target_stage="develop",
+            )
+            waiting_again = Orchestrator(root, config_path=str(root / "test-config.yaml")).run(
+                "x" * 30,
+                run_id="multi-unit-acceptance",
+                resume=True,
+                human_decision=rejected_acceptance,
+            )
+
+            output_dir = Path(waiting_again.output_dir)
+            self.assertEqual(waiting_again.status, "waiting")
+            self.assertEqual(waiting_again.stages[-1].stage_id, "acceptance_confirm")
+            self.assertTrue((output_dir / "requirement-units" / "unit-1" / "tech-lead-output.md").exists())
+            self.assertFalse((output_dir / "tech-lead-output.md").exists())
+            self.assertEqual([stage.stage_id for stage in waiting_again.stages].count("acceptance_confirm"), 2)
 
     def test_save_checkpoint_writes_unit_progress(self) -> None:
         """checkpoint 支持 mode 与单元级进度，供 D3 resume 精确定位"""
@@ -1429,6 +1711,28 @@ worktree:
             self.assertIn("planning", [stage.stage_id for stage in completed.stages])
             self.assertEqual([item.decision for item in completed.human_decisions], ["rejected", "approved"])
 
+    def test_only_stage_is_rejected_when_pipeline_has_hard_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_config(root)
+
+            report = Orchestrator(root, config_path=str(config)).run("ship auth", only_stage="planning")
+
+            self.assertEqual(report.status, "failed")
+            self.assertIn("only_stage", report.error_message or "")
+            self.assertIn("hard human gates", report.error_message or "")
+
+    def test_skip_hard_gate_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_config(root)
+
+            report = Orchestrator(root, config_path=str(config)).run("ship auth", skip_stages=["requirement_confirm"])
+
+            self.assertEqual(report.status, "failed")
+            self.assertIn("skip_stages", report.error_message or "")
+            self.assertIn("requirement_confirm", report.error_message or "")
+
 
 class TestArtifactContractsAndStageContext(unittest.TestCase):
     def _git(self, root: Path, *args: str) -> None:
@@ -1502,15 +1806,49 @@ worktree:
             self.assertTrue(report.stages[0].artifact_validations)
             self.assertNotIn("planning", [stage.stage_id for stage in report.stages])
 
+    def test_context_scan_writes_markdown_and_json_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "team.yaml").write_text(
+                """
+runtimes: {}
+agents: []
+pipeline:
+  - id: context_scan
+    name: Context Scan
+    type: context_scan
+    output_file: codebase-context.md
+    output_json: codebase-context.json
+    required_artifacts:
+      - codebase-context.md
+      - codebase-context.json
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / "app.py").write_text("print('hi')\n", encoding="utf-8")
+
+            report = Orchestrator(root, config_path=str(root / "team.yaml")).run("scan")
+
+            self.assertEqual(report.status, "completed")
+            output_dir = Path(report.output_dir)
+            self.assertTrue((output_dir / "codebase-context.md").exists())
+            payload = json.loads((output_dir / "codebase-context.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["project_root"], str(root.resolve()))
+            self.assertIn("project_types", payload)
+            self.assertIn("tree", payload)
+            self.assertEqual(report.stages[0].artifact_validations[-1].status, "passed")
+
     def test_stage_json_artifacts_name_multiple_json_blocks_by_contract(self) -> None:
         response = """# Plan
 
 ```json
-{"status": "completed", "summary": "solution", "decisions": []}
+{"status": "completed", "summary": "solution", "decisions": [], "alternatives_considered": [], "impact_scope": [], "configuration_strategy": {}, "risks": [], "rollback_strategy": {}, "verification_strategy": [], "evidence": [], "next_stage_contract": {}}
 ```
 
 ```json
-{"status": "completed", "summary": "tasks", "tasks": []}
+{"status": "completed", "summary": "tasks", "tasks": [], "execution_order": [], "file_boundaries": [], "test_plan": [], "rollback_considerations": [], "acceptance_coverage": [], "evidence": [], "next_stage_contract": {}}
 ```
 """
         with tempfile.TemporaryDirectory() as tmp:
@@ -1555,6 +1893,55 @@ worktree:
             self.assertEqual(task_plan["summary"], "tasks")
             self.assertFalse((output_dir / "task-plan-1.json").exists())
             self.assertFalse((output_dir / "task-plan-2.json").exists())
+
+    def test_artifact_contract_validates_named_required_fields(self) -> None:
+        response = """# Plan
+
+```json
+{"status": "completed", "summary": "solution", "decisions": [], "alternatives_considered": [], "impact_scope": [], "configuration_strategy": {}, "risks": [], "rollback_strategy": {}, "verification_strategy": [], "evidence": [], "next_stage_contract": {}}
+```
+
+```json
+{"status": "completed", "summary": "tasks", "tasks": []}
+```
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "team.yaml").write_text(
+                f"""
+runtimes:
+  Mock:
+    cli: mock
+    response: {json.dumps(response)}
+agents:
+  - name: planner
+    runtime_id: Mock
+    prompt: agents/planner.md
+pipeline:
+  - id: planning
+    agents: [planner]
+    input: requirement
+    output:
+      planner: task-plan.md
+    json_artifacts:
+      - solution-plan.json
+      - task-plan.json
+    required_artifacts:
+      - solution-plan.json
+      - task-plan.json
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / "agents").mkdir()
+            (root / "agents" / "planner.md").write_text("Plan the work.", encoding="utf-8")
+
+            report = Orchestrator(root, config_path=str(root / "team.yaml")).run("ship it")
+
+            self.assertEqual(report.status, "failed")
+            self.assertIn("task-plan.json", report.error_message or "")
+            self.assertIn("file_boundaries", report.error_message or "")
 
     def test_stage_json_artifacts_rejects_parent_directory_path(self) -> None:
         response = """# Plan

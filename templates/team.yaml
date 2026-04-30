@@ -65,17 +65,11 @@ agents:
     role: analyst
     prompt: agents/requirements-analyst.md
 
-  # solution-architect 通常需要更强模型；启用 claude-opus 后可改为
-  # runtime_id: claude-opus
+  # solution-architect 只用于超大需求的结构化拆分，不参与默认方案定稿。
   - name: solution-architect
     runtime_id: auto
     role: architect
     prompt: agents/solution-architect.md
-
-  - name: brainstormer
-    runtime_id: auto
-    role: brainstormer
-    prompt: agents/brainstormer.md
 
   - name: devils-advocate
     runtime_id: auto
@@ -128,6 +122,9 @@ pipeline:
       type: context_scan
       output_file: codebase-context.md
       output_json: codebase-context.json
+      required_artifacts:
+        - codebase-context.md
+        - codebase-context.json
 
     - id: requirement_analysis
       name: "需求分析"

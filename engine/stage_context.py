@@ -121,4 +121,6 @@ def build_stage_context(
             path = output_dir / item
             if path.exists():
                 parts.append(_artifact_section(path, max_chars=max_chars))
+            else:
+                parts.extend([f"## Missing Artifact: `{item}`", "Declared in stage input but not found in the artifact directory.", ""])
     return "\n".join(parts).rstrip() + "\n"

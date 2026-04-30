@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from engine.config import TEMPLATES_ROOT
+from engine.config import DEFAULT_CONFIG, TEMPLATES_ROOT
+from engine.human_gate import HARD_HUMAN_GATES
 
 try:
     from fastapi import APIRouter, HTTPException, Query
@@ -20,12 +22,74 @@ router = APIRouter() if APIRouter else None
 
 PIPELINES_DIR = TEMPLATES_ROOT / "pipelines"
 
+DEFAULT_STAGE_BY_ID = {stage.get("id"): stage for stage in DEFAULT_CONFIG.get("pipeline", []) if stage.get("id")}
+
+
+def _hydrate_stage(stage: Any) -> Dict[str, Any]:
+    if isinstance(stage, str):
+        stage_data: Dict[str, Any] = {"id": stage}
+    elif isinstance(stage, dict):
+        stage_data = copy.deepcopy(stage)
+    else:
+        return {"id": str(stage)}
+
+    stage_id = stage_data.get("id")
+    base = copy.deepcopy(DEFAULT_STAGE_BY_ID.get(stage_id))
+    if base:
+        base.update(stage_data)
+        stage_data = base
+
+    if stage_id in HARD_HUMAN_GATES:
+        stage_data["type"] = "human_review"
+        stage_data["allow_auto_approve"] = False
+        stage_data["requires_reason_on_reject"] = True
+        if base and base.get("reject_to"):
+            stage_data["reject_to"] = base["reject_to"]
+
+    if stage_id == "context_scan":
+        stage_data["type"] = "context_scan"
+        stage_data.setdefault("output_file", "codebase-context.md")
+        stage_data.setdefault("output_json", "codebase-context.json")
+        stage_data.setdefault("required_artifacts", ["codebase-context.md", "codebase-context.json"])
+
+    if "parallel" in stage_data and "is_parallel" not in stage_data:
+        stage_data["is_parallel"] = bool(stage_data["parallel"])
+
+    return stage_data
+
+
+def _hydrate_yaml_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    hydrated = copy.deepcopy(config or {})
+    raw_stages = hydrated.get("stages", [])
+    if isinstance(raw_stages, list):
+        hydrated["stages"] = [_hydrate_stage(stage) for stage in raw_stages]
+    return hydrated
+
+
+def _builtin_template(template_id: str, name: str, description: str, stages: List[str]) -> Dict[str, Any]:
+    yaml_config = _hydrate_yaml_config(
+        {
+            "name": name,
+            "description": description,
+            "version": "1.0",
+            "stages": stages,
+        }
+    )
+    return {
+        "id": template_id,
+        "name": name,
+        "description": description,
+        "stages": stages,
+        "yaml_config": yaml_config,
+    }
+
+
 BUILTIN_TEMPLATES: List[Dict[str, Any]] = [
-    {
-        "id": "basic",
-        "name": "基础流水线",
-        "description": "当前标准流程：代码库扫描 → 需求定稿 → 人工确认 → 任务规划 → 开发 → 测试 → 审查 → 人工验收",
-        "stages": [
+    _builtin_template(
+        "basic",
+        "基础流水线",
+        "当前标准流程：代码库扫描 → 需求定稿 → 人工确认 → 任务规划 → 开发 → 测试 → 审查 → 人工验收",
+        [
             "context_scan",
             "requirement_analysis",
             "requirement_synthesis",
@@ -37,12 +101,12 @@ BUILTIN_TEMPLATES: List[Dict[str, Any]] = [
             "review",
             "acceptance_confirm",
         ],
-    },
-    {
-        "id": "full",
-        "name": "全功能流水线",
-        "description": "完整闭环流程：包含复盘产物和所有强制人工确认节点",
-        "stages": [
+    ),
+    _builtin_template(
+        "full",
+        "全功能流水线",
+        "完整闭环流程：包含复盘产物和所有强制人工确认节点",
+        [
             "context_scan",
             "requirement_analysis",
             "requirement_synthesis",
@@ -55,31 +119,31 @@ BUILTIN_TEMPLATES: List[Dict[str, Any]] = [
             "acceptance_confirm",
             "retrospect",
         ],
-    },
-    {
-        "id": "minimal",
-        "name": "极简流水线",
-        "description": "小需求流程：保留任务规划人工确认和最终人工验收，开发仍由单 Agent 实施",
-        "stages": ["context_scan", "planning", "task_plan_confirm", "develop", "qa", "review", "acceptance_confirm"],
-    },
-    {
-        "id": "ios",
-        "name": "iOS 开发流水线",
-        "description": "适用于 Swift/iOS 项目的需求定稿、任务规划、开发、测试、审查和人工验收",
-        "stages": ["context_scan", "requirement_synthesis", "requirement_confirm", "planning", "task_plan_confirm", "develop", "qa", "review", "acceptance_confirm"],
-    },
-    {
-        "id": "web",
-        "name": "Web 前端流水线",
-        "description": "适用于 React/Vue/Next.js 前端项目的需求定稿、任务规划、开发、测试、审查和人工验收",
-        "stages": ["context_scan", "requirement_synthesis", "requirement_confirm", "planning", "task_plan_confirm", "develop", "qa", "review", "acceptance_confirm"],
-    },
-    {
-        "id": "backend",
-        "name": "后端开发流水线",
-        "description": "适用于 Python/Java/Go 后端服务的需求定稿、任务规划、开发、测试、审查和人工验收",
-        "stages": ["context_scan", "requirement_synthesis", "requirement_confirm", "planning", "task_plan_confirm", "develop", "qa", "review", "acceptance_confirm"],
-    },
+    ),
+    _builtin_template(
+        "minimal",
+        "极简流水线",
+        "小需求流程：保留需求定稿确认、任务规划确认和最终人工验收，开发仍由单 Agent 实施",
+        ["context_scan", "requirement_synthesis", "requirement_confirm", "planning", "task_plan_confirm", "develop", "qa", "review", "acceptance_confirm"],
+    ),
+    _builtin_template(
+        "ios",
+        "iOS 开发流水线",
+        "适用于 Swift/iOS 项目的需求定稿、任务规划、开发、测试、审查和人工验收",
+        ["context_scan", "requirement_analysis", "requirement_synthesis", "requirement_confirm", "planning", "task_plan_confirm", "develop", "qa", "review", "acceptance_confirm"],
+    ),
+    _builtin_template(
+        "web",
+        "Web 前端流水线",
+        "适用于 React/Vue/Next.js 前端项目的需求定稿、任务规划、开发、测试、审查和人工验收",
+        ["context_scan", "requirement_analysis", "requirement_synthesis", "requirement_confirm", "planning", "task_plan_confirm", "develop", "qa", "review", "acceptance_confirm"],
+    ),
+    _builtin_template(
+        "backend",
+        "后端开发流水线",
+        "适用于 Python/Java/Go 后端服务的需求定稿、任务规划、开发、测试、审查和人工验收",
+        ["context_scan", "requirement_analysis", "requirement_synthesis", "requirement_confirm", "planning", "task_plan_confirm", "develop", "qa", "review", "acceptance_confirm"],
+    ),
 ]
 
 
@@ -185,7 +249,7 @@ if router:
             "id": body.id,
             "name": body.name,
             "description": body.description or "",
-            "yaml_config": body.yaml_config,
+            "yaml_config": _hydrate_yaml_config(body.yaml_config),
         }
 
         db = _get_db()
@@ -212,7 +276,7 @@ if router:
         updates = body.model_dump(exclude_none=True)
         for key, value in updates.items():
             if value is not None:
-                existing[key] = value
+                existing[key] = _hydrate_yaml_config(value) if key == "yaml_config" else value
 
         db = _get_db()
         if db is not None:

@@ -31,26 +31,14 @@ def _project_root(args: argparse.Namespace) -> Path:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    # Production 模式下禁止跳过关键 stage
-    CRITICAL_STAGES = {"qa", "review", "accept"}
-    if args.production and args.skip_stages:
-        skipped_critical = CRITICAL_STAGES.intersection(args.skip_stages)
-        if skipped_critical:
-            print(f"错误: production 模式下禁止跳过关键 stage: {', '.join(skipped_critical)}", file=sys.stderr)
-            print("关键 stage 包括: qa, review, accept", file=sys.stderr)
-            return 1
-
-    # 警告: 非 production 模式下跳过关键 stage
-    if args.skip_stages and not args.production:
-        skipped_critical = CRITICAL_STAGES.intersection(args.skip_stages)
-        if skipped_critical:
-            print(f"警告: 跳过关键 stage: {', '.join(skipped_critical)}", file=sys.stderr)
-            print("这可能导致低质量代码被合并。建议添加 --production 标志启用严格检查。", file=sys.stderr)
-            if not args.yes:
-                response = input("是否继续? [y/N] ").strip().lower()
-                if response not in {"y", "yes"}:
-                    print("已取消", file=sys.stderr)
-                    return 0
+    hard_human_gates = {"requirement_confirm", "task_plan_confirm", "acceptance_confirm"}
+    if args.only_stage:
+        print("错误: 默认交付流程禁止使用 --only-stage 绕过强制人工确认节点", file=sys.stderr)
+        return 1
+    skipped_hard_gates = hard_human_gates.intersection(args.skip_stages or [])
+    if skipped_hard_gates:
+        print(f"错误: 禁止跳过强制人工确认节点: {', '.join(sorted(skipped_hard_gates))}", file=sys.stderr)
+        return 1
 
     project_root = _project_root(args)
     requirement = _read_requirement(args)

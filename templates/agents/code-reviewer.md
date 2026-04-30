@@ -15,6 +15,8 @@
 ## 输出
 输出 `review-report.md` 和 `review-report.json`。请直接输出 Markdown，并在末尾以单个 ` ```json ` 代码块输出 `review-report.json`；runner 会按 pipeline `json_artifacts` 保存该 JSON block。
 
+`review-report.json` 必须包含 `status`、`summary`、`verdict`、`findings`、`evidence`、`risks`。
+
 **必须包含以下结构：**
 
 ### 1. 总体结论

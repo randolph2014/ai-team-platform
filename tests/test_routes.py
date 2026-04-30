@@ -46,6 +46,7 @@ class BaseRoutesTest(unittest.TestCase):
         (root / ".ai" / "agents" / "dev.md").write_text("You are a dev agent.", encoding="utf-8")
         self.project_root = root
         self.user_config_path = root / ".user-config.yaml"
+        self.pipelines_dir = root / ".ai" / "pipelines"
 
         self.user_config_path.write_text(
             """
@@ -72,6 +73,7 @@ pipeline:
         self._config_patches = [
             patch("engine.config.USER_CONFIG_FILE", self.user_config_path),
             patch("api.routes.settings.USER_CONFIG_FILE", self.user_config_path),
+            patch("api.routes.pipelines.PIPELINES_DIR", self.pipelines_dir),
         ]
         for p in self._config_patches:
             p.start()
@@ -159,17 +161,6 @@ class TestSettingsRoutes(BaseRoutesTest):
 class TestPipelinesRoutes(BaseRoutesTest):
     """测试 pipelines CRUD 端点"""
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        """清理 pipelines 目录残留，确保测试隔离"""
-        from api.routes.pipelines import PIPELINES_DIR
-        if PIPELINES_DIR.exists():
-            for f in PIPELINES_DIR.glob("*.json"):
-                try:
-                    f.unlink()
-                except OSError:
-                    pass
-
     def test_list_pipelines_returns_list(self) -> None:
         """GET /api/pipelines 返回流水线列表"""
         response = self.client.get("/api/pipelines")
@@ -193,9 +184,34 @@ class TestPipelinesRoutes(BaseRoutesTest):
         self.assertEqual(response.status_code, 200)
 
         legacy_stages = {"plan", "architect", "context", "accept", "risk_analysis", "doc", "code_apply"}
+        required_gates = {"requirement_confirm", "task_plan_confirm", "acceptance_confirm"}
         for template in response.json():
             stages = template.get("stages", [])
             self.assertFalse(legacy_stages.intersection(stages), f"{template['id']} still exposes legacy stages")
+            self.assertTrue(required_gates.issubset(stages), f"{template['id']} misses hard human gates")
+            self.assertIn("requirement_synthesis", stages, f"{template['id']} must produce confirmed requirement artifacts")
+            stage_contracts = {stage["id"]: stage for stage in template.get("yaml_config", {}).get("stages", [])}
+            self.assertEqual(stage_contracts["context_scan"]["type"], "context_scan")
+            self.assertEqual(stage_contracts["requirement_confirm"]["type"], "human_review")
+            self.assertFalse(stage_contracts["requirement_confirm"]["allow_auto_approve"])
+            self.assertEqual(stage_contracts["acceptance_confirm"]["reject_to"], "develop")
+
+    def test_create_pipeline_hydrates_known_stage_contracts(self) -> None:
+        """保存模板时即使 UI 只传 id，也必须补齐上下文扫描和硬人工门禁契约。"""
+        payload = {
+            "id": "hydrated-pipe",
+            "name": "补齐契约流水线",
+            "yaml_config": {"stages": [{"id": "context_scan"}, {"id": "requirement_confirm"}]},
+        }
+        response = self.client.post("/api/pipelines", json=payload)
+        self.assertEqual(response.status_code, 200)
+
+        stages = {stage["id"]: stage for stage in response.json()["yaml_config"]["stages"]}
+        self.assertEqual(stages["context_scan"]["type"], "context_scan")
+        self.assertIn("codebase-context.json", stages["context_scan"]["required_artifacts"])
+        self.assertEqual(stages["requirement_confirm"]["type"], "human_review")
+        self.assertFalse(stages["requirement_confirm"]["allow_auto_approve"])
+        self.assertEqual(stages["requirement_confirm"]["reject_to"], "requirement_synthesis")
 
     def test_create_pipeline_saves(self) -> None:
         """POST /api/pipelines 创建新流水线"""
@@ -556,6 +572,20 @@ class TestRunsRoutes(BaseRoutesTest):
             },
         )
         self.assertEqual(response.status_code, 409)
+
+    def test_create_run_rejects_only_stage_because_it_bypasses_hard_gates(self) -> None:
+        """POST /api/runs 不允许用 only_stage 绕过强制人工确认。"""
+        response = self.client.post(
+            "/api/runs",
+            json={
+                "requirement": "测试需求",
+                "workdir": str(self.project_root),
+                "run_id": "api-only-stage",
+                "only_stage": "develop",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("hard human gates", response.json()["detail"])
 
     def test_list_runs_returns_list(self) -> None:
         """GET /api/runs 返回运行列表"""

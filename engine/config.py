@@ -41,6 +41,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "type": "context_scan",
             "output_file": "codebase-context.md",
             "output_json": "codebase-context.json",
+            "required_artifacts": ["codebase-context.md", "codebase-context.json"],
         },
         {
             "id": "requirement_analysis",

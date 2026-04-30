@@ -135,6 +135,8 @@ if router:
 
     @router.post("/runs")
     async def create_run(body: CreateRunRequest, user: Dict[str, Any] = _get_auth()):
+        if body.only_stage:
+            raise HTTPException(status_code=400, detail="only_stage is disabled for delivery runs because it bypasses hard human gates")
         run_id = body.run_id or f"api-{uuid.uuid4().hex[:12]}"
         if expected_output_dir(run_id, body.workdir).exists():
             raise HTTPException(status_code=409, detail="run id already exists")

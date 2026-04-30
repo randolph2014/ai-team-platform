@@ -39,6 +39,143 @@ const STAGE_COLORS = [
 type ViewMode = 'canvas' | 'yaml';
 type AgentDefWithRuntime = NonNullable<StageConfig['agent_defs']>[number];
 
+function titleForStageId(stageId: string): string {
+  return stageId.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function standardStages(): StageConfig[] {
+  return [
+    {
+      id: 'context_scan',
+      name: '代码库扫描',
+      type: 'context_scan',
+      agents: [],
+      is_parallel: false,
+      output_file: 'codebase-context.md',
+      output_json: 'codebase-context.json',
+      required_artifacts: ['codebase-context.md', 'codebase-context.json'],
+    },
+    {
+      id: 'requirement_analysis',
+      name: '需求分析',
+      agents: ['requirements-analyst', 'devils-advocate'],
+      parallel: true,
+      is_parallel: true,
+      input: ['requirement', 'codebase-context.md', 'codebase-context.json'],
+      output: {
+        'requirements-analyst': 'requirement-analysis.md',
+        'devils-advocate': 'requirement-gap-analysis.md',
+      },
+      required_artifacts: ['requirement-analysis.md', 'requirement-gap-analysis.md'],
+    },
+    {
+      id: 'requirement_synthesis',
+      name: '需求综合定稿',
+      agents: ['requirements-analyst'],
+      is_parallel: false,
+      input: ['requirement', 'codebase-context.md', 'codebase-context.json', 'requirement-analysis.md', 'requirement-gap-analysis.md', 'human-decision-requirement*.json'],
+      output: { 'requirements-analyst': 'requirement-final.md' },
+      json_artifacts: ['requirement-final.json'],
+      required_artifacts: ['requirement-final.md', 'requirement-final.json'],
+    },
+    {
+      id: 'requirement_confirm',
+      name: '需求人工确认',
+      type: 'human_review',
+      agents: [],
+      is_parallel: false,
+      input: ['requirement-final.md'],
+      output_file: 'human-decision-requirement.md',
+      decision_file: 'human-decision-requirement.json',
+      allow_auto_approve: false,
+      requires_reason_on_reject: true,
+      reject_to: 'requirement_synthesis',
+    },
+    {
+      id: 'planning',
+      name: '方案与任务规划',
+      agents: ['planner'],
+      is_parallel: false,
+      input: ['requirement-final.md', 'requirement-final.json', 'codebase-context.md', 'codebase-context.json', 'human-decision-requirement.json', 'human-decision-task-plan*.json'],
+      output: { planner: 'task-plan.md' },
+      json_artifacts: ['solution-plan.json', 'task-plan.json'],
+      required_artifacts: ['task-plan.md', 'solution-plan.json', 'task-plan.json'],
+    },
+    {
+      id: 'task_plan_confirm',
+      name: '任务规划人工确认',
+      type: 'human_review',
+      agents: [],
+      is_parallel: false,
+      input: ['task-plan.md'],
+      output_file: 'human-decision-task-plan.md',
+      decision_file: 'human-decision-task-plan.json',
+      allow_auto_approve: false,
+      requires_reason_on_reject: true,
+      reject_to: 'planning',
+    },
+    {
+      id: 'develop',
+      name: '开发实施',
+      agents: ['tech-lead'],
+      is_parallel: false,
+      input: ['requirement-final.md', 'requirement-final.json', 'codebase-context.md', 'codebase-context.json', 'solution-plan.json', 'task-plan.md', 'task-plan.json', 'human-decision-task-plan.json', 'human-decision-acceptance*.json'],
+      output: { 'tech-lead': 'implementation-report.md' },
+      json_artifacts: ['implementation-report.json'],
+      required_artifacts: ['implementation-report.md', 'implementation-report.json'],
+    },
+    {
+      id: 'qa',
+      name: '自动测试',
+      agents: ['qa-automation'],
+      is_parallel: false,
+      input: ['requirement-final.md', 'requirement-final.json', 'solution-plan.json', 'task-plan.md', 'task-plan.json', 'implementation-report.md', 'implementation-report.json', 'git-diff'],
+      output: { 'qa-automation': 'test-report.md' },
+      json_artifacts: ['test-report.json'],
+      required_artifacts: ['test-report.md', 'test-report.json'],
+      loopback_to: 'develop',
+      loopback_trigger: ['FAILED', 'ERROR', '失败', 'exit code: 1', '退出码: 1'],
+      max_retries: 2,
+    },
+    {
+      id: 'review',
+      name: '代码审查与风险识别',
+      agents: ['code-reviewer'],
+      is_parallel: false,
+      input: ['requirement-final.md', 'requirement-final.json', 'solution-plan.json', 'task-plan.md', 'task-plan.json', 'implementation-report.md', 'implementation-report.json', 'test-report.md', 'test-report.json', 'git-diff'],
+      output: { 'code-reviewer': 'review-report.md' },
+      json_artifacts: ['review-report.json'],
+      required_artifacts: ['review-report.md', 'review-report.json'],
+      loopback_to: 'develop',
+      loopback_trigger: 'Request Changes',
+      max_retries: 2,
+    },
+    {
+      id: 'acceptance_confirm',
+      name: '最终人工验收',
+      type: 'human_review',
+      agents: [],
+      is_parallel: false,
+      input: ['requirement-final.md', 'requirement-final.json', 'solution-plan.json', 'task-plan.md', 'task-plan.json', 'implementation-report.md', 'implementation-report.json', 'test-report.md', 'test-report.json', 'review-report.md', 'review-report.json', 'git-diff'],
+      output_file: 'human-decision-acceptance.md',
+      decision_file: 'human-decision-acceptance.json',
+      allow_auto_approve: false,
+      requires_reason_on_reject: true,
+      reject_to: 'develop',
+    },
+  ];
+}
+
+function stagesFromTemplateIds(stageIds: string[]): StageConfig[] {
+  const standardById = new Map(standardStages().map((stage) => [stage.id, stage]));
+  return stageIds.map((stageId) => standardById.get(stageId) || {
+    id: stageId,
+    name: titleForStageId(stageId),
+    agents: [],
+    is_parallel: false,
+  });
+}
+
 function agentRuntime(agent: AgentDefWithRuntime): string {
   return agent.runtime_id || 'auto';
 }
@@ -53,7 +190,8 @@ function normalizeAgentRuntime(agent: AgentDefWithRuntime): AgentDefWithRuntime 
 function normalizeStagesForRuntime(stages: StageConfig[]): StageConfig[] {
   return stages.map((stage) => {
     const agentDefs = (stage.agent_defs || []).map((agent) => normalizeAgentRuntime(agent as AgentDefWithRuntime));
-    return agentDefs.length > 0 ? { ...stage, agent_defs: agentDefs } : stage;
+    const normalized = { ...stage, is_parallel: stage.is_parallel || stage.parallel === true };
+    return agentDefs.length > 0 ? { ...normalized, agent_defs: agentDefs } : normalized;
   }) as unknown as StageConfig[];
 }
 
@@ -74,10 +212,7 @@ function defaultPipeline(): PipelineConfig {
     name: '新建 Pipeline',
     description: '',
     version: '1.0',
-    stages: [
-      { id: 'plan', name: '需求分析', agents: [], is_parallel: false },
-      { id: 'develop', name: '代码实现', agents: [], is_parallel: false },
-    ],
+    stages: standardStages(),
   };
 }
 
@@ -89,25 +224,60 @@ function stringValue(value: unknown, fallback: string): string {
   return typeof value === 'string' ? value : fallback;
 }
 
+function stringArrayValue(value: string | string[] | undefined): string[] {
+  if (Array.isArray(value)) return value;
+  return value ? [value] : [];
+}
+
+function writeArrayField(lines: string[], key: string, value: string[] | undefined) {
+  if (value && value.length > 0) {
+    lines.push(`    ${key}: [${value.join(', ')}]`);
+  }
+}
+
+function writeScalarField(lines: string[], key: string, value: string | number | boolean | undefined) {
+  if (value !== undefined && value !== null && value !== '') {
+    lines.push(`    ${key}: ${value}`);
+  }
+}
+
 function configToYaml(config: PipelineConfig): string {
   const lines: string[] = [];
   lines.push(`name: ${config.name}`);
   if (config.description) lines.push(`description: ${config.description}`);
+  if (config.version) lines.push(`version: ${config.version}`);
   lines.push('stages:');
   for (const stage of config.stages) {
     lines.push(`  - id: ${stage.id}`);
     lines.push(`    name: ${stage.name}`);
+    writeScalarField(lines, 'type', stage.type);
     if (stage.agents.length > 0) {
       lines.push(`    agents: [${stage.agents.join(', ')}]`);
     }
-    if (stage.is_parallel) lines.push(`    is_parallel: true`);
-    if (stage.input) lines.push(`    input: ${stage.input}`);
+    if (stage.is_parallel || stage.parallel) lines.push('    parallel: true');
+    writeArrayField(lines, 'input', stringArrayValue(stage.input));
     if (stage.output) {
       lines.push(`    output:`);
       for (const [k, v] of Object.entries(stage.output)) {
         lines.push(`      ${k}: ${v}`);
       }
     }
+    writeArrayField(lines, 'json_artifacts', stage.json_artifacts);
+    writeArrayField(lines, 'required_artifacts', stage.required_artifacts);
+    writeScalarField(lines, 'output_file', stage.output_file);
+    writeScalarField(lines, 'output_json', stage.output_json);
+    writeScalarField(lines, 'decision_file', stage.decision_file);
+    writeScalarField(lines, 'allow_auto_approve', stage.allow_auto_approve);
+    writeScalarField(lines, 'allow_auto_skip', stage.allow_auto_skip);
+    writeScalarField(lines, 'requires_reason_on_reject', stage.requires_reason_on_reject);
+    writeScalarField(lines, 'reject_to', stage.reject_to);
+    writeScalarField(lines, 'loopback_to', stage.loopback_to);
+    if (Array.isArray(stage.loopback_trigger)) {
+      writeArrayField(lines, 'loopback_trigger', stage.loopback_trigger);
+    } else {
+      writeScalarField(lines, 'loopback_trigger', stage.loopback_trigger);
+    }
+    writeScalarField(lines, 'max_retries', stage.max_retries);
     if (stage.loopback) {
       lines.push(`    loopback:`);
       lines.push(`      on: ${stage.loopback.on}`);
@@ -327,13 +497,9 @@ export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
               }
             } catch {
               setConfig({
+                ...defaultPipeline(),
                 name: found.name || 'Pipeline',
                 description: found.description || '',
-                version: '1.0',
-                stages: [
-                  { id: 'plan', name: '需求分析', agents: [], is_parallel: false },
-                  { id: 'develop', name: '代码实现', agents: [], is_parallel: false },
-                ],
               });
             }
           }
@@ -428,16 +594,14 @@ export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
   }
 
   function handleUseTemplate(template: PipelineTemplate) {
-    const stages: StageConfig[] = template.stages.map((s: string) => ({
-      id: s,
-      name: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-      agents: [],
-      is_parallel: false,
-    }));
+    const templateConfig = template.yaml_config || {};
+    const rawStages = Array.isArray(templateConfig.stages) ? templateConfig.stages : stagesFromTemplateIds(template.stages);
+    const result = StageSchema.array().safeParse(rawStages);
+    const stages = result.success ? normalizeStagesForRuntime(result.data) : stagesFromTemplateIds(template.stages);
     setConfig({
-      name: template.name,
-      description: template.description,
-      version: '1.0',
+      name: stringValue(templateConfig.name, template.name),
+      description: stringValue(templateConfig.description, template.description),
+      version: stringValue(templateConfig.version, '1.0'),
       stages,
     });
     setTemplatesOpen(false);

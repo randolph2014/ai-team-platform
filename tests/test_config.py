@@ -48,8 +48,9 @@ class TestPromptContracts(unittest.TestCase):
             ],
             "tech-lead.md": ["implementation-report.json", "git diff", "只修改"],
             "qa-automation.md": ["test-report.json", "acceptance_coverage"],
-            "code-reviewer.md": ["review-report.json", "风险", "Request Changes"],
-            "retrospect.md": ["retrospect-report.json", "交付摘要"],
+            "code-reviewer.md": ["review-report.json", "verdict", "findings", "风险", "Request Changes"],
+            "retrospect.md": ["retrospect-report.json", "remaining_issues", "交付摘要"],
+            "solution-architect.md": ["需求拆分", "只输出 JSON", "不负责方案定稿"],
         }
         for filename, needles in expected.items():
             content = (prompt_dir / filename).read_text(encoding="utf-8")
@@ -68,6 +69,7 @@ class TestPromptContracts(unittest.TestCase):
             "qa-automation.md": ["solution-plan.md"],
             "code-reviewer.md": ["solution-plan.md"],
             "retrospect.md": ["solution-plan.md", "risk-report.md", "doc-output.md", "final-summary"],
+            "solution-architect.md": ["brainstorm.md", "gap-analysis.md", "solution-draft.md"],
         }
         for filename, needles in prompt_forbidden.items():
             content = (prompt_dir / filename).read_text(encoding="utf-8")
@@ -470,6 +472,7 @@ class TestDefaultAgentCollaborationWorkflow(unittest.TestCase):
 
         self.assertNotIn("risk-analyst", agent_names)
         self.assertNotIn("doc-writer", agent_names)
+        self.assertNotIn("brainstormer", agent_names)
         self.assertIn("code-reviewer", agent_names)
         self.assertIn("planner", agent_names)
 
@@ -480,6 +483,9 @@ class TestDefaultAgentCollaborationWorkflow(unittest.TestCase):
         stages = {stage["id"]: stage for stage in loaded.config["pipeline"]}
 
         expected = {
+            "context_scan": {
+                "required_artifacts": ["codebase-context.md", "codebase-context.json"],
+            },
             "requirement_synthesis": {
                 "json_artifacts": ["requirement-final.json"],
                 "required_artifacts": ["requirement-final.md", "requirement-final.json"],

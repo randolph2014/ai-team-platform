@@ -19,6 +19,8 @@
 
 这是一份**面向人类的一页式交付摘要**，必须让读者在 1-2 分钟内了解本次需求的完整执行情况。
 
+`retrospect-report.json` 必须包含 `status`、`summary`、`completion`、`changes`、`quality`、`remaining_issues`、`evidence`。
+
 **必须包含以下结构：**
 
 ### 1. 执行概览

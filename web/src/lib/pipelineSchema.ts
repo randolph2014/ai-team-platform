@@ -24,13 +24,27 @@ export const LoopbackSchema = z.object({
 export const StageSchema = z.object({
   id: z.string().min(1, 'Stage ID不能为空'),
   name: z.string().min(1, 'Stage名称不能为空'),
+  type: z.string().optional(),
   agents: z.array(z.string()).default([]),
   agent_defs: z.array(AgentDefSchema).optional(),
-  input: z.string().optional(),
+  input: z.union([z.string(), z.array(z.string())]).optional(),
   output: z.record(z.string(), z.string()).optional(),
   loopback: LoopbackSchema.optional(),
   quality_gates: z.array(QualityGateSchema).optional(),
+  parallel: z.boolean().optional(),
   is_parallel: z.boolean().default(false),
+  json_artifacts: z.array(z.string()).optional(),
+  required_artifacts: z.array(z.string()).optional(),
+  output_file: z.string().optional(),
+  output_json: z.string().optional(),
+  decision_file: z.string().optional(),
+  allow_auto_approve: z.boolean().optional(),
+  allow_auto_skip: z.boolean().optional(),
+  requires_reason_on_reject: z.boolean().optional(),
+  reject_to: z.string().optional(),
+  loopback_to: z.string().optional(),
+  loopback_trigger: z.union([z.string(), z.array(z.string())]).optional(),
+  max_retries: z.number().int().min(0).max(10).optional(),
 });
 
 export const PipelineConfigSchema = z.object({
