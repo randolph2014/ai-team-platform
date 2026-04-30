@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional, Set
 from engine.config import (
     DEFAULT_CONFIG,
     DEFAULT_TEAM_FILE,
-    USER_CONFIG_FILE,
     ConfigError,
     _deep_merge,
     _read_yaml,
@@ -130,8 +129,56 @@ class PromptUpdate(BaseModel):
     content: str
 
 
-def _project_config_path(project_root: Path) -> Path:
-    return USER_CONFIG_FILE
+async def _db_get_settings() -> Optional[Dict[str, Any]]:
+    """从数据库读取配置，返回原始 dict 或 None。"""
+    try:
+        from persistence.connection import get_connection, release_connection
+        from persistence.repository import SettingsRepo
+    except ImportError:
+        return None
+    conn = await get_connection()
+    if conn is None:
+        return None
+    try:
+        repo = SettingsRepo()
+        return await repo.get(conn)
+    finally:
+        await release_connection(conn)
+
+
+async def _db_save_settings(config: Dict[str, Any]) -> bool:
+    """将配置写入数据库，返回是否成功。"""
+    try:
+        from persistence.connection import get_connection, release_connection
+        from persistence.repository import SettingsRepo
+    except ImportError:
+        return False
+    conn = await get_connection()
+    if conn is None:
+        return False
+    try:
+        repo = SettingsRepo()
+        await repo.upsert(conn, "default", config)
+        return True
+    finally:
+        await release_connection(conn)
+
+
+async def _db_delete_settings() -> bool:
+    """从数据库删除配置，返回是否成功。"""
+    try:
+        from persistence.connection import get_connection, release_connection
+        from persistence.repository import SettingsRepo
+    except ImportError:
+        return False
+    conn = await get_connection()
+    if conn is None:
+        return False
+    try:
+        repo = SettingsRepo()
+        return await repo.delete(conn)
+    finally:
+        await release_connection(conn)
 
 
 def _safe_read_yaml(path: Path):
@@ -144,16 +191,6 @@ def _safe_read_yaml(path: Path):
         return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid YAML: {exc}")
-
-
-def _safe_write_yaml(path: Path, data: Dict[str, Any]):
-    try:
-        import yaml
-    except ImportError:
-        raise HTTPException(status_code=500, detail="PyYAML is not installed")
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False), encoding="utf-8")
 
 
 def _structured_response(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -169,10 +206,9 @@ def _structured_response(config: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _do_update(body: SettingsUpdate, workdir: str, *, replace_runtimes: bool = False) -> Dict[str, Any]:
-    """共享的更新逻辑，POST 和 PUT 共用。配置始终写入平台级用户配置文件。"""
+async def _do_update(body: SettingsUpdate, workdir: str, *, replace_runtimes: bool = False) -> Dict[str, Any]:
+    """共享的更新逻辑，POST 和 PUT 共用。唯一数据源：DB。"""
     project_root = find_project_root(workdir)
-    config_path = _project_config_path(project_root)
 
     # 基础配置始终从平台模板读取
     if DEFAULT_TEAM_FILE.exists():
@@ -180,14 +216,10 @@ def _do_update(body: SettingsUpdate, workdir: str, *, replace_runtimes: bool = F
     else:
         existing = dict(DEFAULT_CONFIG)
 
-    # 合并已有的用户自定义配置
-    if config_path.exists():
-        try:
-            user_overrides = _safe_read_yaml(config_path)
-        except HTTPException:
-            raise
-        if isinstance(user_overrides, dict):
-            _deep_merge(existing, user_overrides)
+    # 从 DB 读取用户个性化配置
+    db_config = await _db_get_settings()
+    if db_config and isinstance(db_config, dict):
+        _deep_merge(existing, db_config)
 
     existing = normalize_config(existing, project_root)
 
@@ -209,11 +241,15 @@ def _do_update(body: SettingsUpdate, workdir: str, *, replace_runtimes: bool = F
     except ConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    _safe_write_yaml(config_path, existing)
+    # 唯一数据源：只写 DB
+    db_ok = await _db_save_settings(existing)
+    if not db_ok:
+        raise HTTPException(status_code=503, detail="数据库不可用，无法保存配置")
+
     return {
         "status": "saved",
         "source": "customized",
-        "path": str(config_path),
+        "path": "db:default",
         "warnings": [],
         "config": _mask_sensitive(_structured_response(existing)),
     }
@@ -222,7 +258,7 @@ def _do_update(body: SettingsUpdate, workdir: str, *, replace_runtimes: bool = F
 if router:
 
     @router.get("/settings")
-    def get_settings(workdir: str = Query(default=".")):
+    async def get_settings(workdir: str = Query(default=".")):
         project_root = find_project_root(workdir)
         loaded = load_config(project_root)
         config = _structured_response(loaded.config)
@@ -235,23 +271,20 @@ if router:
         }
 
     @router.put("/settings")
-    def update_settings_put(body: SettingsUpdate, workdir: str = Query(default=".")):
-        return _do_update(body, workdir, replace_runtimes=True)
+    async def update_settings_put(body: SettingsUpdate, workdir: str = Query(default=".")):
+        return await _do_update(body, workdir, replace_runtimes=True)
 
     @router.post("/settings")
-    def update_settings(body: SettingsUpdate, workdir: str = Query(default=".")):
-        return _do_update(body, workdir)
+    async def update_settings(body: SettingsUpdate, workdir: str = Query(default=".")):
+        return await _do_update(body, workdir)
 
     @router.post("/settings/reset")
-    def reset_settings(workdir: str = Query(default=".")):
+    async def reset_settings(workdir: str = Query(default=".")):
         project_root = find_project_root(workdir)
-        config_path = _project_config_path(project_root)
 
-        if config_path.exists():
-            try:
-                config_path.unlink()
-            except OSError as exc:
-                raise HTTPException(status_code=500, detail=f"Failed to remove config: {exc}")
+        db_ok = await _db_delete_settings()
+        if not db_ok:
+            raise HTTPException(status_code=503, detail="数据库不可用，无法重置配置")
 
         loaded = load_config(project_root)
         return {

@@ -22,6 +22,38 @@ USER_CONFIG_FILE = PLATFORM_ROOT / ".user-config.yaml"
 SKILL_ROOT = Path.home() / ".agents" / "skills" / "ai-team"
 
 
+def _try_load_db_config() -> Optional[Dict[str, Any]]:
+    """尝试从数据库读取配置，DB 不可用时返回 None。"""
+    try:
+        from persistence.connection import is_available
+        if not is_available():
+            return None
+        import asyncio
+        from persistence.connection import get_connection, release_connection
+        from persistence.repository import SettingsRepo
+
+        async def _load():
+            conn = await get_connection()
+            if conn is None:
+                return None
+            try:
+                repo = SettingsRepo()
+                return await repo.get(conn)
+            finally:
+                await release_connection(conn)
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(_load())
+        else:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(lambda: asyncio.run(_load())).result(timeout=10)
+    except Exception:
+        return None
+
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "runtimes": {"auto": {"name": "Auto", "cli": "auto"}},
     "agents": [
@@ -166,13 +198,12 @@ def load_config(project_root: Path, explicit_config: Optional[str] = None) -> Lo
         base_config = dict(DEFAULT_CONFIG)
         config_source = "default"
 
-    # 合并平台级用户自定义配置（通过 UI 保存的配置）
-    if USER_CONFIG_FILE.exists():
-        user_config = _read_yaml(USER_CONFIG_FILE)
-        if isinstance(user_config, dict):
-            _deep_merge(base_config, user_config)
-            config_source = "customized"
-            config_path = str(USER_CONFIG_FILE)
+    # 合并用户个性化配置：唯一数据源 DB
+    db_config = _try_load_db_config()
+    if db_config and isinstance(db_config, dict):
+        _deep_merge(base_config, db_config)
+        config_source = "customized"
+        config_path = "db:default"
 
     if "providers" in base_config or any(isinstance(agent, dict) and "provider" in agent for agent in base_config.get("agents", [])):
         warnings.append("DEPRECATED: providers/agent.provider 已迁移为 runtimes/agent.runtime_id，请保存配置以写回新结构。")

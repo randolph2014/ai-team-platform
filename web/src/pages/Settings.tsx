@@ -34,6 +34,87 @@ type PromptDraft = {
   error?: string;
 };
 
+type ConfigItemMeta = {
+  key: string;
+  label: string;
+  description: string;
+  group?: string;
+};
+
+const RUNNER_CONFIG_META: ConfigItemMeta[] = [
+  {
+    key: 'auto_split_requirements', label: '自动拆分需求', group: '需求拆分',
+    description: '开启后，当需求上下文超过阈值时自动拆分为多个子任务，避免单次执行超出上下文窗口',
+  },
+  {
+    key: 'context_threshold_chars', label: '上下文阈值', group: '需求拆分',
+    description: '触发自动拆分的字符数阈值，也用于决定串行 / 并行执行策略',
+  },
+  {
+    key: 'agent_timeout_seconds', label: 'Agent 超时', group: '运行控制',
+    description: 'Agent 单次执行的最大时间，默认 1800 秒（30 分钟），超时后强制终止进程',
+  },
+  {
+    key: 'heartbeat_seconds', label: '心跳间隔', group: '运行控制',
+    description: '定时发射心跳事件的间隔（秒），用于前端展示 Agent 仍在运行中',
+  },
+  {
+    key: 'stop_parallel_on_first_error', label: '遇错即停', group: '运行控制',
+    description: '并行执行时，任意 Agent 失败则立即停止其他正在运行的 Agent，防止错误扩散',
+  },
+  {
+    key: 'parallel_log_mode', label: '并行日志模式', group: '运行控制',
+    description: '并行执行时日志输出方式：interleaved 交错输出便于实时查看各 Agent 进度',
+  },
+  {
+    key: 'production_mode', label: '生产模式', group: '安全校验',
+    description: '启用后会激活严格校验（强制 worktree、强制 verify 命令），确保生产环境代码安全',
+  },
+  {
+    key: 'require_worktree', label: '强制 Worktree', group: '安全校验',
+    description: '生产模式下强制要求启用 worktree 隔离，未启用则拒绝执行 pipeline',
+  },
+  {
+    key: 'require_verify_cmd', label: '强制验证命令', group: '安全校验',
+    description: '生产模式下强制要求配置 quality_gates 验证命令，确保交付代码质量',
+  },
+  {
+    key: 'max_input_chars_per_file', label: '文件输入上限', group: '上下文控制',
+    description: '单个输入文件传给 Agent 的最大字符数，防止过大文件导致 token 过度消耗',
+  },
+  {
+    key: 'max_loopback_feedback_chars', label: '反馈长度上限', group: '上下文控制',
+    description: 'QA / Reviewer 反馈给 Developer 的最大字符数，超出部分按 truncate 策略截断',
+  },
+  {
+    key: 'loopback_truncate_strategy', label: '截断策略', group: '上下文控制',
+    description: '反馈超长时的截断方式：smart 智能截取关键部分、head 保留头部、tail 保留尾部',
+  },
+];
+
+const WORKTREE_CONFIG_META: ConfigItemMeta[] = [
+  {
+    key: 'enabled', label: '启用隔离',
+    description: '每次 pipeline run 在 .ai/worktrees/<run-id>/ 创建独立 Git 工作目录和分支，确保多 Agent 并行时代码互不冲突',
+  },
+  {
+    key: 'base_branch', label: '基准分支',
+    description: '新建 worktree 基于此分支的最新提交作为起点，默认 main',
+  },
+  {
+    key: 'merge_strategy', label: '合并策略',
+    description: 'pipeline 全部通过后的合并方式：squash 将所有提交压缩为一个干净提交、merge-commit 保留完整历史',
+  },
+  {
+    key: 'auto_cleanup', label: '自动清理',
+    description: 'pipeline 完成后（无论成功或失败）自动删除 worktree 目录和对应的 Git 分支',
+  },
+  {
+    key: 'merge_on_conflict', label: '冲突处理',
+    description: '合并回主分支发生冲突时的策略：pause 暂停等待人工介入解决、abort 直接终止并标记失败',
+  },
+];
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -191,6 +272,64 @@ function candidateStatus(candidate: RuntimeCandidate): string {
   if (!candidate.available) return '未安装';
   if (!candidate.supported) return candidate.unsupported_reason || '暂未支持';
   return '可添加';
+}
+
+function formatConfigValue(key: string, value: unknown): string {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'boolean') return value ? '启用' : '关闭';
+  if (typeof value === 'number') {
+    if (key.includes('seconds')) return `${value} 秒`;
+    if (key.includes('chars')) return `${value.toLocaleString()} 字符`;
+    return String(value);
+  }
+  return String(value);
+}
+
+function groupBy<T>(items: T[], fn: (item: T) => string): Record<string, T[]> {
+  const groups: Record<string, T[]> = {};
+  for (const item of items) {
+    const key = fn(item);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(item);
+  }
+  return groups;
+}
+
+function renderConfigSection(
+  title: string,
+  subtitle: string,
+  config: Record<string, unknown>,
+  meta: ConfigItemMeta[],
+): React.ReactNode {
+  const groups = groupBy(meta, (m) => m.group || '');
+
+  return (
+    <div className="settingGroup">
+      <h2>{title}</h2>
+      <p className="configSectionSubtitle">{subtitle}</p>
+      {Object.entries(groups).map(([group, items]) => (
+        <div key={group} className="configGroup">
+          {group && <h3 className="configGroupTitle">{group}</h3>}
+          <div className="configDescriptiveTable">
+            {items.map((item) => {
+              const value = config[item.key];
+              const formatted = formatConfigValue(item.key, value);
+              return (
+                <div key={item.key} className="configDescriptiveRow">
+                  <div className="configDescriptiveKey">
+                    <code>{item.key}</code>
+                    <span className="configDescriptiveLabel">{item.label}</span>
+                  </div>
+                  <div className="configDescriptiveValue">{formatted}</div>
+                  <div className="configDescriptiveDesc">{item.description}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function Settings() {
@@ -639,18 +778,18 @@ export function Settings() {
             </div>
           )}
 
-          {activeSection === 'runner' && (
-            <div className="settingGroup">
-              <h2>Runner</h2>
-              {renderValue(draftConfig.runner)}
-            </div>
+          {activeSection === 'runner' && renderConfigSection(
+            'Runner',
+            '控制 AI Agent 的执行行为，包括超时、并发、上下文拆分及生产模式校验等运行时参数。',
+            (draftConfig.runner || {}) as Record<string, unknown>,
+            RUNNER_CONFIG_META,
           )}
 
-          {activeSection === 'worktree' && (
-            <div className="settingGroup">
-              <h2>Worktree</h2>
-              {renderValue(draftConfig.worktree)}
-            </div>
+          {activeSection === 'worktree' && renderConfigSection(
+            'Worktree',
+            '基于 git worktree 为每次 pipeline run 创建代码隔离环境，确保并行安全且主分支不被污染。',
+            (draftConfig.worktree || {}) as Record<string, unknown>,
+            WORKTREE_CONFIG_META,
           )}
         </section>
       </div>
