@@ -18,6 +18,7 @@ from .runtimes import sanitize_runtime_config
 PLATFORM_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_ROOT = PLATFORM_ROOT / "templates"
 DEFAULT_TEAM_FILE = TEMPLATES_ROOT / "team.yaml"
+USER_CONFIG_FILE = PLATFORM_ROOT / ".user-config.yaml"
 SKILL_ROOT = Path.home() / ".agents" / "skills" / "ai-team"
 
 
@@ -122,7 +123,7 @@ def find_project_root(start: str) -> Path:
     if current.is_file():
         current = current.parent
     while current != current.parent:
-        if (current / ".ai" / "team.yaml").exists() or (current / ".git").exists() or (current / "AGENTS.md").exists():
+        if (current / ".ai").is_dir() or (current / ".git").exists() or (current / "AGENTS.md").exists():
             return current
         current = current.parent
     return Path(start).expanduser().resolve()
@@ -142,25 +143,50 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
 
 def load_config(project_root: Path, explicit_config: Optional[str] = None) -> LoadedConfig:
     warnings: List[str] = []
-    candidates: List[Tuple[Path, str]] = []
-    if explicit_config:
-        candidates.append((Path(explicit_config).expanduser(), "project"))
-    candidates.append((project_root / ".ai" / "team.yaml", "project"))
-    candidates.append((DEFAULT_TEAM_FILE, "platform"))
 
-    for path, source in candidates:
+    # explicit_config 仅用于测试，生产环境始终走平台模板
+    if explicit_config:
+        path = Path(explicit_config).expanduser()
         if not path.is_absolute():
             path = project_root / path
         if path.exists():
             config = _read_yaml(path)
-            if source == "platform":
-                warnings.append(f"未找到项目级 .ai/team.yaml，使用平台模板: {path}")
             if "providers" in config or any(isinstance(agent, dict) and "provider" in agent for agent in config.get("agents", [])):
                 warnings.append("DEPRECATED: providers/agent.provider 已迁移为 runtimes/agent.runtime_id，请保存配置以写回新结构。")
-            return LoadedConfig(config=normalize_config(config, project_root), source=source, path=str(path), warnings=warnings)
+            return LoadedConfig(config=normalize_config(config, project_root), source="project", path=str(path), warnings=warnings)
 
-    warnings.append("未找到项目级配置或平台模板，使用内置默认配置")
-    return LoadedConfig(config=normalize_config(DEFAULT_CONFIG, project_root), source="default", warnings=warnings)
+    # 始终使用平台模板作为基础配置
+    base_config: Dict[str, Any] = {}
+    config_source = "platform"
+    config_path = str(DEFAULT_TEAM_FILE)
+
+    if DEFAULT_TEAM_FILE.exists():
+        base_config = _read_yaml(DEFAULT_TEAM_FILE)
+    else:
+        base_config = dict(DEFAULT_CONFIG)
+        config_source = "default"
+
+    # 合并平台级用户自定义配置（通过 UI 保存的配置）
+    if USER_CONFIG_FILE.exists():
+        user_config = _read_yaml(USER_CONFIG_FILE)
+        if isinstance(user_config, dict):
+            _deep_merge(base_config, user_config)
+            config_source = "customized"
+            config_path = str(USER_CONFIG_FILE)
+
+    if "providers" in base_config or any(isinstance(agent, dict) and "provider" in agent for agent in base_config.get("agents", [])):
+        warnings.append("DEPRECATED: providers/agent.provider 已迁移为 runtimes/agent.runtime_id，请保存配置以写回新结构。")
+
+    return LoadedConfig(config=normalize_config(base_config, project_root), source=config_source, path=config_path, warnings=warnings)
+
+
+def _deep_merge(base: Dict[str, Any], overrides: Dict[str, Any]) -> None:
+    """将 overrides 深度合并到 base 中（原地修改 base）。"""
+    for key, value in overrides.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
 
 
 def normalize_config(config: Dict[str, Any], project_root: Optional[Path] = None) -> Dict[str, Any]:
@@ -212,7 +238,7 @@ def normalize_config(config: Dict[str, Any], project_root: Optional[Path] = None
         if forbidden_agent_fields:
             raise ConfigError(
                 f"Agent {agent.get('name', '<unknown>')} cannot contain {', '.join(forbidden_agent_fields)}; "
-                "configure model and fallback_models on the referenced runtime"
+                "configure model on the referenced runtime"
             )
         legacy_provider = agent.pop("provider", None)
         if "runtime_id" not in agent:

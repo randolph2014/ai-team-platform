@@ -82,6 +82,7 @@ export interface RuntimeConfig {
   model_arg_style?: 'long' | 'codex' | string;
   model?: string;
   default_model?: string;
+  /** @deprecated fallback_models 已废弃，保留字段仅为向后兼容 */
   fallback_models?: string[];
   env?: Record<string, string>;
   provider?: string;

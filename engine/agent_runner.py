@@ -60,49 +60,22 @@ class AgentRunner:
         heartbeat_seconds = int(self.runner_config.get("heartbeat_seconds") or 0)
 
         primary_model = runtime.get("model") or runtime.get("default_model")
-        models_to_try: List[Optional[str]] = []
-        if primary_model:
-            models_to_try.append(primary_model)
-        models_to_try.extend(runtime.get("fallback_models") or [])
-        if not models_to_try:
-            models_to_try = [None]
 
-        last_run: Optional[AgentRun] = None
-        remaining_models = list(models_to_try)
-        for model in models_to_try:
-            remaining_models.pop(0)
-            elapsed = time.monotonic() - overall_start
-            remaining_timeout = max(int(timeout - elapsed), 1)
-
-            agent_run = self._try_model(
-                run_id=run_id,
-                stage_id=stage_id,
-                agent=agent,
-                runtime=runtime,
-                prompt=prompt,
-                cwd=cwd,
-                output_file=output_file,
-                raw_log_file=raw_log_file,
-                model=model,
-                model_requested=primary_model,
-                timeout=remaining_timeout,
-                heartbeat_seconds=heartbeat_seconds,
-            )
-            if agent_run.status == "completed":
-                return self._complete(agent_run, overall_start, run_id, stage_id)
-            if remaining_models:
-                self.bus.emit(
-                    "agent:fallback",
-                    run_id,
-                    stage_id=stage_id,
-                    agent_name=agent.name,
-                    failed_model=model,
-                    next_model=remaining_models[0],
-                    error=agent_run.error_message,
-                )
-            last_run = agent_run
-
-        return self._complete(last_run, overall_start, run_id, stage_id)
+        agent_run = self._try_model(
+            run_id=run_id,
+            stage_id=stage_id,
+            agent=agent,
+            runtime=runtime,
+            prompt=prompt,
+            cwd=cwd,
+            output_file=output_file,
+            raw_log_file=raw_log_file,
+            model=primary_model,
+            model_requested=primary_model,
+            timeout=int(timeout),
+            heartbeat_seconds=heartbeat_seconds,
+        )
+        return self._complete(agent_run, overall_start, run_id, stage_id)
 
     def _try_model(
         self,

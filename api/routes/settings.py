@@ -7,7 +7,9 @@ from typing import Any, Dict, List, Optional, Set
 from engine.config import (
     DEFAULT_CONFIG,
     DEFAULT_TEAM_FILE,
+    USER_CONFIG_FILE,
     ConfigError,
+    _deep_merge,
     _read_yaml,
     agent_map,
     find_project_root,
@@ -129,7 +131,7 @@ class PromptUpdate(BaseModel):
 
 
 def _project_config_path(project_root: Path) -> Path:
-    return project_root / ".ai" / "team.yaml"
+    return USER_CONFIG_FILE
 
 
 def _safe_read_yaml(path: Path):
@@ -168,25 +170,26 @@ def _structured_response(config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _do_update(body: SettingsUpdate, workdir: str, *, replace_runtimes: bool = False) -> Dict[str, Any]:
-    """共享的更新逻辑，POST 和 PUT 共用。"""
+    """共享的更新逻辑，POST 和 PUT 共用。配置始终写入平台级用户配置文件。"""
     project_root = find_project_root(workdir)
     config_path = _project_config_path(project_root)
 
+    # 基础配置始终从平台模板读取
+    if DEFAULT_TEAM_FILE.exists():
+        existing = _safe_read_yaml(DEFAULT_TEAM_FILE)
+    else:
+        existing = dict(DEFAULT_CONFIG)
+
+    # 合并已有的用户自定义配置
     if config_path.exists():
         try:
-            existing = _safe_read_yaml(config_path)
+            user_overrides = _safe_read_yaml(config_path)
         except HTTPException:
             raise
-        existing = normalize_config(existing, project_root)
-    else:
-        if DEFAULT_TEAM_FILE.exists():
-            try:
-                existing = _safe_read_yaml(DEFAULT_TEAM_FILE)
-            except HTTPException:
-                raise
-            existing = normalize_config(existing, project_root)
-        else:
-            existing = normalize_config(dict(DEFAULT_CONFIG), project_root)
+        if isinstance(user_overrides, dict):
+            _deep_merge(existing, user_overrides)
+
+    existing = normalize_config(existing, project_root)
 
     updates = body.model_dump(exclude_none=True)
     for key, value in updates.items():
@@ -209,7 +212,7 @@ def _do_update(body: SettingsUpdate, workdir: str, *, replace_runtimes: bool = F
     _safe_write_yaml(config_path, existing)
     return {
         "status": "saved",
-        "source": "project",
+        "source": "customized",
         "path": str(config_path),
         "warnings": [],
         "config": _mask_sensitive(_structured_response(existing)),

@@ -92,6 +92,7 @@ function cleanRuntime(runtime: RuntimeConfig): RuntimeConfig {
     available: _available,
     configured: _configured,
     default_model: legacyDefaultModel,
+    fallback_models: _fallbackModels,
     launch_header: _launchHeader,
     path: _path,
     provider: _provider,
@@ -114,12 +115,6 @@ function cleanRuntime(runtime: RuntimeConfig): RuntimeConfig {
   if (!next.model?.trim() && legacyDefaultModel?.trim()) next.model = legacyDefaultModel.trim();
   if (!next.model?.trim()) delete next.model;
   else next.model = next.model.trim();
-  if (!next.fallback_models || next.fallback_models.length === 0) delete next.fallback_models;
-  else {
-    const fallbackModels = next.fallback_models.map((item) => item.trim()).filter(Boolean);
-    if (fallbackModels.length > 0) next.fallback_models = fallbackModels;
-    else delete next.fallback_models;
-  }
   if (next.env) {
     const env = Object.fromEntries(
       Object.entries(next.env).filter(([, value]) => value !== '***'),
@@ -209,6 +204,7 @@ export function Settings() {
   const [saveMessage, setSaveMessage] = useState('');
   const [activeSection, setActiveSection] = useState<SettingsSection>('runtimes');
   const [selectedCandidateId, setSelectedCandidateId] = useState('');
+  const [activeAgentTab, setActiveAgentTab] = useState(0);
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -292,6 +288,12 @@ export function Settings() {
   }
 
   function removeRuntime(id: string) {
+    const runtimeName = runtimes[id]?.name || id;
+    const affectedAgents = agents.filter((agent) => agent.runtime_id === id);
+    const msg = affectedAgents.length > 0
+      ? `确定删除 Runtime「${runtimeName}」？\n${affectedAgents.length} 个 Agent 将被迁移到其他 Runtime。`
+      : `确定删除 Runtime「${runtimeName}」？`;
+    if (!window.confirm(msg)) return;
     const { [id]: _removed, ...nextRuntimes } = runtimes;
     updateDraft({
       runtimes: nextRuntimes,
@@ -347,10 +349,13 @@ export function Settings() {
   }
 
   function removeAgent(index: number) {
+    const agentName = agents[index]?.name || `Agent ${index + 1}`;
+    if (!window.confirm(`确定删除 Agent「${agentName}」？\n删除后需保存才会生效。`)) return;
     updateDraft({ agents: agents.filter((_, i) => i !== index) });
   }
 
   async function handleReset() {
+    if (!window.confirm('确定重置为默认配置？\n当前所有自定义设置将被删除，此操作不可撤销。')) return;
     setSaving(true);
     setSaveMessage('');
     try {
@@ -525,7 +530,11 @@ export function Settings() {
                         <div>
                           <strong>{runtime.name || displayRuntime.name || id}</strong>
                           <div className="settingsMetaLine settingsMetaInline">
-                            id: {id} · cli: {displayRuntime.cli || runtime.cli}
+                            {displayRuntime.model && <span className="metaTag">{displayRuntime.model}</span>}
+                            {displayRuntime.version && <span className="metaTag metaTagMuted">v{displayRuntime.version}</span>}
+                            <span className={`metaTag ${displayRuntime.available === false ? 'metaTagRed' : 'metaTagGreen'}`}>
+                              {displayRuntime.available === false ? '不可用' : '可用'}
+                            </span>
                           </div>
                         </div>
                         <button className="iconButton danger" onClick={() => removeRuntime(id)} aria-label="删除 Runtime">
@@ -539,18 +548,7 @@ export function Settings() {
                         </label>
                         <label>
                           CLI
-                          <input value={runtime.cli || ''} readOnly className="settingsReadOnlyInput" />
-                        </label>
-                        <label>
-                          Args
-                          <input value={splitList(runtime.args)} onChange={(e) => updateRuntime(id, { ...runtime, args: parseList(e.target.value) })} />
-                        </label>
-                        <label>
-                          Prompt Mode
-                          <select value={runtime.prompt_mode || 'arg'} onChange={(e) => updateRuntime(id, { ...runtime, prompt_mode: e.target.value as RuntimeConfig['prompt_mode'] })}>
-                            <option value="arg">arg</option>
-                            <option value="stdin">stdin</option>
-                          </select>
+                          <input value={displayRuntime.cli || runtime.cli || ''} readOnly className="settingsReadOnlyInput" />
                         </label>
                         <label>
                           Model Override
@@ -560,18 +558,6 @@ export function Settings() {
                             onChange={(e) => updateRuntime(id, { ...runtime, model: e.target.value, default_model: undefined })}
                           />
                         </label>
-                        <label>
-                          Fallback Models
-                          <input value={splitList(runtime.fallback_models)} onChange={(e) => updateRuntime(id, { ...runtime, fallback_models: parseList(e.target.value) })} />
-                        </label>
-                      </div>
-                      <div className="runtimeMetaGrid">
-                        <span>available: {displayRuntime.available === undefined ? '-' : displayRuntime.available ? 'true' : 'false'}</span>
-                        <span>supported: {displayRuntime.supported === undefined ? '-' : displayRuntime.supported ? 'true' : 'false'}</span>
-                        {displayRuntime.model && <span>detected model: {displayRuntime.model}</span>}
-                        {displayRuntime.version && <span>version: {displayRuntime.version}</span>}
-                        {displayRuntime.path && <span className="settingsWideMeta">path: {displayRuntime.path}</span>}
-                        {displayRuntime.unsupported_reason && <span className="settingsWideMeta">reason: {displayRuntime.unsupported_reason}</span>}
                       </div>
                       {runtime.env && <div className="settingsMetaLine">env: {Object.keys(runtime.env).length} 个变量，保存时会跳过值为 *** 的字段</div>}
                     </div>
@@ -586,56 +572,70 @@ export function Settings() {
             <div className="settingGroup">
               <div className="settingsSectionHeader">
                 <h2>Agents</h2>
-                <button className="button" onClick={addAgent}><Plus size={14} /> 新增 Agent</button>
+                <button className="button" onClick={() => { addAgent(); setActiveAgentTab(agents.length); }}><Plus size={14} /> 新增 Agent</button>
               </div>
-              <div className="settingsCards">
-                {agents.map((agent, index) => {
-                  const promptDraft = agentPrompts[agent.name];
-                  return (
-                    <div className="settingsEditCard" key={`${agent.name}-${index}`}>
-                      <div className="settingsCardHeader">
-                        <strong>{agent.name || `Agent ${index + 1}`}</strong>
-                        <button className="iconButton danger" onClick={() => removeAgent(index)} aria-label="删除 Agent">
-                          <Trash2 size={14} />
-                        </button>
+              {agents.length > 0 && (
+                <>
+                  <div className="agentTabs">
+                    {agents.map((agent, index) => (
+                      <button
+                        key={`${agent.name}-${index}`}
+                        type="button"
+                        className={`agentTab ${activeAgentTab === index ? 'agentTabActive' : ''}`}
+                        onClick={() => setActiveAgentTab(index)}
+                      >
+                        {agent.name || `Agent ${index + 1}`}
+                        <span
+                          className="agentTabClose"
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => { e.stopPropagation(); removeAgent(index); setActiveAgentTab(Math.max(0, Math.min(activeAgentTab, agents.length - 2))); }}
+                        >
+                          &times;
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  {agents[activeAgentTab] && (() => {
+                    const agent = agents[activeAgentTab];
+                    const promptDraft = agentPrompts[agent.name];
+                    return (
+                      <div className="settingsEditCard" key={`${agent.name}-${activeAgentTab}`}>
+                        <div className="settingsFormGrid">
+                          <label>
+                            Name
+                            <input value={agent.name} onChange={(e) => updateAgentName(activeAgentTab, e.target.value)} />
+                          </label>
+                          <label>
+                            Runtime
+                            <select className="agentRuntimeSelect" value={agent.runtime_id} onChange={(e) => updateAgent(activeAgentTab, { runtime_id: e.target.value })}>
+                              <option value="">选择 Runtime</option>
+                              {runtimeIds.map((runtimeId) => (
+                                <option key={runtimeId} value={runtimeId}>{runtimes[runtimeId]?.name || runtimeId}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Role
+                            <input value={agent.role || ''} onChange={(e) => updateAgent(activeAgentTab, { role: e.target.value })} />
+                          </label>
+                          <label className="settingsWideField">
+                            Soul
+                            <textarea
+                              className="agentSoulTextarea"
+                              value={promptDraft?.content || ''}
+                              onChange={(e) => updatePromptDraft(agent.name, e.target.value)}
+                              placeholder={promptDraft?.error || '定义 Agent 的行为准则、能力和人格...'}
+                            />
+                          </label>
+                        </div>
+                        {promptDraft?.error && <div className="settingsMetaLine settingsMetaError">{promptDraft.error}</div>}
                       </div>
-                      <div className="settingsFormGrid">
-                        <label>
-                          Name
-                          <input value={agent.name} onChange={(e) => updateAgentName(index, e.target.value)} />
-                        </label>
-                        <label>
-                          Runtime
-                          <select value={agent.runtime_id} onChange={(e) => updateAgent(index, { runtime_id: e.target.value })}>
-                            <option value="">选择 Runtime</option>
-                            {runtimeIds.map((runtimeId) => (
-                              <option key={runtimeId} value={runtimeId}>{runtimes[runtimeId]?.name || runtimeId}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="settingsWideField">
-                          Role
-                          <input value={agent.role || ''} onChange={(e) => updateAgent(index, { role: e.target.value })} />
-                        </label>
-                        <label className="settingsWideField">
-                          Prompt
-                          <textarea
-                            value={promptDraft?.content || ''}
-                            onChange={(e) => updatePromptDraft(agent.name, e.target.value)}
-                            placeholder={promptDraft?.error || 'Prompt 文档内容'}
-                          />
-                        </label>
-                      </div>
-                      <div className={`settingsMetaLine ${promptDraft?.error ? 'settingsMetaError' : ''}`}>
-                        Prompt file: {promptDraft?.path || agent.prompt || '.ai/agents/<agent>.md'}
-                        {promptDraft?.sourcePath && promptDraft.sourcePath !== promptDraft.path ? ` · source: ${promptDraft.sourcePath}` : ''}
-                        {promptDraft?.error ? ` · ${promptDraft.error}` : ''}
-                      </div>
-                    </div>
-                  );
-                })}
-                {agents.length === 0 && <div className="emptyState">暂无 Agent 配置</div>}
-              </div>
+                    );
+                  })()}
+                </>
+              )}
+              {agents.length === 0 && <div className="emptyState">暂无 Agent 配置</div>}
             </div>
           )}
 

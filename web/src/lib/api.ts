@@ -270,13 +270,13 @@ export async function validateConfig(workdir: string): Promise<{ valid: boolean;
 
 // --- Costs ---
 
-export async function fetchRunCosts(runId: string): Promise<{ run_id: string; entries: Array<{ agent_name: string; model: string; total_tokens: number; cost_usd: number }> }> {
+export async function fetchRunCosts(runId: string): Promise<{ run_id: string; records: Array<{ agent_name: string; model: string; prompt_tokens: number; completion_tokens: number; estimated_cost: number; stage_id: string; timestamp: string }>; count: number; total_tokens: number; total_cost: number }> {
   const response = await apiFetch(`/costs?run_id=${runId}`);
   if (!response.ok) throw new Error(`获取成本数据失败: ${response.status}`);
   return response.json();
 }
 
-export async function fetchCostSummary(period: string = 'daily'): Promise<{ period: string; total_cost_usd: number; total_tokens: number; runs: number }> {
+export async function fetchCostSummary(period: string = 'daily'): Promise<{ period: string; runs: string[]; run_count: number; total_calls: number; total_tokens: number; total_cost: number; by_model: Record<string, { prompt_tokens: number; completion_tokens: number; estimated_cost: number; calls: number }> }> {
   const response = await apiFetch(`/costs/summary?period=${period}`);
   if (!response.ok) throw new Error(`获取成本摘要失败: ${response.status}`);
   return response.json();

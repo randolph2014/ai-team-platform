@@ -5,13 +5,16 @@ import { fetchCostSummary, fetchRunCosts } from '../lib/api';
 interface CostEntry {
   agent_name: string;
   model: string;
-  total_tokens: number;
-  cost_usd: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  estimated_cost: number;
+  stage_id: string;
+  timestamp: string;
 }
 
 export function Costs() {
   const [period, setPeriod] = useState('daily');
-  const [summary, setSummary] = useState<{ total_cost_usd: number; total_tokens: number; runs: number } | null>(null);
+  const [summary, setSummary] = useState<{ total_cost: number; total_tokens: number; run_count: number } | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState('');
 
@@ -36,7 +39,7 @@ export function Costs() {
     setCostLoading(true);
     setCostError('');
     fetchRunCosts(runId.trim())
-      .then((data) => setRunCosts(data.entries))
+      .then((data) => setRunCosts(data.records))
       .catch((err: Error) => setCostError(err.message))
       .finally(() => setCostLoading(false));
   }
@@ -77,7 +80,7 @@ export function Costs() {
           {summaryLoading ? (
             <strong className="skeletonText">—</strong>
           ) : (
-            <strong>${summary?.total_cost_usd.toFixed(4) ?? '0.0000'}</strong>
+            <strong>${summary?.total_cost.toFixed(4) ?? '0.0000'}</strong>
           )}
         </div>
         <div className="statCard">
@@ -95,7 +98,7 @@ export function Costs() {
           {summaryLoading ? (
             <strong className="skeletonText">—</strong>
           ) : (
-            <strong>{summary?.runs ?? 0}</strong>
+            <strong>{summary?.run_count ?? 0}</strong>
           )}
         </div>
         <div className="statCard">
@@ -147,8 +150,8 @@ export function Costs() {
                     <tr key={i}>
                       <td className="mono">{entry.agent_name}</td>
                       <td>{entry.model || '—'}</td>
-                      <td>{entry.total_tokens.toLocaleString()}</td>
-                      <td className="mono">${entry.cost_usd.toFixed(6)}</td>
+                      <td>{(entry.prompt_tokens + entry.completion_tokens).toLocaleString()}</td>
+                      <td className="mono">${entry.estimated_cost.toFixed(6)}</td>
                     </tr>
                   ))
                 )}

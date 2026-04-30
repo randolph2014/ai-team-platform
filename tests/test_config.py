@@ -231,7 +231,7 @@ class TestCliParser(unittest.TestCase):
 
 class TestLoadConfig(unittest.TestCase):
     def test_load_from_project_config(self) -> None:
-        """从项目级 .ai/team.yaml 加载配置"""
+        """项目级 .ai/team.yaml 不再自动加载，始终返回平台模板配置"""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
@@ -240,7 +240,7 @@ class TestLoadConfig(unittest.TestCase):
                 encoding="utf-8",
             )
             loaded = load_config(root)
-            self.assertEqual(loaded.source, "project")
+            self.assertNotEqual(loaded.source, "project")
 
     def test_load_with_explicit_config(self) -> None:
         """使用显式配置路径加载"""
@@ -307,6 +307,16 @@ class TestFindProjectRoot(unittest.TestCase):
             file = root / "README.md"
             file.write_text("test", encoding="utf-8")
             result = find_project_root(str(file))
+            self.assertEqual(result, root)
+
+    def test_finds_ai_dir_root(self) -> None:
+        """从子目录找到 .ai 目录所在根（无 .git）"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / ".ai").mkdir()
+            sub = root / "src" / "pkg"
+            sub.mkdir(parents=True)
+            result = find_project_root(str(sub))
             self.assertEqual(result, root)
 
 

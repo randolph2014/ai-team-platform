@@ -56,7 +56,7 @@ class EngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -90,7 +90,7 @@ worktree:
             )
             (root / ".ai" / "agents").mkdir()
             (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
-            report = Orchestrator(root).run("ship it", yes=True)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("ship it", yes=True)
             self.assertEqual(report.status, "completed")
             self.assertEqual(report.config_source, "project")
             self.assertIn("tech-lead-output.md", report.artifacts)
@@ -101,7 +101,7 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -129,7 +129,7 @@ worktree:
             )
             (root / ".ai" / "agents").mkdir()
             (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
-            report = Orchestrator(root).run("ship it", yes=True)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("ship it", yes=True)
             self.assertEqual(report.status, "failed")
             output_dir = Path(report.output_dir)
             feedback_file = output_dir / "loopback-feedback-develop-1.md"
@@ -146,7 +146,7 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -188,7 +188,7 @@ worktree:
             (root / ".ai" / "agents").mkdir()
             (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
             (root / ".ai" / "agents" / "qa.md").write_text("You are qa.", encoding="utf-8")
-            report = Orchestrator(root).run("implement feature", yes=True)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("implement feature", yes=True)
             self.assertEqual(report.status, "failed")
             output_dir = Path(report.output_dir)
             feedback_file = output_dir / "loopback-feedback-qa-1.md"
@@ -204,7 +204,7 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -233,7 +233,7 @@ worktree:
             (root / ".ai" / "agents").mkdir()
             (root / ".ai" / "agents" / "qa.md").write_text("You are qa.", encoding="utf-8")
             (root / ".ai" / "agents" / "reviewer.md").write_text("You are reviewer.", encoding="utf-8")
-            report = Orchestrator(root).run("ship it", yes=True)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("ship it", yes=True)
             self.assertEqual(report.status, "completed")
             stage_run = report.stages[0] if report.stages else None
             self.assertIsNotNone(stage_run)
@@ -247,7 +247,7 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -278,7 +278,7 @@ worktree:
             )
             (root / ".ai" / "agents").mkdir()
             (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
-            report = Orchestrator(root).run("ship it", yes=True)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("ship it", yes=True)
             # 质量门禁始终失败，且达到最大重试次数
             self.assertEqual(report.status, "failed")
             develop_stages = [s for s in report.stages if s.stage_id == "develop"]
@@ -290,7 +290,7 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -321,7 +321,7 @@ worktree:
             )
             (root / ".ai" / "agents").mkdir()
             (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
-            report = Orchestrator(root).run("ship it", yes=True)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("ship it", yes=True)
             self.assertEqual(report.status, "completed")
             develop_stages = [s for s in report.stages if s.stage_id == "develop"]
             # 质量门禁通过，应只有 1 个 develop stage（无重试）
@@ -384,7 +384,7 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -412,7 +412,7 @@ worktree:
             )
             (root / ".ai" / "agents").mkdir()
             (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
-            report = Orchestrator(root).run("ship it", yes=True)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("ship it", yes=True)
             # 由于 loopback 且超过 max_retries=1，最终失败
             self.assertEqual(report.status, "failed")
 
@@ -421,7 +421,7 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -449,7 +449,7 @@ worktree:
             )
             (root / ".ai" / "agents").mkdir()
             (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
-            report = Orchestrator(root).run("ship it", yes=True)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("ship it", yes=True)
             self.assertEqual(report.status, "failed")
 
     def test_quality_gate_threshold_comparison(self) -> None:
@@ -592,7 +592,7 @@ worktree:
             subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True, check=True)
             subprocess.run(["git", "commit", "-m", "init"], cwd=root, capture_output=True, check=True)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -620,7 +620,7 @@ worktree:
             )
             (root / ".ai" / "agents").mkdir()
             (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
-            report = Orchestrator(root).run("implement feature", yes=True)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("implement feature", yes=True)
             self.assertEqual(report.status, "completed")
 
     def test_orchestrator_with_code_apply_stage(self) -> None:
@@ -628,7 +628,7 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -661,7 +661,7 @@ quality_gates: []
             )
             (root / ".ai" / "agents").mkdir()
             (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
-            report = Orchestrator(root).run("create a file", yes=True)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("create a file", yes=True)
             self.assertEqual(report.status, "completed")
             stage_ids = [s.stage_id for s in report.stages]
             self.assertIn("code_apply", stage_ids)
@@ -671,7 +671,7 @@ quality_gates: []
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -706,7 +706,7 @@ quality_gates: []
             )
             (root / ".ai" / "agents").mkdir()
             (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
-            report = Orchestrator(root).run("test", yes=True, skip_stages=["review"])
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("test", yes=True, skip_stages=["review"])
             self.assertEqual(report.status, "completed")
             # skip_stages 仍然出现在 stages 中，但状态为 skipped
             review_stages = [s for s in report.stages if s.stage_id == "review"]
@@ -718,7 +718,7 @@ quality_gates: []
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -767,7 +767,7 @@ worktree:
             for name in ["brainstormer", "devils-advocate", "dev"]:
                 (root / ".ai" / "agents" / f"{name}.md").write_text(f"You are {name}.", encoding="utf-8")
 
-            report = Orchestrator(root).run("add hello", yes=False)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("add hello", yes=False)
 
             self.assertEqual(report.status, "completed")
             stages = {stage.stage_id: stage for stage in report.stages}
@@ -781,7 +781,7 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -815,7 +815,7 @@ worktree:
             (root / ".ai" / "agents" / "devils-advocate.md").write_text("You are reviewer.", encoding="utf-8")
 
             with patch("sys.stdin.isatty", return_value=False):
-                report = Orchestrator(root).run("auth", yes=False)
+                report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("auth", yes=False)
 
             self.assertEqual(report.status, "waiting")
             stages = {stage.stage_id: stage for stage in report.stages}
@@ -831,7 +831,7 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Reviewer:
@@ -879,11 +879,11 @@ worktree:
             (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
 
             with patch("sys.stdin.isatty", return_value=False):
-                waiting = Orchestrator(root).run("auth", run_id="resume-plan-confirm", yes=False)
+                waiting = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("auth", run_id="resume-plan-confirm", yes=False)
             self.assertEqual(waiting.status, "waiting")
             self.assertTrue((Path(waiting.output_dir) / "checkpoint.json").exists())
 
-            resumed = Orchestrator(root).run("auth", run_id="resume-plan-confirm", yes=True, resume=True)
+            resumed = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("auth", run_id="resume-plan-confirm", yes=True, resume=True)
 
             self.assertEqual(resumed.status, "completed")
             self.assertFalse((Path(resumed.output_dir) / "checkpoint.json").exists())
@@ -894,7 +894,7 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   Mock:
@@ -926,7 +926,7 @@ worktree:
             (root / ".ai" / "agents" / "qa.md").write_text("You are qa.", encoding="utf-8")
             (root / ".ai" / "agents" / "reviewer.md").write_text("You are reviewer.", encoding="utf-8")
 
-            report = Orchestrator(root).run("ship it", yes=True)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("ship it", yes=True)
 
             self.assertEqual(report.status, "completed")
             self.assertFalse(report.stages[0].is_parallel)
@@ -960,7 +960,7 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 f"""
 runtimes:
   Splitter:
@@ -1017,7 +1017,7 @@ worktree:
             for name in ["solution-architect", "dev", "qa", "reviewer"]:
                 (root / ".ai" / "agents" / f"{name}.md").write_text(f"You are {name}.", encoding="utf-8")
 
-            report = Orchestrator(root).run("x" * 30, yes=True)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("x" * 30, yes=True)
 
             self.assertEqual(report.status, "completed")
             self.assertEqual(report.mode, "multi-unit")
@@ -1054,7 +1054,7 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 f"""
 runtimes:
   Splitter:
@@ -1091,7 +1091,7 @@ worktree:
             for name in ["solution-architect", "dev"]:
                 (root / ".ai" / "agents" / f"{name}.md").write_text(f"You are {name}.", encoding="utf-8")
 
-            report = Orchestrator(root).run("x" * 30, yes=True)
+            report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("x" * 30, yes=True)
 
             self.assertEqual(report.status, "completed")
             self.assertEqual([unit.unit_id for unit in report.units], ["db", "api"])
@@ -1105,10 +1105,10 @@ worktree:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
-            (root / ".ai" / "team.yaml").write_text("runtimes: {}\nagents: []\npipeline: []\n", encoding="utf-8")
+            (root / "test-config.yaml").write_text("runtimes: {}\nagents: []\npipeline: []\n", encoding="utf-8")
             output_dir = root / ".ai" / "team-output" / "run-1"
             output_dir.mkdir(parents=True)
-            orchestrator = Orchestrator(root)
+            orchestrator = Orchestrator(root, config_path=str(root / "test-config.yaml"))
 
             orchestrator._save_checkpoint(
                 output_dir,

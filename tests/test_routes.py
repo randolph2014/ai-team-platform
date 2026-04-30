@@ -38,14 +38,16 @@ class BaseRoutesTest(unittest.TestCase):
             raise unittest.SkipTest("FastAPI 未安装，跳过路由测试")
 
     def setUp(self) -> None:
-        # 使用临时目录作为项目根目录
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
         (root / ".git").mkdir(parents=True)
         (root / ".ai").mkdir(parents=True)
         (root / ".ai" / "agents").mkdir(parents=True)
         (root / ".ai" / "agents" / "dev.md").write_text("You are a dev agent.", encoding="utf-8")
-        (root / ".ai" / "team.yaml").write_text(
+        self.project_root = root
+        self.user_config_path = root / ".user-config.yaml"
+
+        self.user_config_path.write_text(
             """
 runtimes:
   mock:
@@ -66,14 +68,21 @@ pipeline:
 """,
             encoding="utf-8",
         )
-        self.project_root = root
 
-        # 创建 TestClient
+        self._config_patches = [
+            patch("engine.config.USER_CONFIG_FILE", self.user_config_path),
+            patch("api.routes.settings.USER_CONFIG_FILE", self.user_config_path),
+        ]
+        for p in self._config_patches:
+            p.start()
+
         from api.app import create_app
         self.app = create_app()
         self.client = TestClient(self.app)
 
     def tearDown(self) -> None:
+        for p in reversed(self._config_patches):
+            p.stop()
         self.temp_dir.cleanup()
 
 
@@ -110,7 +119,7 @@ class TestSettingsRoutes(BaseRoutesTest):
     def test_update_settings_creates_new_config(self) -> None:
         """POST /api/settings 创建新配置"""
         # 先删除项目配置文件
-        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path = self.user_config_path
         config_path.unlink()
 
         response = self.client.post(
@@ -309,7 +318,7 @@ class TestConfigRoutes(BaseRoutesTest):
         self.assertIn("mock", data["runtimes"])
 
     def test_get_runtimes_discovers_supported_cli_candidates(self) -> None:
-        """GET /api/config/runtimes 返回本机探测到的 CLI 候选项"""
+        """GET /api/config/runtimes 返回本机探测到的 CLI 候选项（不包含 unsupported CLI）"""
         def fake_which(name: str):
             if name in {"claude", "codex"}:
                 return f"/usr/local/bin/{name}"
@@ -326,12 +335,12 @@ class TestConfigRoutes(BaseRoutesTest):
         self.assertTrue(candidates["codex"]["available"])
         self.assertTrue(candidates["claude"]["supported"])
         self.assertTrue(candidates["codex"]["supported"])
-        self.assertFalse(candidates["hermes"]["supported"])
+        self.assertNotIn("hermes", candidates)
 
     def test_get_runtimes_masks_sensitive_fields(self) -> None:
         """GET /api/config/runtimes 不泄露 runtime 敏感字段"""
         from engine.config import normalize_config
-        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path = self.user_config_path
         config = normalize_config({
             "runtimes": {
                 "Claude": {"cli": "claude", "api_key": "sk-secret"},
@@ -359,7 +368,7 @@ class TestConfigRoutes(BaseRoutesTest):
 
     def test_validate_unknown_runtime_reference_returns_error(self) -> None:
         """GET /api/config/validate 校验 agent.runtime_id 引用"""
-        (self.project_root / ".ai" / "team.yaml").write_text(
+        (self.user_config_path).write_text(
             """
 runtimes:
   mock:
@@ -384,7 +393,7 @@ pipeline:
 
     def test_validate_with_worktree_enabled(self) -> None:
         """验证配置启用 worktree 但无 git 时报错"""
-        (self.project_root / ".ai" / "team.yaml").write_text(
+        (self.user_config_path).write_text(
             """
 runtimes:
   mock:
@@ -437,7 +446,7 @@ runner:
 
     def test_put_agent_prompt_materializes_template_prompt_in_project(self) -> None:
         """平台模板 prompt 保存时写入项目覆盖文件，不修改平台模板"""
-        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path = self.user_config_path
         config_path.write_text(
             """
 runtimes:
@@ -463,12 +472,20 @@ pipeline: []
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["path"], str(project_prompt.resolve(strict=False)))
-        self.assertEqual(project_prompt.read_text(encoding="utf-8"), "Project tech lead prompt")
+        written_path = Path(response.json()["path"])
+        self.assertTrue(
+            written_path.resolve().is_relative_to(self.project_root.resolve()),
+            f"{written_path} is not within {self.project_root}",
+        )
+        self.assertEqual(written_path.read_text(encoding="utf-8"), "Project tech lead prompt")
 
     def test_put_agent_prompt_rejects_path_escape(self) -> None:
         """prompt 写路径不能通过配置逃逸项目目录"""
-        (self.project_root / ".ai" / "team.yaml").write_text(
+        project_override = self.project_root / ".ai" / "agents" / "dev.md"
+        if project_override.exists():
+            project_override.unlink()
+
+        self.user_config_path.write_text(
             """
 runtimes:
   mock:
@@ -576,6 +593,7 @@ class TestRunsRoutes(BaseRoutesTest):
             run_id=run_id,
             workdir=str(self.project_root),
             yes=True,
+            reject=False,
             config_path=config_path,
             execution_mode="serial",
         )
@@ -605,7 +623,7 @@ class TestSettingsDesensitization(BaseRoutesTest):
         """GET /api/settings 对 api_key/secret/token 等字段脱敏"""
         # 写入包含敏感字段的配置
         from engine.config import normalize_config
-        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path = self.user_config_path
         config = normalize_config({
             "runtimes": {
                 "Claude": {"cli": "claude", "api_key": "sk-super-secret-key"},
@@ -628,7 +646,7 @@ class TestSettingsDesensitization(BaseRoutesTest):
     def test_get_settings_preserves_empty_sensitive_fields(self) -> None:
         """GET /api/settings 空字符串的敏感字段不被脱敏为 ***"""
         from engine.config import normalize_config
-        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path = self.user_config_path
         config = normalize_config({
             "runtimes": {
                 "Claude": {"cli": "claude", "api_key": ""},
@@ -650,7 +668,7 @@ class TestSettingsPutEndpoint(BaseRoutesTest):
 
     def test_put_settings_updates_config(self) -> None:
         """PUT /api/settings 更新配置"""
-        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path = self.user_config_path
         config_path.unlink()
 
         response = self.client.put(
@@ -681,7 +699,7 @@ class TestSettingsPutEndpoint(BaseRoutesTest):
 
     def test_put_response_masks_sensitive_fields(self) -> None:
         """PUT /api/settings 响应中敏感字段被脱敏"""
-        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path = self.user_config_path
         config_path.unlink()
 
         response = self.client.put(
@@ -703,7 +721,7 @@ class TestSettingsPutEndpoint(BaseRoutesTest):
     def test_put_settings_preserves_masked_runtime_secret(self) -> None:
         """把 GET 脱敏结果原样保存时，不应把真实密钥覆盖成 ***"""
         from engine.config import normalize_config
-        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path = self.user_config_path
         config = normalize_config({
             "runtimes": {
                 "Claude": {"cli": "claude", "api_key": "sk-real-secret"},
@@ -735,7 +753,7 @@ class TestSettingsPutEndpoint(BaseRoutesTest):
         """POST 局部更新 runtimes 时不能丢掉未提交的已有 runtime"""
         import yaml
 
-        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path = self.user_config_path
         config_path.write_text(
             """
 runtimes:
@@ -770,7 +788,7 @@ pipeline: []
         """PUT 保存完整 settings 时应能删除废弃 runtime"""
         import yaml
 
-        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path = self.user_config_path
         config_path.write_text(
             """
 runtimes:
@@ -807,7 +825,7 @@ pipeline: []
         """PUT 保存完整 settings 时应能删除同名 runtime 内部旧字段"""
         import yaml
 
-        config_path = self.project_root / ".ai" / "team.yaml"
+        config_path = self.user_config_path
         config_path.write_text(
             """
 runtimes:
@@ -872,7 +890,7 @@ pipeline: []
         )
 
         self.assertEqual(response.status_code, 200)
-        saved = yaml.safe_load((self.project_root / ".ai" / "team.yaml").read_text(encoding="utf-8"))
+        saved = yaml.safe_load((self.user_config_path).read_text(encoding="utf-8"))
         runtime = saved["runtimes"]["claude"]
         self.assertNotIn("available", runtime)
         self.assertNotIn("path", runtime)

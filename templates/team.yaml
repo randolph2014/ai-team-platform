@@ -8,18 +8,17 @@
 # agent 通过 runtime_id 引用。同一 CLI 可定义多个 runtime（不同
 # 模型 / 不同参数）。
 #
-# 平台内置 5 种 CLI 适配（claude / codex / opencode / hermes / kiro），
+# 平台内置 3 种 CLI 适配（claude / codex / opencode），
 # 这些 CLI 的 args / prompt_mode / model_arg_style 默认值已在
 # engine/runtimes.py 的 RUNTIME_SPECS 中预设，配置时可省略。
-# （hermes / kiro 当前仅检测存在，不支持执行。）
 #
 # 接入未内置的 CLI（如 gemini-cli、cursor-cli）时，在 yaml 中显式声明
 # cli / args / prompt_mode / model_arg_style 等字段即可，无需修改
 # Python 代码。具体示例见下方 `gemini:` 注释块。
 #
-# 模型与降级：
-#   - model：默认模型名（也可由 AI_TEAM_<CLI>_MODEL 环境变量覆盖）
-#   - fallback_models：主模型失败时按顺序降级
+# 模型配置：
+#   - model：指定模型名（也可由 AI_TEAM_<CLI>_MODEL 环境变量覆盖）
+#   - 留空时自动从 CLI 配置文件读取当前使用的模型
 #
 # ── agents ────────────────────────────────────────────────
 # 每个 agent 通过 runtime_id 绑定一个 runtime。pipeline 通过 agent
@@ -39,14 +38,12 @@ runtimes:
   #   name: Claude Opus
   #   cli: claude
   #   model: claude-opus-4-7
-  #   fallback_models: [claude-sonnet-4-5]
 
   # 示例 2：Claude Sonnet —— 日常编码，性价比平衡
   # claude-sonnet:
   #   name: Claude Sonnet
   #   cli: claude
   #   model: claude-sonnet-4-5
-  #   fallback_models: [claude-haiku-4-5]
 
   # 示例 3：Codex CLI —— args / model_arg_style 由内置 SPEC 提供
   # codex:

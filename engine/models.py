@@ -32,7 +32,7 @@ class Event(BaseModel):
 
 class LoadedConfig(BaseModel):
     config: Dict[str, Any]
-    source: Literal["project", "platform", "default"]
+    source: Literal["project", "platform", "default", "customized"]
     path: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)
 
@@ -173,7 +173,7 @@ class RunReport(BaseModel):
     requirement: str
     project_root: str
     output_dir: str
-    config_source: Literal["project", "platform", "default"]
+    config_source: Literal["project", "platform", "default", "customized"]
     config_path: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None

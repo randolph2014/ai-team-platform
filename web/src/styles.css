@@ -578,6 +578,46 @@ tbody tr:hover td { background: var(--bg-hover); }
   padding: 8px 10px;
   outline: none;
 }
+.agentTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.agentTab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.agentTab:hover { background: var(--bg-hover); color: var(--text-primary); }
+.agentTabActive {
+  background: var(--accent) !important;
+  color: #fff !important;
+  border-color: var(--accent) !important;
+}
+.agentTabClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.5;
+  transition: opacity 0.15s;
+}
+.agentTabClose:hover { opacity: 1; background: rgba(239, 68, 68, 0.2); color: var(--red); }
+.agentTabActive .agentTabClose:hover { background: rgba(255, 255, 255, 0.2); color: #fff; }
 .settingsCards {
   display: flex;
   flex-direction: column;
@@ -625,6 +665,15 @@ tbody tr:hover td { background: var(--bg-hover); }
   min-height: 92px;
   resize: vertical;
 }
+.agentSoulTextarea {
+  min-height: 320px !important;
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.agentRuntimeSelect {
+  min-height: 38px;
+}
 .settingsFormGrid input:focus,
 .settingsFormGrid select:focus,
 .settingsFormGrid textarea:focus { border-color: var(--accent); }
@@ -638,8 +687,19 @@ tbody tr:hover td { background: var(--bg-hover); }
   color: var(--text-secondary);
   font-size: 12px;
 }
-.settingsMetaInline { margin-top: 4px; }
+.settingsMetaInline { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .settingsMetaError { color: var(--red); }
+.metaTag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.metaTagGreen { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
+.metaTagRed { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.metaTagMuted { background: var(--bg-hover); color: var(--text-secondary); }
 .runtimeMetaGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

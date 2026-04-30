@@ -31,6 +31,7 @@ Thumbs.db
 .ai/worktrees/
 .ai/runs/
 .ai/team-output/
+.user-config.yaml
 .playwright-mcp/
 
 # Node (frontend)

@@ -167,14 +167,28 @@ def _model_from_opencode_config(home: Path) -> Optional[str]:
         home / ".config" / "opencode" / "config.json",
     ):
         data = _read_json_file(path)
+        # Top-level model field
         model = _first_string(data.get("model"), data.get("default_model"), data.get("defaultModel"))
         if model:
             return model
+        # agent.model nested field
         agent = data.get("agent")
         if isinstance(agent, dict):
             model = _first_string(agent.get("model"), agent.get("default_model"), agent.get("defaultModel"))
             if model:
                 return model
+        # provider.*.models — opencode stores models per provider.
+        # Best-effort: returns the first model found across all providers.
+        providers = data.get("provider")
+        if isinstance(providers, dict):
+            for _prov_id, prov_conf in providers.items():
+                if not isinstance(prov_conf, dict):
+                    continue
+                models = prov_conf.get("models")
+                if isinstance(models, dict):
+                    for model_name in models:
+                        if isinstance(model_name, str) and model_name.strip():
+                            return model_name.strip()
     return None
 
 
@@ -237,6 +251,8 @@ def backfill_runtime_models(runtimes: Dict[str, Any]) -> None:
 def discover_runtime_candidates() -> List[Dict[str, Any]]:
     candidates: List[Dict[str, Any]] = []
     for runtime_id, spec in RUNTIME_SPECS.items():
+        if not spec.get("supported"):
+            continue
         command = _env_path(spec) or spec["cli"]
         path = shutil.which(command)
         available = path is not None
@@ -247,15 +263,13 @@ def discover_runtime_candidates() -> List[Dict[str, Any]]:
             "cli": spec["cli"],
             "path": path,
             "available": available,
-            "supported": bool(spec.get("supported")),
+            "supported": True,
             "args": list(spec.get("args") or []),
             "prompt_mode": spec.get("prompt_mode", "stdin"),
             "model_arg_style": spec.get("model_arg_style"),
             "launch_header": spec.get("launch_header", spec["cli"]),
             "version": detect_cli_version(path) if available else None,
         }
-        if spec.get("unsupported_reason"):
-            item["unsupported_reason"] = spec["unsupported_reason"]
         model = _env_model(spec) or _cli_config_model(runtime_id)
         if model:
             item["model"] = model
@@ -269,8 +283,7 @@ def sanitize_runtime_config(runtime: Dict[str, Any]) -> Dict[str, Any]:
         cleaned["model"] = cleaned.pop("default_model")
     else:
         cleaned.pop("default_model", None)
-    if not cleaned.get("fallback_models"):
-        cleaned.pop("fallback_models", None)
+    cleaned.pop("fallback_models", None)
     return cleaned
 
 

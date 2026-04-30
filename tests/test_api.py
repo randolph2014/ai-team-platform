@@ -30,7 +30,7 @@ class ApiTests(unittest.TestCase):
             root = Path(tmp)
             (root / ".ai" / "agents").mkdir(parents=True)
             (root / ".ai" / "agents" / "dev.md").write_text("You are a test agent.", encoding="utf-8")
-            (root / ".ai" / "team.yaml").write_text(
+            (root / "test-config.yaml").write_text(
                 """
 runtimes:
   mock:
@@ -57,7 +57,7 @@ worktree:
             run_id = "api-test-run"
             # Force threading fallback so the test doesn't depend on RQ worker
             with patch("engine.task_queue.enqueue_run", return_value=None):
-                output_dir = runtime.start_run_background("api smoke", str(root), run_id=run_id, yes=True)
+                output_dir = runtime.start_run_background("api smoke", str(root), run_id=run_id, yes=True, config_path=str(root / "test-config.yaml"))
 
             report_data = _wait_for_report(output_dir)
             self.assertIsNotNone(report_data)
