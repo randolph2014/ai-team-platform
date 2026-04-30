@@ -45,10 +45,9 @@ class BaseRoutesTest(unittest.TestCase):
         (root / ".ai" / "agents").mkdir(parents=True)
         (root / ".ai" / "agents" / "dev.md").write_text("You are a dev agent.", encoding="utf-8")
         self.project_root = root
-        self.user_config_path = root / ".user-config.yaml"
         self.pipelines_dir = root / ".ai" / "pipelines"
 
-        self.user_config_path.write_text(
+        initial_config = (
             """
 runtimes:
   mock:
@@ -66,13 +65,29 @@ pipeline:
     input: requirement
     output:
       dev: dev-output.md
-""",
-            encoding="utf-8",
+"""
         )
+        self.settings_store = self._load_yaml(initial_config)
+
+        async def fake_db_get_settings():
+            return self._clone_config(self.settings_store) if self.settings_store else None
+
+        async def fake_db_save_settings(config):
+            self.settings_store = self._clone_config(config)
+            return True
+
+        async def fake_db_delete_settings():
+            self.settings_store = {}
+            return True
+
+        def fake_try_load_db_config():
+            return self._clone_config(self.settings_store) if self.settings_store else None
 
         self._config_patches = [
-            patch("engine.config.USER_CONFIG_FILE", self.user_config_path),
-            patch("api.routes.settings.USER_CONFIG_FILE", self.user_config_path),
+            patch("engine.config._try_load_db_config", side_effect=fake_try_load_db_config),
+            patch("api.routes.settings._db_get_settings", side_effect=fake_db_get_settings),
+            patch("api.routes.settings._db_save_settings", side_effect=fake_db_save_settings),
+            patch("api.routes.settings._db_delete_settings", side_effect=fake_db_delete_settings),
             patch("api.routes.pipelines.PIPELINES_DIR", self.pipelines_dir),
         ]
         for p in self._config_patches:
@@ -86,6 +101,19 @@ pipeline:
         for p in reversed(self._config_patches):
             p.stop()
         self.temp_dir.cleanup()
+
+    def set_settings_store(self, config) -> None:
+        self.settings_store = self._clone_config(config)
+
+    @staticmethod
+    def _clone_config(config):
+        return json.loads(json.dumps(config))
+
+    @staticmethod
+    def _load_yaml(content: str):
+        import yaml
+
+        return yaml.safe_load(content) or {}
 
 
 class TestHealthEndpoint(BaseRoutesTest):
@@ -119,10 +147,7 @@ class TestSettingsRoutes(BaseRoutesTest):
             self.assertEqual(response.status_code, 200)
 
     def test_update_settings_creates_new_config(self) -> None:
-        """POST /api/settings 创建新配置"""
-        # 先删除项目配置文件
-        config_path = self.user_config_path
-        config_path.unlink()
+        """POST /api/settings 写入 DB 配置"""
 
         response = self.client.post(
             "/api/settings",
@@ -137,7 +162,8 @@ class TestSettingsRoutes(BaseRoutesTest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["status"], "saved")
-        self.assertTrue(config_path.exists())
+        self.assertEqual(data["path"], "db:default")
+        self.assertEqual(self.settings_store["metadata"]["name"], "custom-project")
 
     def test_update_settings_merges_existing_config(self) -> None:
         """POST /api/settings 合并更新已有配置"""
@@ -156,6 +182,7 @@ class TestSettingsRoutes(BaseRoutesTest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["status"], "reset")
+        self.assertEqual(self.settings_store, {})
 
 
 class TestPipelinesRoutes(BaseRoutesTest):
@@ -366,7 +393,6 @@ class TestConfigRoutes(BaseRoutesTest):
     def test_get_runtimes_masks_sensitive_fields(self) -> None:
         """GET /api/config/runtimes 不泄露 runtime 敏感字段"""
         from engine.config import normalize_config
-        config_path = self.user_config_path
         config = normalize_config({
             "runtimes": {
                 "Claude": {"cli": "claude", "api_key": "sk-secret"},
@@ -374,8 +400,7 @@ class TestConfigRoutes(BaseRoutesTest):
             "agents": [],
             "pipeline": [],
         })
-        import yaml
-        config_path.write_text(yaml.safe_dump(config, allow_unicode=True), encoding="utf-8")
+        self.set_settings_store(config)
 
         response = self.client.get("/api/config/runtimes", params={"workdir": str(self.project_root)})
         self.assertEqual(response.status_code, 200)
@@ -394,8 +419,7 @@ class TestConfigRoutes(BaseRoutesTest):
 
     def test_validate_unknown_runtime_reference_returns_error(self) -> None:
         """GET /api/config/validate 校验 agent.runtime_id 引用"""
-        (self.user_config_path).write_text(
-            """
+        self.set_settings_store(self._load_yaml("""
 runtimes:
   mock:
     cli: mock
@@ -408,9 +432,7 @@ pipeline:
   - id: develop
     name: Develop
     agents: [dev]
-""",
-            encoding="utf-8",
-        )
+"""))
         response = self.client.get("/api/config/validate", params={"workdir": str(self.project_root)})
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -419,8 +441,7 @@ pipeline:
 
     def test_validate_with_worktree_enabled(self) -> None:
         """验证配置启用 worktree 但无 git 时报错"""
-        (self.user_config_path).write_text(
-            """
+        self.set_settings_store(self._load_yaml("""
 runtimes:
   mock:
     name: Mock
@@ -438,9 +459,7 @@ worktree:
   enabled: true
 runner:
   require_worktree: true
-""",
-            encoding="utf-8",
-        )
+"""))
         response = self.client.get("/api/config/validate", params={"workdir": str(self.project_root)})
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -472,9 +491,7 @@ runner:
 
     def test_put_agent_prompt_materializes_template_prompt_in_project(self) -> None:
         """平台模板 prompt 保存时写入项目覆盖文件，不修改平台模板"""
-        config_path = self.user_config_path
-        config_path.write_text(
-            """
+        self.set_settings_store(self._load_yaml("""
 runtimes:
   mock:
     name: Mock
@@ -484,9 +501,7 @@ agents:
     runtime_id: mock
     prompt: agents/tech-lead.md
 pipeline: []
-""",
-            encoding="utf-8",
-        )
+"""))
         project_prompt = self.project_root / ".ai" / "agents" / "tech-lead.md"
         if project_prompt.exists():
             project_prompt.unlink()
@@ -511,8 +526,7 @@ pipeline: []
         if project_override.exists():
             project_override.unlink()
 
-        self.user_config_path.write_text(
-            """
+        self.set_settings_store(self._load_yaml("""
 runtimes:
   mock:
     name: Mock
@@ -522,9 +536,7 @@ agents:
     runtime_id: mock
     prompt: ../outside.md
 pipeline: []
-""",
-            encoding="utf-8",
-        )
+"""))
 
         response = self.client.put(
             "/api/settings/agents/dev/prompt",
@@ -966,7 +978,6 @@ class TestSettingsDesensitization(BaseRoutesTest):
         """GET /api/settings 对 api_key/secret/token 等字段脱敏"""
         # 写入包含敏感字段的配置
         from engine.config import normalize_config
-        config_path = self.user_config_path
         config = normalize_config({
             "runtimes": {
                 "Claude": {"cli": "claude", "api_key": "sk-super-secret-key"},
@@ -975,8 +986,7 @@ class TestSettingsDesensitization(BaseRoutesTest):
             "agents": [],
             "pipeline": [],
         })
-        import yaml
-        config_path.write_text(yaml.safe_dump(config, allow_unicode=True), encoding="utf-8")
+        self.set_settings_store(config)
 
         response = self.client.get("/api/settings", params={"workdir": str(self.project_root)})
         self.assertEqual(response.status_code, 200)
@@ -989,7 +999,6 @@ class TestSettingsDesensitization(BaseRoutesTest):
     def test_get_settings_preserves_empty_sensitive_fields(self) -> None:
         """GET /api/settings 空字符串的敏感字段不被脱敏为 ***"""
         from engine.config import normalize_config
-        config_path = self.user_config_path
         config = normalize_config({
             "runtimes": {
                 "Claude": {"cli": "claude", "api_key": ""},
@@ -997,8 +1006,7 @@ class TestSettingsDesensitization(BaseRoutesTest):
             "agents": [],
             "pipeline": [],
         })
-        import yaml
-        config_path.write_text(yaml.safe_dump(config, allow_unicode=True), encoding="utf-8")
+        self.set_settings_store(config)
 
         response = self.client.get("/api/settings", params={"workdir": str(self.project_root)})
         self.assertEqual(response.status_code, 200)
@@ -1010,9 +1018,7 @@ class TestSettingsPutEndpoint(BaseRoutesTest):
     """测试 PUT /api/settings 端点"""
 
     def test_put_settings_updates_config(self) -> None:
-        """PUT /api/settings 更新配置"""
-        config_path = self.user_config_path
-        config_path.unlink()
+        """PUT /api/settings 更新 DB 配置"""
 
         response = self.client.put(
             "/api/settings",
@@ -1022,7 +1028,8 @@ class TestSettingsPutEndpoint(BaseRoutesTest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["status"], "saved")
-        self.assertTrue(config_path.exists())
+        self.assertEqual(data["path"], "db:default")
+        self.assertEqual(self.settings_store["metadata"]["name"], "put-test-project")
 
     def test_put_settings_same_as_post(self) -> None:
         """PUT 和 POST 返回一致的结果"""
@@ -1042,9 +1049,6 @@ class TestSettingsPutEndpoint(BaseRoutesTest):
 
     def test_put_response_masks_sensitive_fields(self) -> None:
         """PUT /api/settings 响应中敏感字段被脱敏"""
-        config_path = self.user_config_path
-        config_path.unlink()
-
         response = self.client.put(
             "/api/settings",
             params={"workdir": str(self.project_root)},
@@ -1064,7 +1068,6 @@ class TestSettingsPutEndpoint(BaseRoutesTest):
     def test_put_settings_preserves_masked_runtime_secret(self) -> None:
         """把 GET 脱敏结果原样保存时，不应把真实密钥覆盖成 ***"""
         from engine.config import normalize_config
-        config_path = self.user_config_path
         config = normalize_config({
             "runtimes": {
                 "Claude": {"cli": "claude", "api_key": "sk-real-secret"},
@@ -1074,8 +1077,7 @@ class TestSettingsPutEndpoint(BaseRoutesTest):
             ],
             "pipeline": [],
         })
-        import yaml
-        config_path.write_text(yaml.safe_dump(config, allow_unicode=True), encoding="utf-8")
+        self.set_settings_store(config)
 
         get_response = self.client.get("/api/settings", params={"workdir": str(self.project_root)})
         self.assertEqual(get_response.status_code, 200)
@@ -1089,16 +1091,11 @@ class TestSettingsPutEndpoint(BaseRoutesTest):
         )
         self.assertEqual(put_response.status_code, 200)
 
-        saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        self.assertEqual(saved["runtimes"]["Claude"]["api_key"], "sk-real-secret")
+        self.assertEqual(self.settings_store["runtimes"]["Claude"]["api_key"], "sk-real-secret")
 
     def test_post_settings_runtime_partial_update_preserves_other_runtimes(self) -> None:
         """POST 局部更新 runtimes 时不能丢掉未提交的已有 runtime"""
-        import yaml
-
-        config_path = self.user_config_path
-        config_path.write_text(
-            """
+        self.set_settings_store(self._load_yaml("""
 runtimes:
   mock:
     name: Mock
@@ -1112,9 +1109,7 @@ agents:
     role: developer
     prompt: agents/dev.md
 pipeline: []
-""",
-            encoding="utf-8",
-        )
+"""))
 
         response = self.client.post(
             "/api/settings",
@@ -1123,17 +1118,12 @@ pipeline: []
         )
 
         self.assertEqual(response.status_code, 200)
-        saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        self.assertIn("codex", saved["runtimes"])
-        self.assertEqual(saved["runtimes"]["mock"]["name"], "Mock Updated")
+        self.assertIn("codex", self.settings_store["runtimes"])
+        self.assertEqual(self.settings_store["runtimes"]["mock"]["name"], "Mock Updated")
 
     def test_put_settings_runtimes_replaces_removed_runtime(self) -> None:
         """PUT 保存完整 settings 时应能删除废弃 runtime"""
-        import yaml
-
-        config_path = self.user_config_path
-        config_path.write_text(
-            """
+        self.set_settings_store(self._load_yaml("""
 runtimes:
   mock:
     name: Mock
@@ -1147,9 +1137,7 @@ agents:
     role: developer
     prompt: agents/dev.md
 pipeline: []
-""",
-            encoding="utf-8",
-        )
+"""))
 
         response = self.client.put(
             "/api/settings",
@@ -1161,16 +1149,11 @@ pipeline: []
         )
 
         self.assertEqual(response.status_code, 200)
-        saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        self.assertNotIn("codex", saved["runtimes"])
+        self.assertNotIn("codex", self.settings_store["runtimes"])
 
     def test_put_settings_runtime_replaces_removed_runtime_fields(self) -> None:
         """PUT 保存完整 settings 时应能删除同名 runtime 内部旧字段"""
-        import yaml
-
-        config_path = self.user_config_path
-        config_path.write_text(
-            """
+        self.set_settings_store(self._load_yaml("""
 runtimes:
   mock:
     name: Mock
@@ -1187,9 +1170,7 @@ agents:
     role: developer
     prompt: agents/dev.md
 pipeline: []
-""",
-            encoding="utf-8",
-        )
+"""))
 
         response = self.client.put(
             "/api/settings",
@@ -1201,8 +1182,7 @@ pipeline: []
         )
 
         self.assertEqual(response.status_code, 200)
-        saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        runtime = saved["runtimes"]["mock"]
+        runtime = self.settings_store["runtimes"]["mock"]
         self.assertNotIn("model", runtime)
         self.assertNotIn("fallback_models", runtime)
         self.assertNotIn("env", runtime)
@@ -1210,8 +1190,6 @@ pipeline: []
 
     def test_put_settings_does_not_persist_discovery_metadata(self) -> None:
         """available/path/version 等探测字段不能写入 team.yaml"""
-        import yaml
-
         response = self.client.put(
             "/api/settings",
             params={"workdir": str(self.project_root)},
@@ -1233,8 +1211,7 @@ pipeline: []
         )
 
         self.assertEqual(response.status_code, 200)
-        saved = yaml.safe_load((self.user_config_path).read_text(encoding="utf-8"))
-        runtime = saved["runtimes"]["claude"]
+        runtime = self.settings_store["runtimes"]["claude"]
         self.assertNotIn("available", runtime)
         self.assertNotIn("path", runtime)
         self.assertNotIn("version", runtime)
