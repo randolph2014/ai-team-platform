@@ -8,6 +8,13 @@ export interface AgentRun {
   status: string;
   duration_seconds?: number;
   output_file?: string;
+  raw_log_file?: string;
+  exit_code?: number;
+  error_message?: string;
+  model_requested?: string;
+  model_used?: string;
+  started_at?: string;
+  completed_at?: string;
 }
 
 export interface GateRun {
@@ -17,6 +24,10 @@ export interface GateRun {
   command?: string;
   output?: string;
   required: boolean;
+  exit_code?: number;
+  retry_count?: number;
+  started_at?: string;
+  completed_at?: string;
 }
 
 export interface StageRun {
@@ -27,6 +38,10 @@ export interface StageRun {
   is_parallel: boolean;
   type: string;
   duration_seconds?: number;
+  output_dir?: string;
+  error_message?: string;
+  started_at?: string;
+  completed_at?: string;
   agents: AgentRun[];
   quality_gates: GateRun[];
 }

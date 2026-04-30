@@ -1,4 +1,4 @@
-import { AlertTriangle, FileText, Loader2, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
+import { AlertTriangle, Bot, Cpu, FileText, GitBranch, Loader2, Play, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   fetchAgentPrompt,
@@ -274,15 +274,19 @@ function candidateStatus(candidate: RuntimeCandidate): string {
   return '可添加';
 }
 
-function formatConfigValue(key: string, value: unknown): string {
-  if (value === null || value === undefined) return '—';
-  if (typeof value === 'boolean') return value ? '启用' : '关闭';
-  if (typeof value === 'number') {
-    if (key.includes('seconds')) return `${value} 秒`;
-    if (key.includes('chars')) return `${value.toLocaleString()} 字符`;
-    return String(value);
+function formatConfigValue(key: string, value: unknown): React.ReactNode {
+  if (value === null || value === undefined) return <span style={{ color: 'var(--text-muted)' }}>未设置</span>;
+  if (typeof value === 'boolean') {
+    return value
+      ? <span className="configValueBadge configValueBadgeOn">启用</span>
+      : <span className="configValueBadge configValueBadgeOff">关闭</span>;
   }
-  return String(value);
+  if (typeof value === 'number') {
+    const label = key.includes('seconds') ? `${value} 秒` : key.includes('chars') ? `${value.toLocaleString()} 字符` : String(value);
+    return <span className="configValueNumber">{label}</span>;
+  }
+  const str = String(value);
+  return <span className="configValueText">{str || <span style={{ color: 'var(--text-muted)' }}>—</span>}</span>;
 }
 
 function groupBy<T>(items: T[], fn: (item: T) => string): Record<string, T[]> {
@@ -298,30 +302,35 @@ function groupBy<T>(items: T[], fn: (item: T) => string): Record<string, T[]> {
 function renderConfigSection(
   title: string,
   subtitle: string,
+  icon: React.ReactNode,
   config: Record<string, unknown>,
   meta: ConfigItemMeta[],
 ): React.ReactNode {
   const groups = groupBy(meta, (m) => m.group || '');
+  const total = meta.length;
 
   return (
     <div className="settingGroup">
-      <h2>{title}</h2>
-      <p className="configSectionSubtitle">{subtitle}</p>
+      <div className="configSectionHeader">
+        <h2>{icon} {title}<span className="configItemCount">{total} 项配置</span></h2>
+        <p className="configSectionSubtitle">{subtitle}</p>
+      </div>
       {Object.entries(groups).map(([group, items]) => (
         <div key={group} className="configGroup">
           {group && <h3 className="configGroupTitle">{group}</h3>}
           <div className="configDescriptiveTable">
             {items.map((item) => {
               const value = config[item.key];
-              const formatted = formatConfigValue(item.key, value);
               return (
                 <div key={item.key} className="configDescriptiveRow">
-                  <div className="configDescriptiveKey">
-                    <code>{item.key}</code>
-                    <span className="configDescriptiveLabel">{item.label}</span>
+                  <div className="configDescriptiveTop">
+                    <div className="configDescriptiveKey">
+                      <code>{item.key}</code>
+                      <span className="configDescriptiveLabel">{item.label}</span>
+                    </div>
+                    <div className="configDescriptiveValue">{formatConfigValue(item.key, value)}</div>
                   </div>
-                  <div className="configDescriptiveValue">{formatted}</div>
-                  <div className="configDescriptiveDesc">{item.description}</div>
+                  <p className="configDescriptiveDesc">{item.description}</p>
                 </div>
               );
             })}
@@ -638,8 +647,12 @@ export function Settings() {
         <section className="panel">
           {activeSection === 'runtimes' && (
             <div className="settingGroup">
+              <div className="configSectionHeader">
+                <h2><Cpu size={18} /> Runtimes<span className="configItemCount">{Object.keys(runtimes).length} 个 Runtime</span></h2>
+                <p className="configSectionSubtitle">管理 AI Agent 的命令行运行时环境，配置 CLI 路径、模型覆盖及环境变量。</p>
+              </div>
               <div className="settingsSectionHeader">
-                <h2>Runtimes</h2>
+                <div></div>
                 <div className="runtimeAddRow">
                   <select value={selectedCandidateId} onChange={(e) => setSelectedCandidateId(e.target.value)}>
                     {addableRuntimeCandidates.length === 0 && <option value="">没有可添加 Runtime</option>}
@@ -666,28 +679,31 @@ export function Settings() {
                   return (
                     <div className="settingsEditCard" key={id}>
                       <div className="settingsCardHeader">
-                        <div>
-                          <strong>{runtime.name || displayRuntime.name || id}</strong>
-                          <div className="settingsMetaLine settingsMetaInline">
-                            {displayRuntime.model && <span className="metaTag">{displayRuntime.model}</span>}
-                            {displayRuntime.version && <span className="metaTag metaTagMuted">v{displayRuntime.version}</span>}
-                            <span className={`metaTag ${displayRuntime.available === false ? 'metaTagRed' : 'metaTagGreen'}`}>
-                              {displayRuntime.available === false ? '不可用' : '可用'}
-                            </span>
-                          </div>
+                        <div className="settingsCardTitleGroup">
+                          <strong className="settingsCardTitle">{runtime.name || displayRuntime.name || id}</strong>
+                          {displayRuntime.version && <span className="settingsCardSubtitle">{displayRuntime.cli || runtime.cli} · v{displayRuntime.version}</span>}
+                          {!displayRuntime.version && <span className="settingsCardSubtitle">{displayRuntime.cli || runtime.cli}</span>}
                         </div>
-                        <button className="iconButton danger" onClick={() => removeRuntime(id)} aria-label="删除 Runtime">
-                          <Trash2 size={14} />
-                        </button>
+                        <div className="settingsCardActions">
+                          <span className={`metaTag ${displayRuntime.available === false ? 'metaTagRed' : 'metaTagGreen'}`}>
+                            {displayRuntime.available === false ? '不可用' : '可用'}
+                          </span>
+                          <button className="iconButton danger" onClick={() => removeRuntime(id)} aria-label="删除 Runtime">
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </div>
-                      <div className="settingsFormGrid">
+                      <div className="settingsFormGrid settingsFormGrid3Col">
                         <label>
                           Name
                           <input value={runtime.name || ''} onChange={(e) => updateRuntime(id, { ...runtime, name: e.target.value })} />
                         </label>
                         <label>
                           CLI
-                          <input value={displayRuntime.cli || runtime.cli || ''} readOnly className="settingsReadOnlyInput" />
+                          <div className="settingsReadOnlyField">
+                            <span className="settingsReadOnlyLabel">自动检测</span>
+                            <input value={displayRuntime.cli || runtime.cli || ''} readOnly className="settingsReadOnlyInput" />
+                          </div>
                         </label>
                         <label>
                           Model Override
@@ -698,7 +714,17 @@ export function Settings() {
                           />
                         </label>
                       </div>
-                      {runtime.env && <div className="settingsMetaLine">env: {Object.keys(runtime.env).length} 个变量，保存时会跳过值为 *** 的字段</div>}
+                      {displayRuntime.model && (
+                        <div className="settingsMetaLine settingsMetaInline" style={{ justifyContent: 'flex-start' }}>
+                          <span className="metaTag">{displayRuntime.model}</span>
+                        </div>
+                      )}
+                      {runtime.env && (
+                        <div className="settingsEnvInfo">
+                          <span className="settingsEnvCount">{Object.keys(runtime.env).length}</span> 个环境变量
+                          <span className="settingsEnvHint">保存时跳过值为 *** 的字段</span>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -709,37 +735,55 @@ export function Settings() {
 
           {activeSection === 'agents' && (
             <div className="settingGroup">
+              <div className="configSectionHeader">
+                <h2><Bot size={18} /> Agents<span className="configItemCount">{agents.length} 个 Agent</span></h2>
+                <p className="configSectionSubtitle">管理 AI 协作团队中的 Agent 成员，配置其职责角色、行为准则和能力边界。</p>
+              </div>
               <div className="settingsSectionHeader">
-                <h2>Agents</h2>
+                <div></div>
                 <button className="button" onClick={() => { addAgent(); setActiveAgentTab(agents.length); }}><Plus size={14} /> 新增 Agent</button>
               </div>
               {agents.length > 0 && (
                 <>
                   <div className="agentTabs">
-                    {agents.map((agent, index) => (
-                      <button
-                        key={`${agent.name}-${index}`}
-                        type="button"
-                        className={`agentTab ${activeAgentTab === index ? 'agentTabActive' : ''}`}
-                        onClick={() => setActiveAgentTab(index)}
-                      >
-                        {agent.name || `Agent ${index + 1}`}
-                        <span
-                          className="agentTabClose"
-                          role="button"
-                          tabIndex={0}
-                          onClick={(e) => { e.stopPropagation(); removeAgent(index); setActiveAgentTab(Math.max(0, Math.min(activeAgentTab, agents.length - 2))); }}
+                    {agents.map((agent, index) => {
+                      const runtime = runtimes[agent.runtime_id];
+                      return (
+                        <button
+                          key={`${agent.name}-${index}`}
+                          type="button"
+                          className={`agentTab ${activeAgentTab === index ? 'agentTabActive' : ''}`}
+                          onClick={() => setActiveAgentTab(index)}
                         >
-                          &times;
-                        </span>
-                      </button>
-                    ))}
+                          <span className="agentTabName">{agent.name || `Agent ${index + 1}`}</span>
+                          {runtime && <span className="agentTabRuntime">{runtime.name}</span>}
+                          <span
+                            className="agentTabClose"
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => { e.stopPropagation(); removeAgent(index); setActiveAgentTab(Math.max(0, Math.min(activeAgentTab, agents.length - 2))); }}
+                          >
+                            &times;
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                   {agents[activeAgentTab] && (() => {
                     const agent = agents[activeAgentTab];
                     const promptDraft = agentPrompts[agent.name];
+                    const runtime = runtimes[agent.runtime_id];
                     return (
                       <div className="settingsEditCard" key={`${agent.name}-${activeAgentTab}`}>
+                        <div className="settingsCardHeader">
+                          <div className="settingsCardTitleGroup">
+                            <strong className="settingsCardTitle">{agent.name}</strong>
+                            {runtime && <span className="settingsCardSubtitle">{runtime.name}</span>}
+                          </div>
+                          <div className="settingsCardActions">
+                            {agent.role && <span className="metaTag metaTagAccent">{agent.role}</span>}
+                          </div>
+                        </div>
                         <div className="settingsFormGrid">
                           <label>
                             Name
@@ -754,9 +798,14 @@ export function Settings() {
                               ))}
                             </select>
                           </label>
-                          <label>
+                          <label className="settingsWideField">
                             Role
-                            <input value={agent.role || ''} onChange={(e) => updateAgent(activeAgentTab, { role: e.target.value })} />
+                            <input
+                              value={agent.role || ''}
+                              onChange={(e) => updateAgent(activeAgentTab, { role: e.target.value })}
+                              placeholder="如：summarizer、developer、reviewer 等"
+                            />
+                            <span className="settingsFieldHint">Agent 在协作流程中的职责定位，如 summarizer（总结者）、developer（开发者）</span>
                           </label>
                           <label className="settingsWideField">
                             Soul
@@ -766,6 +815,9 @@ export function Settings() {
                               onChange={(e) => updatePromptDraft(agent.name, e.target.value)}
                               placeholder={promptDraft?.error || '定义 Agent 的行为准则、能力和人格...'}
                             />
+                            <span className="settingsFieldHint">
+                              {promptDraft?.content ? `${promptDraft.content.split('\n').length} 行 · ${promptDraft.content.length} 字符` : '定义 Agent 的行为准则、能力和人格'}
+                            </span>
                           </label>
                         </div>
                         {promptDraft?.error && <div className="settingsMetaLine settingsMetaError">{promptDraft.error}</div>}
@@ -774,13 +826,20 @@ export function Settings() {
                   })()}
                 </>
               )}
-              {agents.length === 0 && <div className="emptyState">暂无 Agent 配置</div>}
+              {agents.length === 0 && (
+                <div className="emptyState">
+                  <Bot size={32} style={{ color: 'var(--text-muted)', marginBottom: 8 }} />
+                  <p>暂无 Agent 配置</p>
+                  <p className="settingsFieldHint">点击「新增 Agent」创建第一个 AI 团队成员</p>
+                </div>
+              )}
             </div>
           )}
 
           {activeSection === 'runner' && renderConfigSection(
             'Runner',
             '控制 AI Agent 的执行行为，包括超时、并发、上下文拆分及生产模式校验等运行时参数。',
+            <Play size={18} />,
             (draftConfig.runner || {}) as Record<string, unknown>,
             RUNNER_CONFIG_META,
           )}
@@ -788,6 +847,7 @@ export function Settings() {
           {activeSection === 'worktree' && renderConfigSection(
             'Worktree',
             '基于 git worktree 为每次 pipeline run 创建代码隔离环境，确保并行安全且主分支不被污染。',
+            <GitBranch size={18} />,
             (draftConfig.worktree || {}) as Record<string, unknown>,
             WORKTREE_CONFIG_META,
           )}
