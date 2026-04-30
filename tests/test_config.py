@@ -26,6 +26,55 @@ from engine.config import (
 from engine.models import AgentDefinition
 
 
+class TestPromptContracts(unittest.TestCase):
+    def test_default_prompts_reference_required_artifact_contracts(self) -> None:
+        prompt_dir = Path("templates/agents")
+        expected = {
+            "requirements-analyst.md": ["requirement-final.json", "status", "summary", "acceptance_coverage"],
+            "planner.md": [
+                "task-plan.json",
+                "solution-plan.json",
+                "solution-plan.json 必须包含",
+                "json_artifacts",
+                "第一个",
+                "第二个",
+                "status",
+                "summary",
+                "evidence",
+                "alternatives_considered",
+                "configuration_strategy",
+                "verification_strategy",
+                "task-plan.json.file_boundaries",
+            ],
+            "tech-lead.md": ["implementation-report.json", "git diff", "只修改"],
+            "qa-automation.md": ["test-report.json", "acceptance_coverage"],
+            "code-reviewer.md": ["review-report.json", "风险", "Request Changes"],
+            "retrospect.md": ["retrospect-report.json", "交付摘要"],
+        }
+        for filename, needles in expected.items():
+            content = (prompt_dir / filename).read_text(encoding="utf-8")
+            for needle in needles:
+                self.assertIn(needle, content, f"{filename} missing {needle}")
+
+        tech_lead_content = (prompt_dir / "tech-lead.md").read_text(encoding="utf-8")
+        forbidden = ["按下方「代码输出格式」", "每个修改文件的完整代码"]
+        for needle in forbidden:
+            self.assertNotIn(needle, tech_lead_content, f"tech-lead.md should not contain legacy output guidance: {needle}")
+        self.assertIn("task-plan.json.file_boundaries", tech_lead_content)
+        self.assertIn("solution-plan.json", tech_lead_content)
+        self.assertNotIn("solution-plan.md", tech_lead_content)
+
+        prompt_forbidden = {
+            "qa-automation.md": ["solution-plan.md"],
+            "code-reviewer.md": ["solution-plan.md"],
+            "retrospect.md": ["solution-plan.md", "risk-report.md", "doc-output.md", "final-summary"],
+        }
+        for filename, needles in prompt_forbidden.items():
+            content = (prompt_dir / filename).read_text(encoding="utf-8")
+            for needle in needles:
+                self.assertNotIn(needle, content, f"{filename} should not reference unavailable artifact: {needle}")
+
+
 class TestProjectPromptOverride(unittest.TestCase):
     def test_project_agents_override_platform(self) -> None:
         """项目级 .ai/agents/ 优先于平台模板 prompt"""
@@ -412,6 +461,49 @@ class TestDefaultAgentCollaborationWorkflow(unittest.TestCase):
         self.assertNotIn("code_apply", stage_ids)
         self.assertNotIn("risk_analysis", stage_ids)
         self.assertNotIn("doc", stage_ids)
+
+    def test_default_pipeline_declares_json_artifact_contracts(self) -> None:
+        from engine.config import load_config
+
+        loaded = load_config(Path.cwd())
+        stages = {stage["id"]: stage for stage in loaded.config["pipeline"]}
+
+        expected = {
+            "requirement_synthesis": {
+                "json_artifacts": ["requirement-final.json"],
+                "required_artifacts": ["requirement-final.md", "requirement-final.json"],
+            },
+            "planning": {
+                "json_artifacts": ["solution-plan.json", "task-plan.json"],
+                "required_artifacts": ["task-plan.md", "solution-plan.json", "task-plan.json"],
+            },
+            "develop": {
+                "json_artifacts": ["implementation-report.json"],
+                "required_artifacts": ["implementation-report.md", "implementation-report.json"],
+                "input": ["solution-plan.json"],
+            },
+            "qa": {
+                "json_artifacts": ["test-report.json"],
+                "required_artifacts": ["test-report.md", "test-report.json"],
+                "input": ["solution-plan.json", "task-plan.json", "implementation-report.json"],
+            },
+            "review": {
+                "json_artifacts": ["review-report.json"],
+                "required_artifacts": ["review-report.md", "review-report.json"],
+                "input": ["solution-plan.json", "task-plan.json", "implementation-report.json", "test-report.json"],
+            },
+            "retrospect": {
+                "json_artifacts": ["retrospect-report.json"],
+                "required_artifacts": ["retrospect-report.md", "retrospect-report.json"],
+                "input": ["solution-plan.json", "implementation-report.json", "test-report.json", "review-report.json"],
+            },
+        }
+
+        for stage_id, contract in expected.items():
+            stage = stages[stage_id]
+            for key, values in contract.items():
+                for value in values:
+                    self.assertIn(value, stage.get(key, []), f"{stage_id}.{key} missing {value}")
 
 
 if __name__ == "__main__":

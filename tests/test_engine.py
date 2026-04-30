@@ -1502,6 +1502,285 @@ worktree:
             self.assertTrue(report.stages[0].artifact_validations)
             self.assertNotIn("planning", [stage.stage_id for stage in report.stages])
 
+    def test_stage_json_artifacts_name_multiple_json_blocks_by_contract(self) -> None:
+        response = """# Plan
+
+```json
+{"status": "completed", "summary": "solution", "decisions": []}
+```
+
+```json
+{"status": "completed", "summary": "tasks", "tasks": []}
+```
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "team.yaml").write_text(
+                f"""
+runtimes:
+  Mock:
+    cli: mock
+    response: {json.dumps(response)}
+agents:
+  - name: planner
+    runtime_id: Mock
+    prompt: agents/planner.md
+pipeline:
+  - id: planning
+    agents: [planner]
+    input: requirement
+    output:
+      planner: task-plan.md
+    json_artifacts:
+      - solution-plan.json
+      - task-plan.json
+    required_artifacts:
+      - solution-plan.json
+      - task-plan.json
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / "agents").mkdir()
+            (root / "agents" / "planner.md").write_text("Plan the work.", encoding="utf-8")
+
+            report = Orchestrator(root, config_path=str(root / "team.yaml")).run("ship it")
+
+            self.assertEqual(report.status, "completed")
+            output_dir = Path(report.output_dir)
+            solution = json.loads((output_dir / "solution-plan.json").read_text(encoding="utf-8"))
+            task_plan = json.loads((output_dir / "task-plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(solution["summary"], "solution")
+            self.assertEqual(task_plan["summary"], "tasks")
+            self.assertFalse((output_dir / "task-plan-1.json").exists())
+            self.assertFalse((output_dir / "task-plan-2.json").exists())
+
+    def test_stage_json_artifacts_rejects_parent_directory_path(self) -> None:
+        response = """# Plan
+
+```json
+{"status": "completed", "summary": "outside"}
+```
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outside_path = root / ".ai" / "team-output" / "outside.json"
+            (root / "team.yaml").write_text(
+                f"""
+runtimes:
+  Mock:
+    cli: mock
+    response: {json.dumps(response)}
+agents:
+  - name: planner
+    runtime_id: Mock
+    prompt: agents/planner.md
+pipeline:
+  - id: planning
+    agents: [planner]
+    input: requirement
+    output:
+      planner: task-plan.md
+    json_artifacts:
+      - ../outside.json
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / "agents").mkdir()
+            (root / "agents" / "planner.md").write_text("Plan the work.", encoding="utf-8")
+
+            report = Orchestrator(root, config_path=str(root / "team.yaml")).run("ship it")
+
+            self.assertEqual(report.status, "failed")
+            self.assertIn("json_artifacts", report.error_message)
+            self.assertTrue("invalid json_artifacts path" in report.error_message or "outside output dir" in report.error_message)
+            self.assertFalse(outside_path.exists())
+
+    def test_stage_json_artifacts_rejects_absolute_path(self) -> None:
+        response = """# Plan
+
+```json
+{"status": "completed", "summary": "absolute outside"}
+```
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outside_path = root / "outside-absolute.json"
+            (root / "team.yaml").write_text(
+                f"""
+runtimes:
+  Mock:
+    cli: mock
+    response: {json.dumps(response)}
+agents:
+  - name: planner
+    runtime_id: Mock
+    prompt: agents/planner.md
+pipeline:
+  - id: planning
+    agents: [planner]
+    input: requirement
+    output:
+      planner: task-plan.md
+    json_artifacts:
+      - {outside_path}
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / "agents").mkdir()
+            (root / "agents" / "planner.md").write_text("Plan the work.", encoding="utf-8")
+
+            report = Orchestrator(root, config_path=str(root / "team.yaml")).run("ship it")
+
+            self.assertEqual(report.status, "failed")
+            self.assertIn("json_artifacts", report.error_message)
+            self.assertTrue("invalid json_artifacts path" in report.error_message or "outside output dir" in report.error_message)
+            self.assertFalse(outside_path.exists())
+
+    def test_stage_json_artifacts_rejects_multi_agent_stage(self) -> None:
+        response = """# Plan
+
+```json
+{"status": "completed", "summary": "shared artifact"}
+```
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "team.yaml").write_text(
+                f"""
+runtimes:
+  Mock:
+    cli: mock
+    response: {json.dumps(response)}
+agents:
+  - name: planner
+    runtime_id: Mock
+    prompt: agents/planner.md
+  - name: reviewer
+    runtime_id: Mock
+    prompt: agents/reviewer.md
+pipeline:
+  - id: planning
+    agents: [planner, reviewer]
+    input: requirement
+    output:
+      planner: planner-output.md
+      reviewer: reviewer-output.md
+    json_artifacts:
+      - task-plan.json
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / "agents").mkdir()
+            (root / "agents" / "planner.md").write_text("Plan the work.", encoding="utf-8")
+            (root / "agents" / "reviewer.md").write_text("Review the work.", encoding="utf-8")
+
+            report = Orchestrator(root, config_path=str(root / "team.yaml")).run("ship it")
+
+            self.assertEqual(report.status, "failed")
+            self.assertIn("json_artifacts", report.error_message)
+            self.assertIn("single-agent", report.error_message)
+
+    def test_stage_without_json_artifacts_uses_legacy_numbered_names_for_multiple_json_blocks(self) -> None:
+        response = """# Legacy Output
+
+```json
+{"status": "completed", "summary": "first", "kind": "first", "value": 1}
+```
+
+```json
+{"status": "completed", "summary": "second", "kind": "second", "value": 2}
+```
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "team.yaml").write_text(
+                f"""
+runtimes:
+  Mock:
+    cli: mock
+    response: {json.dumps(response)}
+agents:
+  - name: legacy
+    runtime_id: Mock
+    prompt: agents/legacy.md
+pipeline:
+  - id: legacy_stage
+    agents: [legacy]
+    input: requirement
+    output:
+      legacy: legacy-output.md
+    required_artifacts:
+      - legacy-output-1.json
+      - legacy-output-2.json
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / "agents").mkdir()
+            (root / "agents" / "legacy.md").write_text("Write legacy output.", encoding="utf-8")
+
+            report = Orchestrator(root, config_path=str(root / "team.yaml")).run("ship it")
+
+            self.assertEqual(report.status, "completed")
+            output_dir = Path(report.output_dir)
+            first = json.loads((output_dir / "legacy-output-1.json").read_text(encoding="utf-8"))
+            second = json.loads((output_dir / "legacy-output-2.json").read_text(encoding="utf-8"))
+            self.assertEqual(first, {"status": "completed", "summary": "first", "kind": "first", "value": 1})
+            self.assertEqual(second, {"status": "completed", "summary": "second", "kind": "second", "value": 2})
+            self.assertFalse((output_dir / "legacy-output.json").exists())
+
+    def test_stage_without_json_artifacts_uses_legacy_stem_name_for_single_json_block(self) -> None:
+        response = """# Legacy Output
+
+```json
+{"status": "completed", "summary": "single", "kind": "single", "value": 1}
+```
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "team.yaml").write_text(
+                f"""
+runtimes:
+  Mock:
+    cli: mock
+    response: {json.dumps(response)}
+agents:
+  - name: legacy
+    runtime_id: Mock
+    prompt: agents/legacy.md
+pipeline:
+  - id: legacy_stage
+    agents: [legacy]
+    input: requirement
+    output:
+      legacy: legacy-output.md
+    required_artifacts:
+      - legacy-output.json
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / "agents").mkdir()
+            (root / "agents" / "legacy.md").write_text("Write legacy output.", encoding="utf-8")
+
+            report = Orchestrator(root, config_path=str(root / "team.yaml")).run("ship it")
+
+            self.assertEqual(report.status, "completed")
+            output_dir = Path(report.output_dir)
+            artifact = json.loads((output_dir / "legacy-output.json").read_text(encoding="utf-8"))
+            self.assertEqual(artifact, {"status": "completed", "summary": "single", "kind": "single", "value": 1})
+            self.assertFalse((output_dir / "legacy-output-1.json").exists())
+
     def test_stage_context_includes_contract_and_confirmed_artifacts(self) -> None:
         from engine.stage_context import build_stage_context
 

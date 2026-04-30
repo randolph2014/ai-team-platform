@@ -164,8 +164,11 @@ pipeline:
         - human-decision-requirement*.json
       output:
         requirements-analyst: requirement-final.md
+      json_artifacts:
+        - requirement-final.json
       required_artifacts:
         - requirement-final.md
+        - requirement-final.json
 
     - id: requirement_confirm
       name: "需求人工确认"
@@ -190,8 +193,13 @@ pipeline:
         - human-decision-task-plan*.json
       output:
         planner: task-plan.md
+      json_artifacts:
+        - solution-plan.json
+        - task-plan.json
       required_artifacts:
         - task-plan.md
+        - solution-plan.json
+        - task-plan.json
 
     - id: task_plan_confirm
       name: "任务规划人工确认"
@@ -212,14 +220,18 @@ pipeline:
         - requirement-final.json
         - codebase-context.md
         - codebase-context.json
+        - solution-plan.json
         - task-plan.md
         - task-plan.json
         - human-decision-task-plan.json
         - human-decision-acceptance*.json
       output:
         tech-lead: implementation-report.md
+      json_artifacts:
+        - implementation-report.json
       required_artifacts:
         - implementation-report.md
+        - implementation-report.json
 
     - id: qa
       name: "自动测试"
@@ -227,13 +239,20 @@ pipeline:
       agents: [qa-automation]
       input:
         - requirement-final.md
+        - requirement-final.json
+        - solution-plan.json
         - task-plan.md
+        - task-plan.json
         - implementation-report.md
+        - implementation-report.json
         - git-diff
       output:
         qa-automation: test-report.md
+      json_artifacts:
+        - test-report.json
       required_artifacts:
         - test-report.md
+        - test-report.json
       loopback_to: develop
       loopback_trigger: ["FAILED", "ERROR", "失败", "exit code: 1", "退出码: 1"]
       max_retries: 2
@@ -244,14 +263,22 @@ pipeline:
       agents: [code-reviewer]
       input:
         - requirement-final.md
+        - requirement-final.json
+        - solution-plan.json
         - task-plan.md
+        - task-plan.json
         - implementation-report.md
+        - implementation-report.json
         - test-report.md
+        - test-report.json
         - git-diff
       output:
         code-reviewer: review-report.md
+      json_artifacts:
+        - review-report.json
       required_artifacts:
         - review-report.md
+        - review-report.json
       loopback_to: develop
       loopback_trigger: "Request Changes"
       max_retries: 2
@@ -261,10 +288,16 @@ pipeline:
       type: human_review
       input:
         - requirement-final.md
+        - requirement-final.json
+        - solution-plan.json
         - task-plan.md
+        - task-plan.json
         - implementation-report.md
+        - implementation-report.json
         - test-report.md
+        - test-report.json
         - review-report.md
+        - review-report.json
         - git-diff
       output_file: human-decision-acceptance.md
       decision_file: human-decision-acceptance.json
@@ -278,16 +311,25 @@ pipeline:
       agents: [retrospect]
       input:
         - requirement-final.md
+        - requirement-final.json
+        - solution-plan.json
         - task-plan.md
+        - task-plan.json
         - implementation-report.md
+        - implementation-report.json
         - test-report.md
+        - test-report.json
         - review-report.md
+        - review-report.json
         - human-decision-acceptance.json
         - git-diff
       output:
-        retrospect: final-summary.md
+        retrospect: retrospect-report.md
+      json_artifacts:
+        - retrospect-report.json
       required_artifacts:
-        - final-summary.md
+        - retrospect-report.md
+        - retrospect-report.json
 
 # Quality Gates — develop 阶段完成后自动运行。
 # 项目级 .ai/team.yaml 可覆盖此配置。

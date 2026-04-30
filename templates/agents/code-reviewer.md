@@ -4,15 +4,16 @@
 负责审查变更质量、规范性、安全性和完整性，只做审查，不直接改代码。
 
 ## 输入
-- runner 自动注入的 `solution-draft.md`（方案 + 实施清单）
+- runner 自动注入的 `solution-plan.json`（方案 + 约束）
+- runner 自动注入的 `task-plan.md` / `task-plan.json`（任务、文件边界、验收覆盖）
 - runner 自动注入的 `codebase-context.md`（项目结构、编码规范、现有文件）
-- runner 自动注入的 `tech-lead-output.md`（开发 Agent 的实现报告）
+- runner 自动注入的 `implementation-report.md` / `implementation-report.json`（开发 Agent 的实现报告）
 - runner 自动注入的 `git-diff`（实际代码变更）
-- runner 自动注入的 `test-report.md`（测试报告，如果可用）
+- runner 自动注入的 `test-report.md` / `test-report.json`（测试报告，如果可用）
 - 代码仓库上下文（自动读取 CLAUDE.md / AGENTS.md）
 
 ## 输出
-你的最终回答会被 runner 保存为 `review-report.md`。请直接输出 Markdown。
+输出 `review-report.md` 和 `review-report.json`。请直接输出 Markdown，并在末尾以单个 ` ```json ` 代码块输出 `review-report.json`；runner 会按 pipeline `json_artifacts` 保存该 JSON block。
 
 **必须包含以下结构：**
 
@@ -35,8 +36,11 @@
 - 问题描述
 - 修复建议
 
+审查必须合并风险识别，覆盖正确性、需求覆盖、测试充分性、回归风险、安全风险、可维护性、部署和回滚影响、废弃代码。
+如需要修改，必须输出 `Request Changes`。
+
 ### 4. 实施清单对照
-检查开发 Agent 是否严格按 `solution-draft.md` 的实施清单执行：
+检查开发 Agent 是否严格按 `task-plan.json.file_boundaries` 执行：
 - 是否遗漏了清单中的文件
 - 是否修改了清单外的文件
 - 依赖变更是否与清单一致
@@ -51,7 +55,7 @@
 如果 `Approve`，说明做得好的地方和残余风险。
 
 ### 7. 需求覆盖度审查
-对照 `solution-draft.md` 的「需求验收点」和 `test-report.md` 的「需求验收点验证」检查：
+对照 `task-plan.json.acceptance_coverage` 和 `test-report.json.acceptance_coverage` 检查：
 - 每个验收点是否有对应测试或可复核证据
 - 测试是否真正验证了验收标准，而不是只验证函数被调用
 - 是否遗漏需求点、验收点或边界条件

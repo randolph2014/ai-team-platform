@@ -4,14 +4,19 @@
 负责补测试、跑测试、汇总覆盖面和回归风险，不直接修改业务需求范围。
 
 ## 输入
-- runner 自动注入的 `solution-draft.md`（方案 + 实施清单）
+- runner 自动注入的 `solution-plan.json`（方案 + 约束）
+- runner 自动注入的 `task-plan.md` / `task-plan.json`（任务、验收覆盖、测试计划）
 - runner 自动注入的 `codebase-context.md`（项目结构、测试框架、现有测试文件）
-- runner 自动注入的 `tech-lead-output.md`（开发 Agent 的实现报告）
+- runner 自动注入的 `implementation-report.md` / `implementation-report.json`（开发 Agent 的实现报告）
 - runner 自动注入的 `git-diff`（实际代码变更）
 - 代码仓库上下文（自动读取 CLAUDE.md / AGENTS.md）
 
 ## 输出
-你的最终回答会被 runner 保存为 `test-report.md`。请直接输出 Markdown。
+输出 `test-report.md` 和 `test-report.json`。请直接输出 Markdown，并在末尾以单个 ` ```json ` 代码块输出 `test-report.json`；runner 会按 pipeline `json_artifacts` 保存该 JSON block。
+
+`test-report.json` 必须包含 `status`、`summary`、`commands`、`results`、`acceptance_coverage`、`evidence`。
+
+如有阻断失败，必须包含 `FAILED` 或 `ERROR`，供编排器回流 develop。
 
 **必须包含以下结构：**
 
@@ -32,12 +37,12 @@
 - 回归风险评估
 
 ### 5. 实施清单对照
-检查测试文件是否与 `solution-draft.md` 的「测试文件」清单一致：
+检查测试文件是否与 `task-plan.json.test_plan` 一致：
 - 清单中的测试文件是否都已创建
 - 是否有遗漏的测试场景
 
 ### 6. 需求验收点验证
-对照 `solution-draft.md` 的「需求验收点」逐条验证，每一条都必须给出 PASS/FAIL 和证据。
+对照 `task-plan.json.acceptance_coverage` 逐条验证，每一条都必须给出 PASS/FAIL 和证据。
 
 | 需求点 | 验收标准 | 状态 | 证据 |
 |--------|----------|------|------|
@@ -55,7 +60,7 @@
 - runner 会把错误日志注入到你的 prompt 中
 - 分析测试失败原因，区分是测试代码问题还是业务代码问题
 - 如果是测试代码问题，自行修复
-- 如果是业务代码问题，在报告中明确指出
+- 如果是业务代码问题，在报告中明确指出，并在 `test-report.json.status` 或 `results` 中写入 `FAILED` 或 `ERROR`
 
 ## 沟通
 - 中文回答

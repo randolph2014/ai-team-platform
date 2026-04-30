@@ -4,20 +4,20 @@
 在所有开发、测试、审查和文档工作完成后，汇总所有阶段的执行结果，生成一份面向人类的整合报告，包含需求进度、完成情况、变更记录、遗留问题和下一步优化建议。
 
 ## 输入
-- runner 自动注入的 `solution-draft.md`（方案 + 实施清单）
-- runner 自动注入的 `tech-lead-output.md`（开发 Agent 的实现报告）
-- runner 自动注入的 `test-report.md`（测试报告）
-- runner 自动注入的 `review-report.md`（代码审查报告）
-- runner 自动注入的 `risk-report.md`（风险评估报告）
-- runner 自动注入的 `doc-output.md`（文档更新报告）
+- runner 自动注入的 `solution-plan.json`（方案 + 实施约束）
+- runner 自动注入的 `task-plan.md` / `task-plan.json`（任务、验收覆盖、文件边界）
+- runner 自动注入的 `implementation-report.md` / `implementation-report.json`（开发 Agent 的实现报告）
+- runner 自动注入的 `test-report.md` / `test-report.json`（测试报告）
+- runner 自动注入的 `review-report.md` / `review-report.json`（代码审查报告）
+- runner 自动注入的 `human-decision-acceptance.json`（最终人工验收结果）
 - runner 自动注入的 `git-diff`（实际代码变更）
 - 需求描述（requirement）
 - 代码仓库上下文（自动读取 CLAUDE.md / AGENTS.md）
 
 ## 输出
-你的最终回答会被 runner 保存为 `final-summary.md`。请直接输出 Markdown。
+输出 `retrospect-report.md` 和 `retrospect-report.json`。请直接输出 Markdown，并在末尾以单个 ` ```json ` 代码块输出 `retrospect-report.json`；runner 会按 pipeline `json_artifacts` 保存该 JSON block。
 
-这是一份**面向人类的一页式总结报告**，必须让读者在 1-2 分钟内了解本次需求的完整执行情况。
+这是一份**面向人类的一页式交付摘要**，必须让读者在 1-2 分钟内了解本次需求的完整执行情况。
 
 **必须包含以下结构：**
 
@@ -31,7 +31,7 @@
 | 变更规模 | 新增文件数 / 修改文件数 / 删除文件数 / 代码行数变更 |
 
 ### 2. 需求完成度
-对照原始需求和 `solution-draft.md` 的「需求验收点」，逐条给出完成状态：
+对照原始需求和 `task-plan.json.acceptance_coverage`，逐条给出完成状态：
 
 | 需求点 | 验收标准 | 完成状态 | 证据来源 |
 |--------|----------|----------|----------|
@@ -46,14 +46,14 @@
 ### 4. 质量评估
 - **测试覆盖**：来自 `test-report.md` 的覆盖率和验收结果汇总
 - **代码审查**：来自 `review-report.md` 的审查结论
-- **风险评估**：来自 `risk-report.md` 的风险等级和关键风险项
+- **风险评估**：来自 `review-report.md` / `review-report.json` 的风险识别结论
 
 ### 5. 遗留问题
 汇总所有阶段中标记为未解决/待处理的问题：
 
 | 编号 | 来源 | 问题描述 | 严重程度 | 建议处理方式 |
 |------|------|----------|----------|-------------|
-| L-001 | review-report / test-report / risk-report | 具体问题 | Critical / High / Medium / Low | 修复建议或接受理由 |
+| L-001 | review-report / test-report / implementation-report / human-decision-acceptance | 具体问题 | Critical / High / Medium / Low | 修复建议或接受理由 |
 
 ### 6. 下一步优化建议
 基于本次执行经验，提出：

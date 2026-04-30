@@ -967,6 +967,23 @@ class Orchestrator:
             stage_run.completed_at = utc_now()
             stage_run.duration_seconds = _duration(start)
             return stage_run
+        configured_json_artifacts = (stage or {}).get("json_artifacts") or []
+        if configured_json_artifacts and len(agent_names) > 1:
+            stage_run.status = "failed"
+            stage_run.error_message = (
+                f"json_artifacts only supports single-agent stages; stage {stage_id} has {len(agent_names)} agents"
+            )
+            stage_run.completed_at = utc_now()
+            stage_run.duration_seconds = _duration(start)
+            return stage_run
+        try:
+            self._json_artifact_paths(output_dir, configured_json_artifacts)
+        except ConfigError as exc:
+            stage_run.status = "failed"
+            stage_run.error_message = str(exc)
+            stage_run.completed_at = utc_now()
+            stage_run.duration_seconds = _duration(start)
+            return stage_run
 
         def run_one(agent_name: str) -> AgentRun:
             if agent_name not in self.agents:
@@ -994,7 +1011,7 @@ class Orchestrator:
                 stage_run.error_message = "; ".join(agent.error_message or agent.agent_name for agent in failed)
             else:
                 stage_run.status = "completed"
-                self._extract_json_artifacts(output_dir, stage_run)
+                self._extract_json_artifacts(output_dir, stage_run, stage)
                 validations = validate_required_artifacts(stage, output_dir)
                 stage_run.artifact_validations.extend(validations)
                 if has_artifact_validation_failure(validations):
@@ -1167,12 +1184,29 @@ class Orchestrator:
                 artifacts.append(str(path.relative_to(output_dir)))
         report.artifacts = sorted(artifacts)
 
-    def _extract_json_artifacts(self, output_dir: Path, stage_run: StageRun) -> None:
+    def _json_artifact_paths(self, output_dir: Path, names: Sequence[Any]) -> List[Path]:
+        output_root = output_dir.resolve()
+        paths = []
+        for raw_name in names:
+            name = str(raw_name)
+            artifact_path = Path(name)
+            if not name.strip() or artifact_path.is_absolute() or ".." in artifact_path.parts:
+                raise ConfigError(f"invalid json_artifacts path: {name}")
+            resolved = (output_dir / artifact_path).resolve(strict=False)
+            try:
+                resolved.relative_to(output_root)
+            except ValueError as exc:
+                raise ConfigError(f"json_artifacts path outside output dir: {name}") from exc
+            paths.append(output_dir / artifact_path)
+        return paths
+
+    def _extract_json_artifacts(self, output_dir: Path, stage_run: StageRun, stage: Optional[Dict[str, Any]] = None) -> None:
         """从 agent 输出的 Markdown 文件中提取 JSON 代码块，生成伴生 .json 文件。
 
         支持双输出模式：agent 在 Markdown 末尾以 ```json 代码块输出结构化数据，
         orchestrator 自动提取为独立 .json 文件，供下游 stage 的 input 引用。
         """
+        configured_paths = self._json_artifact_paths(output_dir, (stage or {}).get("json_artifacts") or [])
         for agent in stage_run.agents:
             if not agent.output_file:
                 continue
@@ -1190,10 +1224,13 @@ class Orchestrator:
                 except json.JSONDecodeError:
                     continue
                 stem = output_path.stem
-                if len(json_blocks) > 1:
+                if i < len(configured_paths):
+                    json_path = configured_paths[i]
+                elif len(json_blocks) > 1:
                     json_path = output_dir / f"{stem}-{i + 1}.json"
                 else:
                     json_path = output_dir / f"{stem}.json"
+                json_path.parent.mkdir(parents=True, exist_ok=True)
                 json_path.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _run_ci_cd_hook(self, worktree_path: Path, report: RunReport, output_dir: Path) -> None:
