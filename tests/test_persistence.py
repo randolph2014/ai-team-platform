@@ -434,6 +434,54 @@ class TestStageRunRepo:
         finally:
             loop.close()
 
+    def test_upsert_persists_runtime_contract_fields(self, mock_conn: MagicMock) -> None:
+        """StageRun upsert writes fields required by run detail API/UI contract."""
+        repo = StageRunRepo()
+        mock_conn.execute = AsyncMock(return_value=None)
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                repo.upsert(
+                    mock_conn,
+                    id="stage-001",
+                    pipeline_run_id="run-001",
+                    stage_id="task_plan_confirm",
+                    stage_name="任务计划确认",
+                    iteration=1,
+                    status="waiting",
+                    is_parallel=False,
+                    error_message=None,
+                    started_at=None,
+                    completed_at=None,
+                    duration_seconds=None,
+                    output_dir="/tmp/out",
+                    stage_type="human_review",
+                    artifact_validations=[
+                        {"artifact": "task-plan.json", "status": "failed", "message": "缺少回滚方案"}
+                    ],
+                    human_decision={
+                        "stage_id": "task_plan_confirm",
+                        "decision": "rejected",
+                        "reason": "任务缺少回滚方案",
+                        "required_changes": ["补充回滚方案"],
+                    },
+                    loopback_to="planning",
+                )
+            )
+            sql = mock_conn.execute.call_args.args[0]
+            params = mock_conn.execute.call_args.args[1:]
+            assert "stage_type" in sql
+            assert "artifact_validations" in sql
+            assert "human_decision" in sql
+            assert "loopback_to" in sql
+            assert "human_review" in params
+            assert "planning" in params
+            assert any(isinstance(item, str) and "task-plan.json" in item for item in params)
+            assert any(isinstance(item, str) and "任务缺少回滚方案" in item for item in params)
+        finally:
+            loop.close()
+
 
 class TestPipelineVersionRepo:
     """测试 PipelineVersionRepo CRUD"""
@@ -596,6 +644,80 @@ class TestSaveReport:
             # 不应抛出异常
             save_report_sync(report)
 
+    def test_save_report_passes_stage_contract_fields(self) -> None:
+        """save_report must persist fields required by DB-backed run detail UI."""
+        from engine.models import ArtifactValidationRun, HumanDecision, RunReport, StageRun
+
+        class _Tx:
+            async def __aenter__(self):
+                return None
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class _Conn:
+            def transaction(self):
+                return _Tx()
+
+        run_repo = MagicMock()
+        run_repo.upsert = AsyncMock(return_value=None)
+        stage_repo = MagicMock()
+        stage_repo.upsert = AsyncMock(return_value=None)
+        agent_repo = MagicMock()
+        agent_repo.upsert = AsyncMock(return_value=None)
+        gate_repo = MagicMock()
+        gate_repo.upsert = AsyncMock(return_value=None)
+
+        stage = StageRun(
+            stage_id="task_plan_confirm",
+            stage_name="任务计划确认",
+            status="waiting",
+            type="human_review",
+            artifact_validations=[
+                ArtifactValidationRun(artifact="task-plan.json", status="failed", message="缺少回滚方案")
+            ],
+            human_decision=HumanDecision(
+                stage_id="task_plan_confirm",
+                decision="rejected",
+                reason="任务缺少回滚方案",
+                required_changes=["补充回滚方案"],
+                target_stage="planning",
+            ),
+            loopback_to="planning",
+        )
+        report = RunReport(
+            run_id="test-run",
+            status="waiting",
+            requirement="test",
+            project_root="/tmp",
+            output_dir="/tmp/out",
+            config_source="default",
+            stages=[stage],
+            human_decisions=[stage.human_decision],
+        )
+
+        with (
+            patch("persistence.connection.get_connection", AsyncMock(return_value=_Conn())),
+            patch("persistence.connection.release_connection", AsyncMock(return_value=None)),
+            patch("persistence.repository.PipelineRunRepo", return_value=run_repo),
+            patch("persistence.repository.StageRunRepo", return_value=stage_repo),
+            patch("persistence.repository.AgentRunRepo", return_value=agent_repo),
+            patch("persistence.repository.QualityGateRunRepo", return_value=gate_repo),
+        ):
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(save_report(report))
+            finally:
+                loop.close()
+
+        run_kwargs = run_repo.upsert.await_args.kwargs
+        assert run_kwargs["context"]["human_decisions"][0]["reason"] == "任务缺少回滚方案"
+        stage_kwargs = stage_repo.upsert.await_args.kwargs
+        assert stage_kwargs["stage_type"] == "human_review"
+        assert stage_kwargs["artifact_validations"][0]["artifact"] == "task-plan.json"
+        assert stage_kwargs["human_decision"]["decision"] == "rejected"
+        assert stage_kwargs["loopback_to"] == "planning"
+
 
 # ══════════════════════════════════════════════════════════════════════
 # ORM Models 测试
@@ -714,6 +836,26 @@ class TestStageRunRecord:
         record = StageRunRecord.from_row(row)
         assert record.stage_id == "develop"
         assert record.iteration == 1
+
+    def test_from_row_parses_stage_runtime_json_fields(self) -> None:
+        from persistence.models import StageRunRecord
+        row = _make_row(
+            id="s1", pipeline_run_id="r1", stage_id="task_plan_confirm",
+            stage_name="Task Plan Confirm", iteration=1, stage_type="human_review",
+            status="waiting", is_parallel=False, loopback_from=None,
+            loopback_to="planning",
+            artifact_validations='[{"artifact":"task-plan.json","status":"failed","message":"缺少回滚方案"}]',
+            human_decision='{"stage_id":"task_plan_confirm","decision":"approved","reason":"","required_changes":[]}',
+            error_message=None, started_at=None, completed_at=None,
+            duration_seconds=None, output_dir="/tmp",
+        )
+
+        record = StageRunRecord.from_row(row)
+
+        assert record.stage_type == "human_review"
+        assert record.artifact_validations[0]["artifact"] == "task-plan.json"
+        assert record.human_decision["decision"] == "approved"
+        assert record.loopback_to == "planning"
 
 
 class TestAgentRunRecord:
@@ -1051,6 +1193,69 @@ class TestRunDetailToResponse:
         assert len(stage["quality_gates"]) == 1
         assert stage["quality_gates"][0]["name"] == "lint"
         assert stage["quality_gates"][0]["required"] is True
+
+    def test_includes_stage_runtime_contract_fields(self) -> None:
+        from persistence.repository import run_detail_to_response
+        detail = {
+            "id": "db-id-005",
+            "status": "waiting",
+            "project_root": "/tmp",
+            "requirement": "req",
+            "worktree_path": None,
+            "context": {
+                "app_run_id": "app-005",
+                "artifacts": [],
+                "human_decisions": [
+                    {
+                        "stage_id": "task_plan_confirm",
+                        "decision": "rejected",
+                        "reason": "任务缺少回滚方案",
+                        "required_changes": ["补充回滚方案"],
+                    }
+                ],
+            },
+            "started_at": None,
+            "completed_at": None,
+            "duration_seconds": None,
+            "error_message": None,
+            "stages": [
+                {
+                    "id": "stage-db-005",
+                    "stage_id": "task_plan_confirm",
+                    "stage_name": "任务计划确认",
+                    "iteration": 1,
+                    "stage_type": "human_review",
+                    "status": "waiting",
+                    "is_parallel": False,
+                    "artifact_validations": [
+                        {"artifact": "task-plan.json", "status": "failed", "message": "缺少回滚方案"}
+                    ],
+                    "human_decision": {
+                        "stage_id": "task_plan_confirm",
+                        "decision": "rejected",
+                        "reason": "任务缺少回滚方案",
+                        "required_changes": ["补充回滚方案"],
+                    },
+                    "loopback_to": "planning",
+                    "started_at": None,
+                    "completed_at": None,
+                    "duration_seconds": None,
+                    "output_dir": "/tmp/out",
+                    "error_message": None,
+                    "agents": [],
+                    "quality_gates": [],
+                }
+            ],
+        }
+
+        result = run_detail_to_response(detail)
+
+        assert result["human_decisions"][0]["reason"] == "任务缺少回滚方案"
+        stage = result["stages"][0]
+        assert stage["type"] == "human_review"
+        assert stage["artifact_validations"][0]["artifact"] == "task-plan.json"
+        assert stage["human_decision"]["decision"] == "rejected"
+        assert stage["loopback_to"] == "planning"
 
     def test_string_context_parsed(self) -> None:
         from persistence.repository import run_detail_to_response

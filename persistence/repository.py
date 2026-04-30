@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from engine.models import AgentRun, QualityGateRun, RunReport, StageRun
+from engine.models import AgentRun, QualityGateRun, RunReport, StageRun, model_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,17 @@ def _gate_db_id(stage_db_id: str, gate_name: str) -> str:
 
 def _jsonb(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False) if value is not None else "{}"
+
+
+def _json_or_default(value: Any, default: Any) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return default
+    return value
 
 
 # ——————————————————————————————————————————————————————————————————————————————
@@ -318,19 +329,29 @@ class StageRunRepo:
         completed_at: Optional[str],
         duration_seconds: Optional[float],
         output_dir: Optional[str],
+        stage_type: str = "agent",
+        artifact_validations: Optional[List[Dict[str, Any]]] = None,
+        human_decision: Optional[Dict[str, Any]] = None,
+        loopback_to: Optional[str] = None,
     ) -> None:
         await conn.execute(
             f"""
             INSERT INTO {self.TABLE} (id, pipeline_run_id, stage_id, stage_name, iteration,
                                        status, is_parallel, error_message, started_at,
-                                       completed_at, duration_seconds, output_dir)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                                       completed_at, duration_seconds, output_dir, stage_type,
+                                       artifact_validations, human_decision, loopback_to)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16)
             ON CONFLICT (id) DO UPDATE SET
+                stage_type = EXCLUDED.stage_type,
                 status = EXCLUDED.status,
+                is_parallel = EXCLUDED.is_parallel,
                 error_message = EXCLUDED.error_message,
                 completed_at = COALESCE(EXCLUDED.completed_at, {self.TABLE}.completed_at),
                 duration_seconds = EXCLUDED.duration_seconds,
-                output_dir = COALESCE(EXCLUDED.output_dir, {self.TABLE}.output_dir)
+                output_dir = COALESCE(EXCLUDED.output_dir, {self.TABLE}.output_dir),
+                artifact_validations = EXCLUDED.artifact_validations,
+                human_decision = EXCLUDED.human_decision,
+                loopback_to = EXCLUDED.loopback_to
             """,
             id,
             pipeline_run_id,
@@ -344,6 +365,10 @@ class StageRunRepo:
             _to_dt(completed_at),
             duration_seconds,
             output_dir,
+            stage_type,
+            _jsonb(artifact_validations or []),
+            _jsonb(human_decision) if human_decision is not None else None,
+            loopback_to,
         )
 
     async def list_by_run(self, conn, pipeline_run_id: str) -> List[Dict[str, Any]]:
@@ -525,6 +550,7 @@ async def save_report(report: RunReport, config: Optional[Dict[str, Any]] = None
                 "config_source": report.config_source,
                 "config_path": report.config_path,
                 "artifacts": report.artifacts,
+                "human_decisions": [model_to_dict(item) for item in report.human_decisions],
             }
             if report.merge_result:
                 ctx["merge_result"] = report.merge_result
@@ -563,6 +589,10 @@ async def save_report(report: RunReport, config: Optional[Dict[str, Any]] = None
                     completed_at=stage.completed_at,
                     duration_seconds=stage.duration_seconds,
                     output_dir=stage.output_dir,
+                    stage_type=stage.type,
+                    artifact_validations=[model_to_dict(item) for item in stage.artifact_validations],
+                    human_decision=model_to_dict(stage.human_decision) if stage.human_decision else None,
+                    loopback_to=stage.loopback_to,
                 )
 
                 for agent in stage.agents:
@@ -877,6 +907,8 @@ def run_detail_to_response(detail: Dict[str, Any]) -> Dict[str, Any]:
             ctx = {}
     stages = []
     for stage in detail.get("stages", []):
+        artifact_validations = _json_or_default(stage.get("artifact_validations"), [])
+        human_decision = _json_or_default(stage.get("human_decision"), None)
         agents = []
         for agent in stage.get("agents", []):
             agents.append({
@@ -909,6 +941,7 @@ def run_detail_to_response(detail: Dict[str, Any]) -> Dict[str, Any]:
             "stage_id": stage.get("stage_id"),
             "stage_name": stage.get("stage_name"),
             "iteration": stage.get("iteration"),
+            "type": stage.get("stage_type") or stage.get("type") or "agent",
             "status": stage.get("status"),
             "is_parallel": stage.get("is_parallel"),
             "started_at": _dt_to_str(stage.get("started_at")),
@@ -916,6 +949,9 @@ def run_detail_to_response(detail: Dict[str, Any]) -> Dict[str, Any]:
             "duration_seconds": stage.get("duration_seconds"),
             "output_dir": stage.get("output_dir"),
             "error_message": stage.get("error_message"),
+            "artifact_validations": artifact_validations,
+            "human_decision": human_decision,
+            "loopback_to": stage.get("loopback_to") or stage.get("loopback_from"),
             "agents": agents,
             "quality_gates": gates,
         })
@@ -932,5 +968,6 @@ def run_detail_to_response(detail: Dict[str, Any]) -> Dict[str, Any]:
         "duration_seconds": detail.get("duration_seconds"),
         "error_message": detail.get("error_message"),
         "artifacts": ctx.get("artifacts", []),
+        "human_decisions": _json_or_default(ctx.get("human_decisions"), []),
         "stages": stages,
     }

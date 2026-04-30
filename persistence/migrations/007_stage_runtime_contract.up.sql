@@ -1,0 +1,4 @@
+ALTER TABLE stage_run ADD COLUMN IF NOT EXISTS stage_type TEXT NOT NULL DEFAULT 'agent';
+ALTER TABLE stage_run ADD COLUMN IF NOT EXISTS artifact_validations JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE stage_run ADD COLUMN IF NOT EXISTS human_decision JSONB;
+ALTER TABLE stage_run ADD COLUMN IF NOT EXISTS loopback_to TEXT;

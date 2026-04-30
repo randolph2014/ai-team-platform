@@ -1,9 +1,23 @@
 import { CheckCircle, FileText, XCircle } from 'lucide-react';
 import { useState } from 'react';
-import type { RunReport, StageRun } from '../lib/types';
-import { rememberedWorkdir, resumeRun } from '../lib/api';
+import type { HumanDecisionValue, RunReport, StageRun } from '../lib/types';
+import { rememberedWorkdir, submitHumanDecision } from '../lib/api';
 import { ArtifactContent } from './ArtifactContent';
 import { StatusBadge } from './StatusBadge';
+
+function humanDecisionLabel(decision: HumanDecisionValue | string): string {
+  if (decision === 'approved') return '已通过';
+  if (decision === 'rejected') return '已拒绝';
+  if (decision === 'waiting') return '待确认';
+  return decision;
+}
+
+function splitRequiredChanges(value: string): string[] {
+  return value
+    .split('\n')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 
 function ReviewActions({ stage, runId, workdir, onActionDone }: {
   stage: StageRun;
@@ -13,41 +27,68 @@ function ReviewActions({ stage, runId, workdir, onActionDone }: {
 }) {
   const [acting, setActing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reason, setReason] = useState('');
+  const [requiredChanges, setRequiredChanges] = useState('');
 
   if (stage.type !== 'human_review' || stage.status !== 'waiting') return null;
 
-  function handleApprove() {
-    setActing(true);
-    setError(null);
-    resumeRun(runId, workdir, true, false)
-      .then(() => onActionDone())
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setActing(false));
-  }
+  async function handleDecision(decision: 'approved' | 'rejected') {
+    const trimmedReason = reason.trim();
+    if (decision === 'rejected' && !trimmedReason) return;
 
-  function handleReject() {
     setActing(true);
     setError(null);
-    resumeRun(runId, workdir, false, true)
-      .then(() => onActionDone())
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setActing(false));
+    try {
+      await submitHumanDecision(runId, workdir, {
+        stage_id: stage.stage_id,
+        decision,
+        reason: decision === 'rejected' ? trimmedReason : '',
+        required_changes: decision === 'rejected' ? splitRequiredChanges(requiredChanges) : [],
+      });
+      onActionDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '提交人工决策失败');
+    } finally {
+      setActing(false);
+    }
   }
 
   return (
     <div className="reviewActions">
+      <div className="reviewForm">
+        <label className="reviewField">
+          <span>拒绝理由</span>
+          <textarea
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            rows={3}
+            placeholder="拒绝时必须填写，说明不能通过的根本原因"
+            disabled={acting}
+          />
+        </label>
+        <label className="reviewField">
+          <span>必须修改项</span>
+          <textarea
+            value={requiredChanges}
+            onChange={(event) => setRequiredChanges(event.target.value)}
+            rows={3}
+            placeholder="每行一项，提交时会自动去除空白行"
+            disabled={acting}
+          />
+        </label>
+      </div>
       <div className="reviewActionsButtons">
         <button
           className="button primary"
-          onClick={handleApprove}
+          onClick={() => handleDecision('approved')}
           disabled={acting}
         >
           <CheckCircle size={14} /> 通过
         </button>
         <button
           className="button reviewRejectButton"
-          onClick={handleReject}
-          disabled={acting}
+          onClick={() => handleDecision('rejected')}
+          disabled={acting || !reason.trim()}
         >
           <XCircle size={14} /> 拒绝
         </button>
@@ -76,6 +117,44 @@ function StageCard({ stage, liveLines, runId, workdir, onStageAction }: {
         <StatusBadge status={stage.status} />
       </header>
       <div className="stageBody">
+        {stage.artifact_validations?.length ? (
+          <div className="stageMetaPanel">
+            <div className="stageMetaTitle">产物校验</div>
+            <div className="artifactValidationList">
+              {stage.artifact_validations.map((validation, index) => (
+                <div className="artifactValidationRow" key={`${stage.stage_id}-validation-${validation.artifact}-${index}`}>
+                  <div className="artifactValidationMain">
+                    <span className="artifactValidationArtifact">{validation.artifact}</span>
+                    {validation.validator ? <span className="stageTag">{validation.validator}</span> : null}
+                    {validation.message ? <span className="artifactValidationMessage">{validation.message}</span> : null}
+                  </div>
+                  <StatusBadge status={validation.status} />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {stage.human_decision ? (
+          <div className="stageMetaPanel">
+            <div className="stageMetaTitle">人工决策</div>
+            <div className="humanDecisionSummary">
+              <span className={`humanDecisionValue humanDecision-${stage.human_decision.decision}`}>
+                {humanDecisionLabel(stage.human_decision.decision)}
+              </span>
+              {stage.human_decision.reason ? <span>{stage.human_decision.reason}</span> : null}
+              {stage.loopback_to || stage.human_decision.target_stage ? (
+                <span className="loopbackText">回退到 {stage.loopback_to || stage.human_decision.target_stage}</span>
+              ) : null}
+            </div>
+            {stage.human_decision.required_changes.length ? (
+              <ul className="requiredChangeList">
+                {stage.human_decision.required_changes.map((item) => (
+                  <li key={`${stage.stage_id}-required-${item}`}>{item}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
         {stage.agents.map((agent) => (
           <div className="agentRow" key={`${stage.stage_id}-${agent.agent_name}`}>
             <div className="agentInfo">

@@ -19,6 +19,25 @@ export interface GateRun {
   required: boolean;
 }
 
+export type HumanDecisionValue = 'waiting' | 'approved' | 'rejected';
+
+export interface HumanDecision {
+  stage_id: string;
+  decision: HumanDecisionValue;
+  reason: string;
+  required_changes: string[];
+  target_stage?: string | null;
+  decided_by?: string;
+  decided_at?: string;
+}
+
+export interface ArtifactValidationRun {
+  artifact: string;
+  status: 'passed' | 'failed' | string;
+  message?: string;
+  validator?: string;
+}
+
 export interface StageRun {
   stage_id: string;
   stage_name: string;
@@ -29,6 +48,9 @@ export interface StageRun {
   duration_seconds?: number;
   agents: AgentRun[];
   quality_gates: GateRun[];
+  artifact_validations?: ArtifactValidationRun[];
+  human_decision?: HumanDecision | null;
+  loopback_to?: string | null;
 }
 
 export interface RunReport {
@@ -42,6 +64,7 @@ export interface RunReport {
   completed_at?: string;
   duration_seconds?: number;
   stages: StageRun[];
+  human_decisions?: HumanDecision[];
   artifacts: string[];
 }
 

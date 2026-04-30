@@ -1,6 +1,7 @@
 import type {
   AgentPromptResponse,
   AppConfig,
+  HumanDecision,
   Pipeline,
   PipelineTemplate,
   RunListItem,
@@ -155,6 +156,23 @@ export async function resumeRun(runId: string, workdir: string, yes: boolean, re
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Failed to resume' }));
     throw new Error(error.detail || `恢复运行失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function submitHumanDecision(
+  runId: string,
+  workdir: string,
+  decision: Pick<HumanDecision, 'stage_id' | 'decision' | 'reason' | 'required_changes' | 'target_stage'>,
+): Promise<{ run_id: string; status: string; output_dir: string }> {
+  const response = await apiFetch(`/runs/${runId}/human-decision${runQuery(workdir)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(decision),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: '提交人工决策失败' }));
+    throw new Error(error.detail || `提交人工决策失败: ${response.status}`);
   }
   return response.json();
 }

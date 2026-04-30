@@ -7,6 +7,7 @@ serialisation.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -109,9 +110,13 @@ class StageRunRecord(BaseModel):
     stage_id: str
     stage_name: str
     iteration: int = 1
+    stage_type: str = "agent"
     status: str = "pending"
     is_parallel: bool = False
     loopback_from: Optional[str] = None
+    loopback_to: Optional[str] = None
+    artifact_validations: list[dict[str, Any]] = Field(default_factory=list)
+    human_decision: Optional[dict[str, Any]] = None
     error_message: Optional[str] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -123,6 +128,10 @@ class StageRunRecord(BaseModel):
         data = dict(row)
         data["id"] = _coerce_uuid(data.get("id"))
         data["pipeline_run_id"] = _coerce_uuid(data.get("pipeline_run_id"))
+        if isinstance(data.get("artifact_validations"), str):
+            data["artifact_validations"] = json.loads(data["artifact_validations"])
+        if isinstance(data.get("human_decision"), str):
+            data["human_decision"] = json.loads(data["human_decision"])
         return cls(**{k: v for k, v in data.items() if k in cls.model_fields})
 
     def to_dict(self) -> Dict[str, Any]:
