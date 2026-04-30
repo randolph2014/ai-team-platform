@@ -323,7 +323,8 @@ export function Pipelines() {
 
   useEffect(() => { load(); }, []);
 
-  async function handleDelete(id: string) {
+  async function handleDelete(id: string, name: string) {
+    if (!window.confirm(`确定删除 Pipeline「${name}」？此操作不可撤销。`)) return;
     try {
       await deletePipeline(id);
       setPipelines((prev) => prev.filter((p) => p.id !== id));
@@ -414,7 +415,7 @@ export function Pipelines() {
                     <td>
                       <div className="tableActions">
                         <button className="iconButton" onClick={() => openEditor(pipeline)} aria-label="编辑"><Edit3 size={14} /></button>
-                        <button className="iconButton" onClick={() => handleDelete(pipeline.id)} aria-label="删除"><Trash2 size={14} /></button>
+                        <button className="iconButton" onClick={() => handleDelete(pipeline.id, pipeline.name)} aria-label="删除"><Trash2 size={14} /></button>
                       </div>
                     </td>
                   </tr>
