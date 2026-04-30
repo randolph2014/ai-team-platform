@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from engine.config import find_project_root
+from engine.models import HumanDecision
 from engine.orchestrator import find_run_reports, load_report
 
 from ..db import run_db_id, try_persistence
@@ -13,7 +14,7 @@ from ..runtime import expected_output_dir, project_for_run, start_run_background
 
 try:
     from fastapi import APIRouter, Depends, HTTPException, Query
-    from pydantic import BaseModel
+    from pydantic import BaseModel, Field
 except ImportError:  # pragma: no cover
     APIRouter = None
     BaseModel = object
@@ -37,6 +38,14 @@ class CreateRunRequest(BaseModel):
     config_path: Optional[str] = None
     only_stage: Optional[str] = None
     execution_mode: Optional[str] = None
+
+
+class HumanDecisionRequest(BaseModel):
+    stage_id: str
+    decision: str
+    reason: str = ""
+    required_changes: List[str] = Field(default_factory=list)
+    target_stage: Optional[str] = None
 
 
 async def _db_list_runs(workdir: str, page: int, size: int) -> Optional[List[Dict[str, Any]]]:
@@ -237,3 +246,62 @@ if router:
             }
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+    @router.post("/runs/{run_id}/human-decision")
+    async def submit_human_decision(
+        run_id: str,
+        body: HumanDecisionRequest,
+        workdir: str = Query(default="."),
+        config_path: Optional[str] = Query(default=None),
+        execution_mode: Optional[str] = Query(default=None),
+        user: Dict[str, Any] = _get_auth(),
+    ):
+        from ..runtime import resume_run_background
+
+        if body.decision not in {"approved", "rejected"}:
+            raise HTTPException(status_code=400, detail="decision must be approved or rejected")
+        if body.decision == "rejected" and not body.reason.strip():
+            raise HTTPException(status_code=400, detail="reject reason is required")
+
+        project_root = project_for_run(run_id, workdir)
+        output_dir = project_root / ".ai" / "team-output" / run_id
+        if not output_dir.exists():
+            raise HTTPException(status_code=404, detail="run not found")
+        if not (output_dir / "checkpoint.json").exists():
+            raise HTTPException(status_code=400, detail="no checkpoint found, cannot resume")
+
+        report_file = output_dir / "report.json"
+        if not report_file.exists():
+            raise HTTPException(status_code=400, detail="report not found, cannot submit human decision")
+
+        report = load_report(report_file)
+        if report.status != "waiting":
+            raise HTTPException(status_code=400, detail=f"run status is {report.status}, cannot submit human decision")
+        config_path = config_path or report.config_path
+
+        stage = next((item for item in reversed(report.stages) if item.stage_id == body.stage_id), None)
+        if stage is None:
+            raise HTTPException(status_code=400, detail=f"stage {body.stage_id} not found")
+        if stage.status != "waiting":
+            raise HTTPException(status_code=400, detail=f"stage status is {stage.status}, cannot submit human decision")
+        if stage.type != "human_review":
+            raise HTTPException(status_code=400, detail=f"stage type is {stage.type}, cannot submit human decision")
+
+        decision = HumanDecision(
+            stage_id=body.stage_id,
+            decision=body.decision,
+            reason=body.reason,
+            required_changes=body.required_changes,
+            target_stage=body.target_stage,
+        )
+        try:
+            resumed_output_dir = resume_run_background(
+                run_id=run_id,
+                workdir=workdir,
+                config_path=config_path,
+                execution_mode=execution_mode,
+                human_decision=decision,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"run_id": run_id, "status": "resuming", "output_dir": str(resumed_output_dir)}

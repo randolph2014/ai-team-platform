@@ -7,7 +7,7 @@ from typing import Optional
 
 from engine.config import find_project_root
 from engine.events import EventBus, InMemoryEventStore
-from engine.models import RunReport, utc_now
+from engine.models import HumanDecision, RunReport, utc_now
 from engine.orchestrator import Orchestrator
 
 logger = logging.getLogger(__name__)
@@ -78,6 +78,7 @@ def resume_run_background(
     reject: bool = False,
     config_path: Optional[str] = None,
     execution_mode: Optional[str] = None,
+    human_decision: Optional[HumanDecision] = None,
 ) -> Path:
     """恢复中断的 pipeline run"""
     from engine.task_queue import enqueue_run
@@ -103,7 +104,15 @@ def resume_run_background(
 
     def target() -> None:
         try:
-            orchestrator.run(requirement=requirement, run_id=run_id, yes=yes, reject=reject, resume=True, execution_mode=execution_mode)
+            orchestrator.run(
+                requirement=requirement,
+                run_id=run_id,
+                yes=yes,
+                reject=reject,
+                resume=True,
+                execution_mode=execution_mode,
+                human_decision=human_decision,
+            )
         except Exception:
             logger.exception("Resume run %s failed", run_id)
             _persist_background_failure(

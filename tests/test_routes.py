@@ -598,6 +598,309 @@ class TestRunsRoutes(BaseRoutesTest):
             execution_mode="serial",
         )
 
+    def test_human_decision_reject_requires_reason(self) -> None:
+        run_id = "decision-reason-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        (output_dir / "checkpoint.json").write_text(
+            json.dumps({"run_id": run_id, "completed_stages": []}),
+            encoding="utf-8",
+        )
+        (output_dir / "requirement.md").write_text("req", encoding="utf-8")
+        (output_dir / "report.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "waiting",
+                    "requirement": "req",
+                    "project_root": str(self.project_root),
+                    "output_dir": str(output_dir),
+                    "config_source": "project",
+                    "stages": [
+                        {
+                            "stage_id": "requirement_confirm",
+                            "stage_name": "Requirement Confirm",
+                            "status": "waiting",
+                            "type": "human_review",
+                            "is_parallel": False,
+                            "agents": [],
+                            "quality_gates": [],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        response = self.client.post(
+            f"/api/runs/{run_id}/human-decision",
+            params={"workdir": str(self.project_root)},
+            json={"stage_id": "requirement_confirm", "decision": "rejected", "reason": ""},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("reason", response.json()["detail"])
+
+    def test_human_decision_endpoint_passes_structured_decision_to_runtime(self) -> None:
+        run_id = "decision-submit-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        (output_dir / "checkpoint.json").write_text(
+            json.dumps({"run_id": run_id, "completed_stages": []}),
+            encoding="utf-8",
+        )
+        (output_dir / "requirement.md").write_text("req", encoding="utf-8")
+        (output_dir / "report.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "waiting",
+                    "requirement": "req",
+                    "project_root": str(self.project_root),
+                    "output_dir": str(output_dir),
+                    "config_source": "project",
+                    "stages": [
+                        {
+                            "stage_id": "task_plan_confirm",
+                            "stage_name": "Task Plan Confirm",
+                            "status": "waiting",
+                            "type": "human_review",
+                            "is_parallel": False,
+                            "agents": [],
+                            "quality_gates": [],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("api.runtime.resume_run_background", return_value=output_dir) as resume_bg:
+            response = self.client.post(
+                f"/api/runs/{run_id}/human-decision",
+                params={"workdir": str(self.project_root)},
+                json={
+                    "stage_id": "task_plan_confirm",
+                    "decision": "rejected",
+                    "reason": "任务缺少回滚方案",
+                    "required_changes": ["补充回滚方案"],
+                    "target_stage": "planning",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        decision = resume_bg.call_args.kwargs["human_decision"]
+        self.assertEqual(decision.stage_id, "task_plan_confirm")
+        self.assertEqual(decision.reason, "任务缺少回滚方案")
+        self.assertEqual(decision.required_changes, ["补充回滚方案"])
+
+    def test_human_decision_requires_report(self) -> None:
+        run_id = "decision-missing-report-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        (output_dir / "checkpoint.json").write_text(
+            json.dumps({"run_id": run_id, "completed_stages": []}),
+            encoding="utf-8",
+        )
+        (output_dir / "requirement.md").write_text("req", encoding="utf-8")
+
+        with patch("api.runtime.resume_run_background", return_value=output_dir) as resume_bg:
+            response = self.client.post(
+                f"/api/runs/{run_id}/human-decision",
+                params={"workdir": str(self.project_root)},
+                json={"stage_id": "task_plan_confirm", "decision": "approved"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("report", response.json()["detail"])
+        resume_bg.assert_not_called()
+
+    def test_human_decision_rejects_non_waiting_stage(self) -> None:
+        run_id = "decision-completed-stage-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        (output_dir / "checkpoint.json").write_text(
+            json.dumps({"run_id": run_id, "completed_stages": ["task_plan_confirm"]}),
+            encoding="utf-8",
+        )
+        (output_dir / "requirement.md").write_text("req", encoding="utf-8")
+        (output_dir / "report.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "waiting",
+                    "requirement": "req",
+                    "project_root": str(self.project_root),
+                    "output_dir": str(output_dir),
+                    "config_source": "project",
+                    "stages": [
+                        {
+                            "stage_id": "task_plan_confirm",
+                            "stage_name": "Task Plan Confirm",
+                            "status": "completed",
+                            "type": "human_review",
+                            "is_parallel": False,
+                            "agents": [],
+                            "quality_gates": [],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("api.runtime.resume_run_background", return_value=output_dir) as resume_bg:
+            response = self.client.post(
+                f"/api/runs/{run_id}/human-decision",
+                params={"workdir": str(self.project_root)},
+                json={"stage_id": "task_plan_confirm", "decision": "approved"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("stage status is completed", response.json()["detail"])
+        resume_bg.assert_not_called()
+
+    def test_human_decision_uses_latest_matching_waiting_stage(self) -> None:
+        run_id = "decision-latest-stage-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        (output_dir / "checkpoint.json").write_text(
+            json.dumps({"run_id": run_id, "completed_stages": ["requirement_confirm"]}),
+            encoding="utf-8",
+        )
+        (output_dir / "requirement.md").write_text("req", encoding="utf-8")
+        (output_dir / "report.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "waiting",
+                    "requirement": "req",
+                    "project_root": str(self.project_root),
+                    "output_dir": str(output_dir),
+                    "config_source": "project",
+                    "stages": [
+                        {
+                            "stage_id": "requirement_confirm",
+                            "stage_name": "Requirement Confirm",
+                            "status": "completed",
+                            "type": "human_review",
+                            "is_parallel": False,
+                            "agents": [],
+                            "quality_gates": [],
+                        },
+                        {
+                            "stage_id": "requirement_confirm",
+                            "stage_name": "Requirement Confirm",
+                            "status": "waiting",
+                            "type": "human_review",
+                            "is_parallel": False,
+                            "agents": [],
+                            "quality_gates": [],
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("api.runtime.resume_run_background", return_value=output_dir) as resume_bg:
+            response = self.client.post(
+                f"/api/runs/{run_id}/human-decision",
+                params={"workdir": str(self.project_root)},
+                json={"stage_id": "requirement_confirm", "decision": "approved"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        resume_bg.assert_called_once()
+
+    def test_human_decision_rejects_unknown_stage(self) -> None:
+        run_id = "decision-unknown-stage-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        (output_dir / "checkpoint.json").write_text(
+            json.dumps({"run_id": run_id, "completed_stages": []}),
+            encoding="utf-8",
+        )
+        (output_dir / "requirement.md").write_text("req", encoding="utf-8")
+        (output_dir / "report.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "waiting",
+                    "requirement": "req",
+                    "project_root": str(self.project_root),
+                    "output_dir": str(output_dir),
+                    "config_source": "project",
+                    "stages": [
+                        {
+                            "stage_id": "requirement_confirm",
+                            "stage_name": "Requirement Confirm",
+                            "status": "waiting",
+                            "type": "human_review",
+                            "is_parallel": False,
+                            "agents": [],
+                            "quality_gates": [],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("api.runtime.resume_run_background", return_value=output_dir) as resume_bg:
+            response = self.client.post(
+                f"/api/runs/{run_id}/human-decision",
+                params={"workdir": str(self.project_root)},
+                json={"stage_id": "task_plan_confirm", "decision": "approved"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("stage task_plan_confirm not found", response.json()["detail"])
+        resume_bg.assert_not_called()
+
+    def test_human_decision_runtime_value_error_returns_400(self) -> None:
+        run_id = "decision-missing-requirement-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        (output_dir / "checkpoint.json").write_text(
+            json.dumps({"run_id": run_id, "completed_stages": []}),
+            encoding="utf-8",
+        )
+        (output_dir / "report.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "waiting",
+                    "requirement": "req",
+                    "project_root": str(self.project_root),
+                    "output_dir": str(output_dir),
+                    "config_source": "project",
+                    "stages": [
+                        {
+                            "stage_id": "task_plan_confirm",
+                            "stage_name": "Task Plan Confirm",
+                            "status": "waiting",
+                            "type": "human_review",
+                            "is_parallel": False,
+                            "agents": [],
+                            "quality_gates": [],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        client = TestClient(self.app, raise_server_exceptions=False)
+
+        response = client.post(
+            f"/api/runs/{run_id}/human-decision",
+            params={"workdir": str(self.project_root)},
+            json={"stage_id": "task_plan_confirm", "decision": "approved"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("requirement.md", response.json()["detail"])
+
 
 class TestArtifactsRoutes(BaseRoutesTest):
     """测试 artifacts 端点"""
