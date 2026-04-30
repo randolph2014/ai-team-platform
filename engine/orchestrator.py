@@ -8,9 +8,10 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from .agent_runner import AgentRunner
+from .artifact_contracts import has_artifact_validation_failure, validate_required_artifacts
 from .code_applier import CodeApplier
 from .config import (
     ConfigError,
@@ -32,6 +33,7 @@ from .human_gate import (
 from .models import AgentDefinition, AgentRun, HumanDecision, RequirementUnit, RequirementUnitProgress, RunReport, StageRun, model_to_dict, utc_now
 from .requirement_splitter import estimate_prompt_size, should_split, split_requirement
 from .runtimes import _cli_config_model, backfill_runtime_models, resolve_auto_cli, runtime_config
+from .stage_context import build_stage_context
 from .truncate_utils import truncate_with_fallback
 from .quality_gates import (
     has_blocking_failure,
@@ -993,6 +995,12 @@ class Orchestrator:
             else:
                 stage_run.status = "completed"
                 self._extract_json_artifacts(output_dir, stage_run)
+                validations = validate_required_artifacts(stage, output_dir)
+                stage_run.artifact_validations.extend(validations)
+                if has_artifact_validation_failure(validations):
+                    failed = "; ".join(f"{item.artifact}: {item.message}" for item in validations if item.status == "failed")
+                    stage_run.status = "failed"
+                    stage_run.error_message = failed
         except Exception as exc:
             stage_run.status = "failed"
             stage_run.error_message = str(exc)
@@ -1089,69 +1097,25 @@ class Orchestrator:
     def _render_prompt(self, stage: Dict[str, Any], agent: AgentDefinition, output_dir: Path, cwd: Path, extra_feedback: str = "") -> str:
         warnings = self.config_warnings
         base_prompt = read_prompt(self.project_root, self.loaded_config.path, agent, warnings)
-        inputs = self._collect_inputs(stage.get("input"), output_dir, cwd)
+        max_chars = self.config.get("runner", {}).get("max_input_chars_per_file")
+        max_chars = int(max_chars) if max_chars else None
+        context = build_stage_context(
+            stage=stage,
+            output_dir=output_dir,
+            cwd=cwd,
+            input_items=stage.get("input") or "requirement",
+            extra_feedback=extra_feedback,
+            schema_hint={"required": ["status", "summary", "evidence"]},
+            max_chars=max_chars,
+            base_branch=self.config.get("worktree", {}).get("base_branch"),
+            max_diff_chars=max_chars,
+        )
         parts = [
             base_prompt.rstrip(),
             "",
-            "## 运行上下文",
-            f"- Project root: `{self.project_root}`",
-            f"- Working directory: `{cwd}`",
-            f"- Stage: `{stage.get('id')}` / `{stage.get('name', stage.get('id'))}`",
-            "",
+            context.rstrip(),
         ]
-        if extra_feedback:
-            parts.extend([extra_feedback.rstrip(), ""])
-        parts.extend(inputs)
         return "\n".join(parts).rstrip() + "\n"
-
-    def _collect_inputs(self, input_config: Any, output_dir: Path, cwd: Path) -> List[str]:
-        items = _as_list(input_config or "requirement")
-        max_chars = self.config.get("runner", {}).get("max_input_chars_per_file")
-        max_chars = int(max_chars) if max_chars else None
-        parts: List[str] = []
-        for item in items:
-            if item == "requirement":
-                parts.extend(["## Requirement", (output_dir / "requirement.md").read_text(encoding="utf-8"), ""])
-            elif item == "git-diff":
-                diff = self._git_diff(cwd)
-                parts.extend(["## git-diff", "```diff", diff or "(no diff)", "```", ""])
-            elif isinstance(item, str) and "*" in item:
-                for path in sorted(output_dir.glob(item)):
-                    parts.extend(self._artifact_section(path, max_chars))
-            elif isinstance(item, str):
-                path = output_dir / item
-                if path.exists():
-                    parts.extend(self._artifact_section(path, max_chars))
-        return parts
-
-    def _artifact_section(self, path: Path, max_chars: Optional[int]) -> List[str]:
-        content = path.read_text(encoding="utf-8", errors="replace")
-        if max_chars and len(content) > max_chars:
-            content = content[:max_chars] + "\n\n[truncated]"
-        suffix = path.suffix.lstrip(".")
-        if suffix in {"json", "yaml", "yml", "toml", "xml", "py", "ts", "js", "tsx", "jsx", "swift", "kt", "java", "go", "rs", "rb", "sh", "bash", "css", "html", "sql", "txt"}:
-            lang = suffix
-        elif suffix == "md":
-            lang = "markdown"
-        else:
-            lang = ""
-        return [f"## Artifact: `{path.name}`", f"```{lang}", content, "```", ""]
-
-    def _git_diff(self, cwd: Path) -> str:
-        import subprocess
-
-        # 获取已提交的变更（相对于 base branch）
-        base_branch = self.config.get("worktree", {}).get("base_branch", "main")
-        committed = subprocess.run(["git", "diff", f"{base_branch}...HEAD"], cwd=cwd, capture_output=True, text=True, check=False)
-        # 获取 staged changes
-        staged = subprocess.run(["git", "diff", "--cached"], cwd=cwd, capture_output=True, text=True, check=False)
-        # 获取 unstaged changes
-        unstaged = subprocess.run(["git", "diff"], cwd=cwd, capture_output=True, text=True, check=False)
-        # 获取 stat
-        stat = subprocess.run(["git", "diff", "--stat"], cwd=cwd, capture_output=True, text=True, check=False)
-
-        parts = [stat.stdout, committed.stdout, staged.stdout, unstaged.stdout]
-        return "\n".join(part for part in parts if part.strip())
 
     def _stage_output_text(self, stage_run: StageRun) -> str:
         chunks = []

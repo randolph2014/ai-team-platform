@@ -78,6 +78,12 @@ class QualityGateRun(BaseModel):
     duration_seconds: Optional[float] = None
 
 
+class ArtifactValidationRun(BaseModel):
+    artifact: str
+    status: Literal["passed", "failed"] = "passed"
+    message: str = ""
+
+
 HumanDecisionValue = Literal["waiting", "approved", "rejected"]
 
 
@@ -180,6 +186,7 @@ class StageRun(BaseModel):
     output_dir: Optional[str] = None
     agents: List[AgentRun] = Field(default_factory=list)
     quality_gates: List[QualityGateRun] = Field(default_factory=list)
+    artifact_validations: List[ArtifactValidationRun] = Field(default_factory=list)
     human_decision: Optional[HumanDecision] = None
     loopback_to: Optional[str] = None
     error_message: Optional[str] = None

@@ -1428,3 +1428,279 @@ worktree:
             self.assertEqual(completed.status, "completed")
             self.assertIn("planning", [stage.stage_id for stage in completed.stages])
             self.assertEqual([item.decision for item in completed.human_decisions], ["rejected", "approved"])
+
+
+class TestArtifactContractsAndStageContext(unittest.TestCase):
+    def _git(self, root: Path, *args: str) -> None:
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True)
+
+    def _create_develop_feature_repo(self, root: Path, feature_line: str = "configured base change") -> None:
+        self._git(root, "init")
+        self._git(root, "config", "user.name", "Test User")
+        self._git(root, "config", "user.email", "test@example.com")
+        (root / "app.txt").write_text("baseline\n", encoding="utf-8")
+        self._git(root, "add", "app.txt")
+        self._git(root, "commit", "-m", "baseline")
+        self._git(root, "branch", "-M", "develop")
+        self._git(root, "checkout", "-b", "feature")
+        (root / "app.txt").write_text(f"baseline\n{feature_line}\n", encoding="utf-8")
+        self._git(root, "add", "app.txt")
+        self._git(root, "commit", "-m", "feature change")
+
+    def _create_large_diff_repo(self, root: Path) -> None:
+        self._git(root, "init")
+        self._git(root, "config", "user.name", "Test User")
+        self._git(root, "config", "user.email", "test@example.com")
+        (root / "base.txt").write_text("baseline\n", encoding="utf-8")
+        self._git(root, "add", "base.txt")
+        self._git(root, "commit", "-m", "baseline")
+        self._git(root, "branch", "-M", "main")
+        self._git(root, "checkout", "-b", "feature")
+        (root / "committed.txt").write_text("committed diff\n" + ("C" * 800) + "\n", encoding="utf-8")
+        self._git(root, "add", "committed.txt")
+        self._git(root, "commit", "-m", "committed change")
+        (root / "staged.txt").write_text("staged diff\n" + ("S" * 800) + "\n", encoding="utf-8")
+        self._git(root, "add", "staged.txt")
+        (root / "unstaged.txt").write_text("unstaged diff\n" + ("U" * 800) + "\n", encoding="utf-8")
+
+    def test_required_artifact_missing_blocks_next_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "team.yaml").write_text(
+                """
+runtimes:
+  Mock:
+    cli: mock
+    response: "plain text without required json"
+agents:
+  - name: req
+    runtime_id: Mock
+    prompt: agents/req.md
+pipeline:
+  - id: requirement_synthesis
+    agents: [req]
+    input: requirement
+    output:
+      req: requirement-final.md
+    required_artifacts:
+      - requirement-final.json
+  - id: planning
+    agents: [req]
+    input: [requirement-final.json]
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / "agents").mkdir()
+            (root / "agents" / "req.md").write_text("You write output.", encoding="utf-8")
+
+            report = Orchestrator(root, config_path=str(root / "team.yaml")).run("req")
+
+            self.assertEqual(report.status, "failed")
+            self.assertIn("required artifact missing", report.error_message)
+            self.assertTrue(report.stages[0].artifact_validations)
+            self.assertNotIn("planning", [stage.stage_id for stage in report.stages])
+
+    def test_stage_context_includes_contract_and_confirmed_artifacts(self) -> None:
+        from engine.stage_context import build_stage_context
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            (output_dir / "requirement-final.json").write_text('{"status":"completed","summary":"req"}', encoding="utf-8")
+            (output_dir / "task-plan.json").write_text('{"status":"completed","summary":"plan"}', encoding="utf-8")
+
+            context = build_stage_context(
+                stage={"id": "develop", "name": "开发实施", "required_artifacts": ["implementation-report.json"]},
+                output_dir=output_dir,
+                cwd=root,
+                input_items=["requirement-final.json", "task-plan.json"],
+                extra_feedback="人工拒绝反馈",
+                schema_hint={"required": ["status", "summary"]},
+            )
+
+            self.assertIn("## Stage Contract", context)
+            self.assertIn("implementation-report.json", context)
+            self.assertIn("人工拒绝反馈", context)
+            self.assertIn("Artifact: `requirement-final.json`", context)
+            self.assertIn('"summary":"req"', context)
+            self.assertIn('"summary":"plan"', context)
+
+    def test_stage_context_git_diff_includes_staged_changes(self) -> None:
+        from engine.stage_context import build_stage_context
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            self._git(root, "init")
+            self._git(root, "config", "user.name", "Test User")
+            self._git(root, "config", "user.email", "test@example.com")
+            (root / "app.txt").write_text("baseline\n", encoding="utf-8")
+            self._git(root, "add", "app.txt")
+            self._git(root, "commit", "-m", "baseline")
+            (root / "app.txt").write_text("baseline\nstaged change\n", encoding="utf-8")
+            self._git(root, "add", "app.txt")
+
+            context = build_stage_context(
+                stage={"id": "review", "name": "Review"},
+                output_dir=output_dir,
+                cwd=root,
+                input_items=["git-diff"],
+            )
+
+            self.assertIn("+staged change", context)
+            self.assertNotIn("(no diff)", context)
+
+    def test_stage_context_git_diff_includes_committed_branch_changes(self) -> None:
+        from engine.stage_context import build_stage_context
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            self._git(root, "init")
+            self._git(root, "config", "user.name", "Test User")
+            self._git(root, "config", "user.email", "test@example.com")
+            (root / "app.txt").write_text("baseline\n", encoding="utf-8")
+            self._git(root, "add", "app.txt")
+            self._git(root, "commit", "-m", "baseline")
+            self._git(root, "branch", "-M", "main")
+            self._git(root, "checkout", "-b", "feature")
+            (root / "app.txt").write_text("baseline\ncommitted change\n", encoding="utf-8")
+            self._git(root, "add", "app.txt")
+            self._git(root, "commit", "-m", "feature change")
+
+            context = build_stage_context(
+                stage={"id": "review", "name": "Review"},
+                output_dir=output_dir,
+                cwd=root,
+                input_items=["git-diff"],
+            )
+
+            self.assertIn("+committed change", context)
+            self.assertNotIn("(no diff)", context)
+
+    def test_stage_context_git_diff_uses_configured_base_branch(self) -> None:
+        from engine.stage_context import build_stage_context
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            self._create_develop_feature_repo(root)
+
+            context = build_stage_context(
+                stage={"id": "review", "name": "Review"},
+                output_dir=output_dir,
+                cwd=root,
+                input_items=["git-diff"],
+                base_branch="develop",
+            )
+
+            self.assertIn("+configured base change", context)
+            self.assertNotIn("(no diff)", context)
+
+    def test_render_prompt_passes_configured_base_branch_to_stage_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._create_develop_feature_repo(root, feature_line="prompt configured base change")
+            (root / "team.yaml").write_text(
+                """
+runtimes:
+  Mock:
+    cli: mock
+    response: "ok"
+agents:
+  - name: reviewer
+    runtime_id: Mock
+    prompt: agents/reviewer.md
+pipeline:
+  - id: review
+    agents: [reviewer]
+    input: [git-diff]
+worktree:
+  enabled: false
+  base_branch: develop
+""",
+                encoding="utf-8",
+            )
+            (root / "agents").mkdir()
+            (root / "agents" / "reviewer.md").write_text("Review changes.", encoding="utf-8")
+            output_dir = root / "out"
+            output_dir.mkdir()
+            orchestrator = Orchestrator(root, config_path=str(root / "team.yaml"))
+
+            prompt = orchestrator._render_prompt(
+                stage={"id": "review", "name": "Review", "input": ["git-diff"]},
+                agent=orchestrator.agents["reviewer"],
+                output_dir=output_dir,
+                cwd=root,
+            )
+
+            self.assertIn("+prompt configured base change", prompt)
+            self.assertNotIn("(no diff)", prompt)
+
+    def test_stage_context_truncates_large_git_diff(self) -> None:
+        from engine.stage_context import build_stage_context
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            self._create_large_diff_repo(root)
+
+            context = build_stage_context(
+                stage={"id": "review", "name": "Review"},
+                output_dir=output_dir,
+                cwd=root,
+                input_items=["git-diff"],
+                max_diff_chars=200,
+            )
+
+            self.assertIn("[git-diff truncated, original chars:", context)
+            self.assertIn("limit: 200", context)
+            self.assertLess(len(context), 900)
+
+    def test_render_prompt_passes_max_input_chars_to_git_diff_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._create_large_diff_repo(root)
+            (root / "team.yaml").write_text(
+                """
+runtimes:
+  Mock:
+    cli: mock
+    response: "ok"
+agents:
+  - name: reviewer
+    runtime_id: Mock
+    prompt: agents/reviewer.md
+pipeline:
+  - id: review
+    agents: [reviewer]
+    input: [git-diff]
+runner:
+  max_input_chars_per_file: 200
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / "agents").mkdir()
+            (root / "agents" / "reviewer.md").write_text("Review changes.", encoding="utf-8")
+            output_dir = root / "out"
+            output_dir.mkdir()
+            orchestrator = Orchestrator(root, config_path=str(root / "team.yaml"))
+
+            prompt = orchestrator._render_prompt(
+                stage={"id": "review", "name": "Review", "input": ["git-diff"]},
+                agent=orchestrator.agents["reviewer"],
+                output_dir=output_dir,
+                cwd=root,
+            )
+
+            self.assertIn("[git-diff truncated, original chars:", prompt)
+            self.assertIn("limit: 200", prompt)
