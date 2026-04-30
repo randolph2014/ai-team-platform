@@ -1,9 +1,22 @@
-import { Download, FolderGit2, Wifi, WifiOff } from 'lucide-react';
+import { Download, Eye, FolderGit2, Wifi, WifiOff } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { ArtifactViewer } from '../components/ArtifactViewer';
 import { PipelineTimeline } from '../components/PipelineTimeline';
 import { StatusBadge } from '../components/StatusBadge';
 import { fetchRun, rememberedWorkdir, rememberRunWorkdir, runQuery, runWebSocketUrl } from '../lib/api';
 import type { RunEvent, RunReport } from '../lib/types';
+
+/**
+ * 获取产物文件图标颜色
+ */
+function artifactColor(name: string): string {
+  if (/\.(md|markdown)$/i.test(name)) return 'var(--blue)';
+  if (/\.json$/i.test(name)) return 'var(--yellow)';
+  if (/\.(py|js|ts|tsx|jsx)$/i.test(name)) return 'var(--green)';
+  if (/\.(log|out|err)$/i.test(name)) return 'var(--text-muted)';
+  if (/\.(yaml|yml)$/i.test(name)) return 'var(--purple)';
+  return 'var(--accent)';
+}
 
 export function RunDetail({ runId }: { runId: string }) {
   const [run, setRun] = useState<RunReport | null>(null);
@@ -12,6 +25,7 @@ export function RunDetail({ runId }: { runId: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
+  const [viewingArtifact, setViewingArtifact] = useState<string | null>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -138,7 +152,6 @@ export function RunDetail({ runId }: { runId: string }) {
             </span>
           </div>
         </div>
-        <button className="button"><Download size={15} /> 产物</button>
       </section>
       <section className="panel requirementPanel">
         <h2>需求描述</h2>
@@ -156,14 +169,34 @@ export function RunDetail({ runId }: { runId: string }) {
           }}
         />
         <aside className="artifactPanel">
-          <h2>产物文件</h2>
-          {run.artifacts.map((artifact) => (
-            <a key={artifact} href={`/api/runs/${run.run_id}/artifacts/${artifact}${runQuery(workdir || run.project_root)}`} className="artifactItem">
-              {artifact}
-            </a>
-          ))}
+          <h2>产物文件 <span className="artifactCount">{run.artifacts.length}</span></h2>
+          {run.artifacts.length === 0 ? (
+            <div className="artifactEmpty">暂无产物文件</div>
+          ) : (
+            <div className="artifactList">
+              {run.artifacts.map((artifact) => (
+                <button
+                  key={artifact}
+                  className="artifactItem"
+                  onClick={() => setViewingArtifact(artifact)}
+                  title={`点击查看 ${artifact}`}
+                >
+                  <span className="artifactDot" style={{ background: artifactColor(artifact) }} />
+                  <span className="artifactName">{artifact}</span>
+                  <Eye size={12} className="artifactViewIcon" />
+                </button>
+              ))}
+            </div>
+          )}
         </aside>
       </div>
+      {viewingArtifact && (
+        <ArtifactViewer
+          runId={run.run_id}
+          artifactName={viewingArtifact}
+          onClose={() => setViewingArtifact(null)}
+        />
+      )}
     </div>
   );
 }
