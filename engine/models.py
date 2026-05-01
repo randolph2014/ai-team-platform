@@ -206,6 +206,8 @@ class RunReport(BaseModel):
     duration_seconds: Optional[float] = None
     worktree_path: Optional[str] = None
     merge_result: Optional[Dict[str, Any]] = None
+    changed_files: List[str] = Field(default_factory=list)
+    diff_stat: str = ""
     stages: List[StageRun] = Field(default_factory=list)
     units: List[RequirementUnitProgress] = Field(default_factory=list)
     human_decisions: List[HumanDecision] = Field(default_factory=list)

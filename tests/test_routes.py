@@ -201,27 +201,70 @@ class TestPipelinesRoutes(BaseRoutesTest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIsInstance(data, list)
-        self.assertGreater(len(data), 0)
+        self.assertEqual([item["id"] for item in data], ["project-delivery", "bugfix", "requirement"])
         self.assertIn("id", data[0])
         self.assertIn("name", data[0])
 
     def test_builtin_templates_use_current_collaboration_workflow(self) -> None:
-        """内置模板不应继续暴露 plan/architect/accept 等旧流程节点。"""
+        """内置模板必须是三条有真实差异的可执行流水线。"""
         response = self.client.get("/api/pipelines/templates")
         self.assertEqual(response.status_code, 200)
 
         legacy_stages = {"plan", "architect", "context", "accept", "risk_analysis", "doc", "code_apply"}
-        required_gates = {"requirement_confirm", "task_plan_confirm", "acceptance_confirm"}
-        for template in response.json():
+        templates = {template["id"]: template for template in response.json()}
+        self.assertEqual(set(templates), {"project-delivery", "bugfix", "requirement"})
+
+        expected_stage_ids = {
+            "project-delivery": [
+                "context_scan",
+                "requirement_analysis",
+                "requirement_synthesis",
+                "requirement_confirm",
+                "planning",
+                "task_plan_confirm",
+                "develop",
+                "qa",
+                "review",
+                "acceptance_confirm",
+                "retrospect",
+            ],
+            "bugfix": [
+                "context_scan",
+                "requirement_synthesis",
+                "requirement_confirm",
+                "planning",
+                "develop",
+                "qa",
+                "review",
+                "acceptance_confirm",
+            ],
+            "requirement": [
+                "context_scan",
+                "requirement_analysis",
+                "requirement_synthesis",
+                "requirement_confirm",
+            ],
+        }
+        for template_id, template in templates.items():
             stages = template.get("stages", [])
+            self.assertEqual(stages, expected_stage_ids[template_id])
             self.assertFalse(legacy_stages.intersection(stages), f"{template['id']} still exposes legacy stages")
-            self.assertTrue(required_gates.issubset(stages), f"{template['id']} misses hard human gates")
             self.assertIn("requirement_synthesis", stages, f"{template['id']} must produce confirmed requirement artifacts")
             stage_contracts = {stage["id"]: stage for stage in template.get("yaml_config", {}).get("stages", [])}
             self.assertEqual(stage_contracts["context_scan"]["type"], "context_scan")
             self.assertEqual(stage_contracts["requirement_confirm"]["type"], "human_review")
             self.assertFalse(stage_contracts["requirement_confirm"]["allow_auto_approve"])
-            self.assertEqual(stage_contracts["acceptance_confirm"]["reject_to"], "develop")
+            if template_id == "project-delivery":
+                self.assertEqual(stage_contracts["task_plan_confirm"]["type"], "human_review")
+                self.assertEqual(stage_contracts["acceptance_confirm"]["reject_to"], "develop")
+            if template_id == "bugfix":
+                self.assertNotIn("requirement_analysis", stages)
+                self.assertNotIn("task_plan_confirm", stages)
+                self.assertEqual(stage_contracts["planning"]["name"], "修复方案与回归计划")
+            if template_id == "requirement":
+                self.assertNotIn("develop", stages)
+                self.assertNotIn("qa", stages)
+                self.assertNotIn("review", stages)
 
     def test_create_pipeline_hydrates_known_stage_contracts(self) -> None:
         """保存模板时即使 UI 只传 id，也必须补齐上下文扫描和硬人工门禁契约。"""
@@ -598,6 +641,66 @@ class TestRunsRoutes(BaseRoutesTest):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("hard human gates", response.json()["detail"])
+
+    def test_create_run_with_builtin_pipeline_materializes_executable_config(self) -> None:
+        """POST /api/runs 选择内置模板时必须物化可执行配置并传给 runner。"""
+        output_dir = self.project_root / ".ai" / "team-output" / "api-bugfix-run"
+
+        with patch("api.routes.runs.start_run_background", return_value=output_dir) as start_bg:
+            response = self.client.post(
+                "/api/runs",
+                json={
+                    "requirement": "修复登录失败",
+                    "workdir": str(self.project_root),
+                    "run_id": "api-bugfix-run",
+                    "pipeline_id": "template:bugfix",
+                    "yes": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        config_path = Path(start_bg.call_args.kwargs["config_path"])
+        self.assertEqual(config_path.resolve(strict=False), (self.project_root / ".ai" / "pipeline-configs" / "api-bugfix-run.yaml").resolve(strict=False))
+        self.assertTrue(config_path.exists())
+        self.assertFalse(output_dir.exists())
+
+        import yaml
+
+        materialized = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        self.assertEqual(materialized["metadata"]["pipeline_id"], "bugfix")
+        self.assertEqual(materialized["metadata"]["pipeline_source"], "builtin")
+        stage_ids = [stage["id"] for stage in materialized["pipeline"]["stages"]]
+        self.assertEqual(
+            stage_ids,
+            [
+                "context_scan",
+                "requirement_synthesis",
+                "requirement_confirm",
+                "planning",
+                "develop",
+                "qa",
+                "review",
+                "acceptance_confirm",
+            ],
+        )
+        self.assertNotIn("requirement_analysis", stage_ids)
+        self.assertEqual(materialized["pipeline"]["execution_mode"], "parallel")
+
+    def test_create_run_rejects_ambiguous_pipeline_and_config_path(self) -> None:
+        """POST /api/runs 不能同时传 pipeline_id 和 config_path，避免执行来源不清。"""
+        response = self.client.post(
+            "/api/runs",
+            json={
+                "requirement": "修复登录失败",
+                "workdir": str(self.project_root),
+                "run_id": "api-ambiguous-pipeline",
+                "pipeline_id": "template:bugfix",
+                "config_path": str(self.project_root / ".ai" / "team.yaml"),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("pipeline_id", response.json()["detail"])
 
     def test_list_runs_returns_list(self) -> None:
         """GET /api/runs 返回运行列表"""

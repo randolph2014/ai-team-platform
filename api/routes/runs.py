@@ -36,6 +36,8 @@ class CreateRunRequest(BaseModel):
     run_id: Optional[str] = None
     yes: bool = False
     config_path: Optional[str] = None
+    pipeline_id: Optional[str] = None
+    pipeline: Optional[str] = None
     only_stage: Optional[str] = None
     execution_mode: Optional[str] = None
 
@@ -101,7 +103,13 @@ async def _db_get_run(run_id: str) -> Optional[Dict[str, Any]]:
         await release_connection(conn)
 
 
-async def _db_create_pending(run_id: str, workdir: str, requirement: str) -> None:
+async def _db_create_pending(
+    run_id: str,
+    workdir: str,
+    requirement: str,
+    pipeline_ref: Optional[str] = None,
+    config_path: Optional[str] = None,
+) -> None:
     """在 DB 中创建 pending 状态的 run 记录。失败静默跳过。"""
     db = try_persistence()
     if db is None:
@@ -124,6 +132,10 @@ async def _db_create_pending(run_id: str, workdir: str, requirement: str) -> Non
             requirement=requirement,
             trigger_source="api",
             app_run_id=run_id,
+            context={
+                "pipeline_ref": pipeline_ref,
+                "config_path": config_path,
+            },
         )
     except Exception:
         logger.debug("DB create_pending failed for run %s", run_id, exc_info=True)
@@ -137,18 +149,33 @@ if router:
     async def create_run(body: CreateRunRequest, user: Dict[str, Any] = _get_auth()):
         if body.only_stage:
             raise HTTPException(status_code=400, detail="only_stage is disabled for delivery runs because it bypasses hard human gates")
+        pipeline_ref = body.pipeline_id or body.pipeline
+        if pipeline_ref and body.config_path:
+            raise HTTPException(status_code=400, detail="pipeline_id and config_path cannot be used together")
         run_id = body.run_id or f"api-{uuid.uuid4().hex[:12]}"
         if expected_output_dir(run_id, body.workdir).exists():
             raise HTTPException(status_code=409, detail="run id already exists")
 
-        await _db_create_pending(run_id, body.workdir, body.requirement)
+        config_path = body.config_path
+        if pipeline_ref:
+            try:
+                from .pipelines import materialize_pipeline_config
+
+                project_root = find_project_root(body.workdir)
+                config_path = str(materialize_pipeline_config(Path(project_root), pipeline_ref, run_id))
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        await _db_create_pending(run_id, body.workdir, body.requirement, pipeline_ref=pipeline_ref, config_path=config_path)
 
         output_dir = start_run_background(
             body.requirement,
             body.workdir,
             run_id=run_id,
             yes=body.yes,
-            config_path=body.config_path,
+            config_path=config_path,
             only_stage=body.only_stage,
             execution_mode=body.execution_mode,
         )
@@ -198,6 +225,29 @@ if router:
         for path in find_run_reports(Path(project_root)):
             if path.parent.name == run_id:
                 return load_report(path).model_dump(mode="json")
+        raise HTTPException(status_code=404, detail="run not found")
+
+    @router.get("/runs/{run_id}/diff")
+    async def get_run_diff(run_id: str, workdir: Optional[str] = Query(default=None), user: Dict[str, Any] = _get_auth()):
+        """获取当前运行的完整 git diff。"""
+        from engine.worktree import WorktreeManager
+
+        project_root = project_for_run(run_id, workdir)
+
+        wm = WorktreeManager(Path(project_root), {})
+        wt_path = wm.get_worktree_path(run_id)
+        if wt_path and wt_path.exists():
+            diff = wm.get_diff(wt_path)
+            return {"run_id": run_id, "diff": diff, "source": "worktree"}
+
+        db_result = await _db_get_run(run_id)
+        if db_result is not None and db_result.get("diff_stat"):
+            return {"run_id": run_id, "diff": db_result.get("diff_stat", ""), "source": "report_db"}
+
+        for path in find_run_reports(Path(project_root)):
+            if path.parent.name == run_id:
+                report = load_report(path)
+                return {"run_id": run_id, "diff": report.diff_stat or "", "source": "report_file"}
         raise HTTPException(status_code=404, detail="run not found")
 
     @router.post("/runs/{run_id}/resume")

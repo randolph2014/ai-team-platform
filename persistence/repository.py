@@ -268,8 +268,11 @@ class PipelineRunRepo:
         trigger_source: str = "manual",
         worktree_path: Optional[str] = None,
         app_run_id: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> None:
-        ctx = {"app_run_id": app_run_id} if app_run_id else {}
+        ctx = {key: value for key, value in (context or {}).items() if value is not None}
+        if app_run_id:
+            ctx["app_run_id"] = app_run_id
         await conn.execute(
             f"""
             INSERT INTO {self.TABLE} (id, pipeline_id, status, project_root, main_branch,
@@ -551,6 +554,8 @@ async def save_report(report: RunReport, config: Optional[Dict[str, Any]] = None
                 "config_path": report.config_path,
                 "artifacts": report.artifacts,
                 "human_decisions": [model_to_dict(item) for item in report.human_decisions],
+                "changed_files": report.changed_files,
+                "diff_stat": report.diff_stat,
             }
             if report.merge_result:
                 ctx["merge_result"] = report.merge_result
@@ -889,7 +894,7 @@ def run_row_to_summary(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "run_id": ctx.get("app_run_id") or row.get("id"),
         "status": row.get("status"),
-        "pipeline": ctx.get("config_path"),
+        "pipeline": ctx.get("pipeline_ref") or ctx.get("config_path"),
         "output_dir": ctx.get("output_dir"),
         "started_at": _dt_to_str(row.get("started_at")),
         "completed_at": _dt_to_str(row.get("completed_at")),
@@ -958,9 +963,14 @@ def run_detail_to_response(detail: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "run_id": ctx.get("app_run_id") or detail.get("id"),
         "status": detail.get("status"),
+        "mode": "single",
         "project_root": detail.get("project_root"),
+        "output_dir": detail.get("output_dir") or "",
         "requirement": detail.get("requirement"),
         "worktree_path": detail.get("worktree_path"),
+        "merge_result": ctx.get("merge_result"),
+        "changed_files": ctx.get("changed_files", []),
+        "diff_stat": ctx.get("diff_stat", ""),
         "config_source": ctx.get("config_source"),
         "config_path": ctx.get("config_path"),
         "started_at": _dt_to_str(detail.get("started_at")),

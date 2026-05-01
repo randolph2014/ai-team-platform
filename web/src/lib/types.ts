@@ -71,16 +71,24 @@ export interface StageRun {
 export interface RunReport {
   run_id: string;
   status: RunStatus;
+  mode?: string;
   requirement: string;
   project_root: string;
   output_dir: string;
   config_source: string;
+  config_path?: string;
   started_at?: string;
   completed_at?: string;
   duration_seconds?: number;
+  worktree_path?: string;
+  merge_result?: Record<string, unknown> | null;
+  changed_files?: string[];
+  diff_stat?: string;
   stages: StageRun[];
   human_decisions?: HumanDecision[];
   artifacts: string[];
+  warnings?: string[];
+  error_message?: string;
 }
 
 export interface RunEvent {
@@ -179,6 +187,17 @@ export interface PipelineTemplate {
   id: string;
   name: string;
   description: string;
+  category?: string;
+  source?: string;
+  is_builtin?: boolean;
+  tags?: string[];
+  recommended?: boolean;
+  estimated_effort?: string;
+  stage_count?: number;
+  agent_count?: number;
+  human_gate_count?: number;
+  quality_gate_count?: number;
+  stage_summary?: string[];
   stages: string[];
   yaml_config?: Record<string, unknown>;
 }

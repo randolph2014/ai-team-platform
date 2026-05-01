@@ -289,6 +289,9 @@ class Orchestrator:
                         report.merge_result = worktree_manager.merge(worktree_path)
                     else:
                         report.merge_result = {"status": "skipped", "reason": "merge_on_success disabled"}
+                    report.changed_files = worktree_manager.get_changed_files(worktree_path)
+                    report.diff_stat = worktree_manager.get_diff_stat(worktree_path)
+                    self.bus.emit("files:changed", run_id, changed_files=report.changed_files, diff_stat=report.diff_stat)
                     if self.config.get("worktree", {}).get("auto_cleanup") and report.merge_result.get("status") in {"merged", "no_changes"}:
                         worktree_manager.cleanup(worktree_path)
                 if report.status == "completed" and worktree_path:
@@ -507,6 +510,7 @@ class Orchestrator:
                     units=checkpoint_units,
                     human_decisions=report.human_decisions,
                 )
+                self._push_file_changes(report.run_id, worktree_path)
 
             output_content = self._stage_output_text(stage_run)
             if stage.get("loopback_to") and stage.get("loopback_trigger") and _triggered(output_content, stage.get("loopback_trigger")):
@@ -1515,6 +1519,21 @@ class Orchestrator:
                 self.bus.emit("ci_cd:pr_created", report.run_id, url=result.get("url"), number=result.get("number"))
         except Exception as exc:
             logger.warning("CI/CD hook failed (non-blocking): %s", exc)
+
+    def _push_file_changes(self, run_id: str, worktree_path: Optional[Path]) -> None:
+        """如果 worktree 存在，获取文件变更列表并通过事件总线推送。"""
+        if not worktree_path or not worktree_path.exists():
+            return
+        try:
+            from .worktree import WorktreeManager
+
+            mgr = WorktreeManager(self.project_root, self.config.get("worktree"))
+            changed = mgr.get_changed_files(worktree_path)
+            stat = mgr.get_diff_stat(worktree_path)
+            self.bus.emit("files:changed", run_id, changed_files=changed, diff_stat=stat)
+        except Exception:
+            logger = get_logger("orchestrator", run_id=run_id)
+            logger.debug("推送文件变更失败", exc_info=True)
 
     def _write_report(self, report: RunReport, output_dir: Path) -> None:
         self._refresh_artifacts(report, output_dir)

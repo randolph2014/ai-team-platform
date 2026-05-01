@@ -1,14 +1,11 @@
-import { Download, Eye, FolderGit2, Wifi, WifiOff } from 'lucide-react';
+import { Eye, FileDiff, FileText, FolderGit2, GitBranchPlus, Wifi, WifiOff, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { ArtifactViewer } from '../components/ArtifactViewer';
 import { PipelineTimeline } from '../components/PipelineTimeline';
 import { StatusBadge } from '../components/StatusBadge';
-import { fetchRun, rememberedWorkdir, rememberRunWorkdir, runQuery, runWebSocketUrl } from '../lib/api';
+import { fetchRun, fetchRunDiff, rememberedWorkdir, rememberRunWorkdir, runQuery, runWebSocketUrl } from '../lib/api';
 import type { RunEvent, RunReport } from '../lib/types';
 
-/**
- * 获取产物文件图标颜色
- */
 function artifactColor(name: string): string {
   if (/\.(md|markdown)$/i.test(name)) return 'var(--blue)';
   if (/\.json$/i.test(name)) return 'var(--yellow)';
@@ -16,6 +13,14 @@ function artifactColor(name: string): string {
   if (/\.(log|out|err)$/i.test(name)) return 'var(--text-muted)';
   if (/\.(yaml|yml)$/i.test(name)) return 'var(--purple)';
   return 'var(--accent)';
+}
+
+function fileIcon(file: string): string {
+  if (/\.(py|js|ts|tsx|jsx|go|rs|java|kt|swift)$/i.test(file)) return 'var(--green)';
+  if (/\.(yaml|yml|json|toml)$/i.test(file)) return 'var(--yellow)';
+  if (/\.(md|markdown|rst|txt)$/i.test(file)) return 'var(--blue)';
+  if (/\.(css|scss|less)$/i.test(file)) return 'var(--purple)';
+  return 'var(--text-secondary)';
 }
 
 export function RunDetail({ runId }: { runId: string }) {
@@ -26,6 +31,11 @@ export function RunDetail({ runId }: { runId: string }) {
   const [loading, setLoading] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
   const [viewingArtifact, setViewingArtifact] = useState<string | null>(null);
+  const [changedFiles, setChangedFiles] = useState<string[]>([]);
+  const [diffStat, setDiffStat] = useState('');
+  const [viewingDiff, setViewingDiff] = useState(false);
+  const [diffContent, setDiffContent] = useState('');
+  const [diffLoading, setDiffLoading] = useState(false);
   const terminalRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -41,6 +51,8 @@ export function RunDetail({ runId }: { runId: string }) {
         if (ignore) return;
         setRun(payload);
         rememberRunWorkdir(runId, payload.project_root);
+        if (payload.changed_files?.length) setChangedFiles(payload.changed_files);
+        if (payload.diff_stat) setDiffStat(payload.diff_stat);
       })
       .catch((error: Error) => {
         if (!ignore) setLoadError(error.message);
@@ -71,8 +83,17 @@ export function RunDetail({ runId }: { runId: string }) {
       }
       if (event.type === 'run:completed') {
         fetchRun(runId, workdir).then((updated) => {
-          if (!disposed) setRun(updated);
+          if (!disposed) {
+            setRun(updated);
+            if (updated.changed_files?.length) setChangedFiles(updated.changed_files);
+            if (updated.diff_stat) setDiffStat(updated.diff_stat);
+          }
         }).catch(() => undefined);
+      }
+      if (event.type === 'files:changed') {
+        const files = (event.payload.changed_files as string[]) || [];
+        if (files.length) setChangedFiles(files);
+        if (typeof event.payload.diff_stat === 'string') setDiffStat(event.payload.diff_stat);
       }
     };
     return () => {
@@ -92,6 +113,19 @@ export function RunDetail({ runId }: { runId: string }) {
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
     }
   }, [liveLines]);
+
+  async function handleViewDiff() {
+    setDiffLoading(true);
+    setViewingDiff(true);
+    try {
+      const result = await fetchRunDiff(runId, workdir);
+      setDiffContent(result.diff);
+    } catch {
+      setDiffContent(diffStat || '暂无 diff 数据');
+    } finally {
+      setDiffLoading(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -153,11 +187,38 @@ export function RunDetail({ runId }: { runId: string }) {
           </div>
         </div>
       </section>
+
       <section className="panel requirementPanel">
         <h2>需求描述</h2>
         <p>{run.requirement}</p>
         {loadError ? <p className="inlineError">无法加载真实运行记录：{loadError}</p> : null}
       </section>
+
+      {changedFiles.length > 0 && (
+        <section className="panel fileChangesPanel">
+          <div className="panelHeader">
+            <h2><GitBranchPlus size={16} /> 文件变更<span className="artifactCount">{changedFiles.length}</span></h2>
+            <button className="button" onClick={handleViewDiff}>
+              <FileDiff size={14} /> 查看 Diff
+            </button>
+          </div>
+          <div className="fileChangesList">
+            {changedFiles.map((file) => (
+              <div key={file} className="fileChangeItem">
+                <span className="fileChangeDot" style={{ background: fileIcon(file) }} />
+                <span className="fileChangeName mono">{file}</span>
+              </div>
+            ))}
+          </div>
+          {diffStat && (
+            <div className="fileChangesStat">
+              <FileText size={12} />
+              <span>{diffStat.split('\n').slice(0, 2).join(' | ')}</span>
+            </div>
+          )}
+        </section>
+      )}
+
       <div className="detailGrid">
         <PipelineTimeline
           run={run}
@@ -190,12 +251,36 @@ export function RunDetail({ runId }: { runId: string }) {
           )}
         </aside>
       </div>
+
       {viewingArtifact && (
         <ArtifactViewer
           runId={run.run_id}
           artifactName={viewingArtifact}
           onClose={() => setViewingArtifact(null)}
         />
+      )}
+
+      {viewingDiff && (
+        <div className="modalOverlay" onClick={() => setViewingDiff(false)}>
+          <div className="modal modalWide" onClick={(e) => e.stopPropagation()}>
+            <div className="modalHeader">
+              <h2><FileDiff size={18} /> Git Diff</h2>
+              <button className="iconButton" onClick={() => setViewingDiff(false)} aria-label="关闭">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="diffContent">
+              {diffLoading ? (
+                <div className="emptyState" style={{ padding: 32 }}>
+                  <span className="spinner" style={{ display: 'inline-block', width: 24, height: 24, border: '2px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                  <span style={{ marginTop: 12 }}>加载 diff...</span>
+                </div>
+              ) : (
+                <pre className="diffPre">{diffContent || '暂无 diff 数据'}</pre>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

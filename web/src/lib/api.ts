@@ -129,6 +129,13 @@ export async function fetchRun(runId: string, workdir?: string): Promise<RunRepo
   return response.json();
 }
 
+export async function fetchRunDiff(runId: string, workdir?: string): Promise<{ run_id: string; diff: string; source: string }> {
+  const wd = workdir || rememberedWorkdir(runId);
+  const response = await apiFetch(`/runs/${runId}/diff${runQuery(wd)}`);
+  if (!response.ok) throw new Error(`获取 diff 失败: ${response.status}`);
+  return response.json();
+}
+
 export function runWebSocketUrl(runId: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const token = getToken();
@@ -136,11 +143,22 @@ export function runWebSocketUrl(runId: string): string {
   return token ? `${base}?token=${encodeURIComponent(token)}` : base;
 }
 
-export async function createRun(workdir: string, requirement: string, configPath?: string): Promise<{ run_id: string; status: string }> {
+export type CreateRunOptions = {
+  config_path?: string;
+  pipeline_id?: string;
+  execution_mode?: 'serial' | 'parallel' | 'auto' | string;
+};
+
+export async function createRun(
+  workdir: string,
+  requirement: string,
+  options?: string | CreateRunOptions,
+): Promise<{ run_id: string; status: string }> {
+  const extra: CreateRunOptions = typeof options === 'string' ? { config_path: options } : (options || {});
   const response = await apiFetch('/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workdir, requirement, yes: false, config_path: configPath }),
+    body: JSON.stringify({ workdir, requirement, yes: false, ...extra }),
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }));

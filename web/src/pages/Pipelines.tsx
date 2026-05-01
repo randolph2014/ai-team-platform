@@ -227,26 +227,25 @@ function pipelineToYaml(pipeline: Pipeline | null): string {
   return pipelineConfigToYaml(pipeline.yaml_config || {}, pipeline.name, pipeline.description);
 }
 
-function templateToYaml(template: PipelineTemplate): string {
-  return pipelineConfigToYaml(
-    templateConfig(template),
-    template.name,
-    template.description,
-  );
+function pipelineDraftToYaml(pipeline: Pipeline | null, draft: Pipeline | null): string {
+  return pipelineToYaml(pipeline || draft);
 }
 
 function PipelineEditorModal({
   pipeline,
+  draft,
   onClose,
   onSaved,
 }: {
   pipeline: Pipeline | null;
+  draft?: Pipeline | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [name, setName] = useState(pipeline?.name ?? '');
-  const [description, setDescription] = useState(pipeline?.description ?? '');
-  const [yaml, setYaml] = useState(pipelineToYaml(pipeline));
+  const initial = pipeline || draft || null;
+  const [name, setName] = useState(initial?.name ?? '');
+  const [description, setDescription] = useState(initial?.description ?? '');
+  const [yaml, setYaml] = useState(pipelineDraftToYaml(pipeline, draft || null));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -311,6 +310,7 @@ export function Pipelines() {
   const [error, setError] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingPipeline, setEditingPipeline] = useState<Pipeline | null>(null);
+  const [templateDraft, setTemplateDraft] = useState<Pipeline | null>(null);
 
   function load() {
     setLoading(true);
@@ -335,6 +335,7 @@ export function Pipelines() {
 
   function openEditor(pipeline: Pipeline | null) {
     setEditingPipeline(pipeline);
+    setTemplateDraft(null);
     setEditorOpen(true);
   }
 
@@ -346,7 +347,8 @@ export function Pipelines() {
       yaml_config: templateConfig(template),
       stage_count: template.stages.length,
     };
-    setEditingPipeline(pipelineFromTemplate);
+    setEditingPipeline(null);
+    setTemplateDraft(pipelineFromTemplate);
     setEditorOpen(true);
   }
 
@@ -380,11 +382,20 @@ export function Pipelines() {
                 <h2>{template.name}</h2>
                 <p>{template.description}</p>
                 <div className="pipelineStats">
-                  <span>{template.stages.length} 个阶段</span>
-                  <span>{template.stages.join(' → ')}</span>
+                  <span>{template.stage_count ?? template.stages.length} 个阶段</span>
+                  <span>{template.human_gate_count ?? 0} 个人工确认</span>
+                  <span>{template.estimated_effort || 'M'}</span>
                 </div>
+                <p className="pipelineStageSummary">
+                  {(template.stage_summary && template.stage_summary.length > 0 ? template.stage_summary : template.stages).join(' → ')}
+                </p>
+                {template.tags && template.tags.length > 0 && (
+                  <div className="tagRow">
+                    {template.tags.map((tag) => <span key={tag} className="tagPill">{tag}</span>)}
+                  </div>
+                )}
                 <button className="button" style={{ marginTop: 12 }} onClick={() => useTemplate(template)}>
-                  <Plus size={14} /> 使用此模板
+                  <Plus size={14} /> 从模板创建
                 </button>
               </div>
             ))}
@@ -429,7 +440,11 @@ export function Pipelines() {
       {editorOpen && (
         <PipelineEditorModal
           pipeline={editingPipeline}
-          onClose={() => setEditorOpen(false)}
+          draft={templateDraft}
+          onClose={() => {
+            setEditorOpen(false);
+            setTemplateDraft(null);
+          }}
           onSaved={() => load()}
         />
       )}

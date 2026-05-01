@@ -207,6 +207,11 @@ function navigate(path: string) {
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
 
+function slugForPipeline(name: string): string {
+  const slug = name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  return slug || `pipeline-${Date.now()}`;
+}
+
 function defaultPipeline(): PipelineConfig {
   return {
     name: '新建 Pipeline',
@@ -612,7 +617,7 @@ export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
     setError('');
     try {
       const stages = stagesForSave(config.stages);
-      const id = config.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+      const id = slugForPipeline(config.name);
       const response = await fetch('/api/pipelines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -645,7 +650,7 @@ export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${config.name.toLowerCase().replace(/\s+/g, '-')}.yaml`;
+    a.download = `${slugForPipeline(config.name)}.yaml`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -714,15 +719,24 @@ export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
                 <h2>{tpl.name}</h2>
                 <p>{tpl.description}</p>
                 <div className="pipelineStats">
-                  <span>{tpl.stages.length} 个阶段</span>
-                  <span>{tpl.stages.join(' → ')}</span>
+                  <span>{tpl.stage_count ?? tpl.stages.length} 个阶段</span>
+                  <span>{tpl.human_gate_count ?? 0} 个人工确认</span>
+                  <span>{tpl.estimated_effort || 'M'}</span>
                 </div>
+                <p className="pipelineStageSummary">
+                  {(tpl.stage_summary && tpl.stage_summary.length > 0 ? tpl.stage_summary : tpl.stages).join(' → ')}
+                </p>
+                {tpl.tags && tpl.tags.length > 0 && (
+                  <div className="tagRow">
+                    {tpl.tags.map((tag) => <span key={tag} className="tagPill">{tag}</span>)}
+                  </div>
+                )}
                 <button
                   className="button"
                   style={{ marginTop: 12 }}
                   onClick={() => handleUseTemplate(tpl)}
                 >
-                  <Plus size={14} /> 使用此模板
+                  <Plus size={14} /> 从模板创建
                 </button>
               </div>
             ))}

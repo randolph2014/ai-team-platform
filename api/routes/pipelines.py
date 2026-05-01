@@ -4,9 +4,9 @@ import copy
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
-from engine.config import DEFAULT_CONFIG, TEMPLATES_ROOT
+from engine.config import DEFAULT_CONFIG, TEMPLATES_ROOT, load_config
 from engine.human_gate import HARD_HUMAN_GATES
 
 try:
@@ -23,6 +23,7 @@ router = APIRouter() if APIRouter else None
 PIPELINES_DIR = TEMPLATES_ROOT / "pipelines"
 
 DEFAULT_STAGE_BY_ID = {stage.get("id"): stage for stage in DEFAULT_CONFIG.get("pipeline", []) if stage.get("id")}
+StageTemplateItem = Union[str, Dict[str, Any]]
 
 
 def _hydrate_stage(stage: Any) -> Dict[str, Any]:
@@ -66,46 +67,77 @@ def _hydrate_yaml_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return hydrated
 
 
-def _builtin_template(template_id: str, name: str, description: str, stages: List[str]) -> Dict[str, Any]:
+def _stage_id(stage: StageTemplateItem) -> str:
+    return stage if isinstance(stage, str) else str(stage.get("id", ""))
+
+
+def _stage(stage_id: str, **overrides: Any) -> Dict[str, Any]:
+    data: Dict[str, Any] = {"id": stage_id}
+    data.update(overrides)
+    return data
+
+
+def _count_agents(stages: List[Dict[str, Any]]) -> int:
+    agents = set()
+    for stage in stages:
+        for agent in stage.get("agents") or []:
+            agents.add(str(agent))
+    return len(agents)
+
+
+def _builtin_template(
+    template_id: str,
+    name: str,
+    description: str,
+    stages: List[StageTemplateItem],
+    *,
+    category: str,
+    tags: Optional[List[str]] = None,
+    recommended: bool = False,
+    estimated_effort: str = "M",
+    execution_mode: str = "parallel",
+) -> Dict[str, Any]:
     yaml_config = _hydrate_yaml_config(
         {
             "name": name,
             "description": description,
             "version": "1.0",
+            "execution_mode": execution_mode,
             "stages": stages,
+            "metadata": {
+                "pipeline_id": template_id,
+                "pipeline_source": "builtin",
+                "category": category,
+            },
         }
     )
+    hydrated_stages = yaml_config.get("stages", [])
+    stage_ids = [_stage_id(stage) for stage in hydrated_stages]
     return {
         "id": template_id,
         "name": name,
         "description": description,
-        "stages": stages,
+        "category": category,
+        "source": "builtin",
+        "is_builtin": True,
+        "tags": tags or [],
+        "recommended": recommended,
+        "estimated_effort": estimated_effort,
+        "stage_count": len(stage_ids),
+        "agent_count": _count_agents(hydrated_stages),
+        "human_gate_count": sum(1 for stage_id in stage_ids if stage_id in HARD_HUMAN_GATES),
+        "quality_gate_count": 0,
+        "stage_summary": [stage.get("name", stage.get("id")) for stage in hydrated_stages],
+        "stages": stage_ids,
         "yaml_config": yaml_config,
     }
 
 
 BUILTIN_TEMPLATES: List[Dict[str, Any]] = [
     _builtin_template(
-        "basic",
-        "基础流水线",
-        "当前标准流程：代码库扫描 → 需求定稿 → 人工确认 → 任务规划 → 开发 → 测试 → 审查 → 人工验收",
-        [
-            "context_scan",
-            "requirement_analysis",
-            "requirement_synthesis",
-            "requirement_confirm",
-            "planning",
-            "task_plan_confirm",
-            "develop",
-            "qa",
-            "review",
-            "acceptance_confirm",
-        ],
-    ),
-    _builtin_template(
-        "full",
-        "全功能流水线",
-        "完整闭环流程：包含复盘产物和所有强制人工确认节点",
+        "project-delivery",
+        "项目研发流水线",
+        "适用于完整功能研发：代码库扫描、需求定稿、任务规划、开发、测试、审查、人工验收和复盘全闭环。",
         [
             "context_scan",
             "requirement_analysis",
@@ -119,30 +151,68 @@ BUILTIN_TEMPLATES: List[Dict[str, Any]] = [
             "acceptance_confirm",
             "retrospect",
         ],
+        category="delivery",
+        tags=["feature", "full-cycle", "review", "qa"],
+        recommended=True,
+        estimated_effort="L",
     ),
     _builtin_template(
-        "minimal",
-        "极简流水线",
-        "小需求流程：保留需求定稿确认、任务规划确认和最终人工验收，开发仍由单 Agent 实施",
-        ["context_scan", "requirement_synthesis", "requirement_confirm", "planning", "task_plan_confirm", "develop", "qa", "review", "acceptance_confirm"],
+        "bugfix",
+        "修复 bug 流水线",
+        "适用于缺陷修复：先定位影响面和修复范围，再实施、回归测试、代码审查和最终验收。",
+        [
+            "context_scan",
+            _stage(
+                "requirement_synthesis",
+                name="问题定位与修复范围确认",
+                input=[
+                    "requirement",
+                    "codebase-context.md",
+                    "codebase-context.json",
+                    "human-decision-requirement*.json",
+                ],
+            ),
+            _stage("requirement_confirm", name="修复范围人工确认"),
+            _stage(
+                "planning",
+                name="修复方案与回归计划",
+                input=[
+                    "requirement-final.md",
+                    "requirement-final.json",
+                    "codebase-context.md",
+                    "codebase-context.json",
+                ],
+            ),
+            _stage(
+                "develop",
+                name="修复实施",
+                input=[
+                    "requirement-final.md",
+                    "requirement-final.json",
+                    "codebase-context.md",
+                    "codebase-context.json",
+                    "solution-plan.json",
+                    "task-plan.md",
+                    "task-plan.json",
+                    "human-decision-acceptance*.json",
+                ],
+            ),
+            _stage("qa", name="回归测试"),
+            _stage("review", name="修复审查与风险识别"),
+            _stage("acceptance_confirm", name="修复结果人工验收"),
+        ],
+        category="bugfix",
+        tags=["bugfix", "regression", "root-cause", "review"],
+        estimated_effort="M",
     ),
     _builtin_template(
-        "ios",
-        "iOS 开发流水线",
-        "适用于 Swift/iOS 项目的需求定稿、任务规划、开发、测试、审查和人工验收",
-        ["context_scan", "requirement_analysis", "requirement_synthesis", "requirement_confirm", "planning", "task_plan_confirm", "develop", "qa", "review", "acceptance_confirm"],
-    ),
-    _builtin_template(
-        "web",
-        "Web 前端流水线",
-        "适用于 React/Vue/Next.js 前端项目的需求定稿、任务规划、开发、测试、审查和人工验收",
-        ["context_scan", "requirement_analysis", "requirement_synthesis", "requirement_confirm", "planning", "task_plan_confirm", "develop", "qa", "review", "acceptance_confirm"],
-    ),
-    _builtin_template(
-        "backend",
-        "后端开发流水线",
-        "适用于 Python/Java/Go 后端服务的需求定稿、任务规划、开发、测试、审查和人工验收",
-        ["context_scan", "requirement_analysis", "requirement_synthesis", "requirement_confirm", "planning", "task_plan_confirm", "develop", "qa", "review", "acceptance_confirm"],
+        "requirement",
+        "需求流水线",
+        "适用于需求澄清和范围定稿：只做代码库扫描、需求分析、需求综合和人工确认，不进入开发实施。",
+        ["context_scan", "requirement_analysis", "requirement_synthesis", "requirement_confirm"],
+        category="requirement",
+        tags=["requirement", "analysis", "scope"],
+        estimated_effort="S",
     ),
 ]
 
@@ -200,6 +270,90 @@ def _load_pipelines() -> List[Dict[str, Any]]:
         except Exception:
             pass
     return _load_pipelines_from_files()
+
+
+def _builtin_by_id(template_id: str) -> Optional[Dict[str, Any]]:
+    for template in BUILTIN_TEMPLATES:
+        if template.get("id") == template_id:
+            return copy.deepcopy(template)
+    return None
+
+
+def _pipeline_by_id_or_name(pipeline_id: str) -> Optional[Dict[str, Any]]:
+    for pipeline in _load_pipelines():
+        if pipeline.get("id") == pipeline_id or pipeline.get("name") == pipeline_id:
+            data = copy.deepcopy(pipeline)
+            data["source"] = "custom"
+            data["is_builtin"] = False
+            return data
+    return None
+
+
+def resolve_pipeline_reference(pipeline_ref: str) -> Dict[str, Any]:
+    """Resolve a run-time pipeline reference to either a builtin template or custom pipeline."""
+    if not pipeline_ref:
+        raise ValueError("pipeline_id is required")
+    if ":" in pipeline_ref:
+        source, value = pipeline_ref.split(":", 1)
+        if source == "template":
+            template = _builtin_by_id(value)
+            if template:
+                return template
+            raise KeyError(f"Unknown builtin pipeline template: {value}")
+        if source == "pipeline":
+            pipeline = _pipeline_by_id_or_name(value)
+            if pipeline:
+                return pipeline
+            raise KeyError(f"Unknown custom pipeline: {value}")
+        raise ValueError(f"Unsupported pipeline reference prefix: {source}")
+
+    template = _builtin_by_id(pipeline_ref)
+    if template:
+        return template
+    pipeline = _pipeline_by_id_or_name(pipeline_ref)
+    if pipeline:
+        return pipeline
+    raise KeyError(f"Unknown pipeline: {pipeline_ref}")
+
+
+def _dump_yaml(path: Path, data: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import yaml
+    except ImportError:  # pragma: no cover
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    else:
+        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def materialize_pipeline_config(project_root: Path, pipeline_ref: str, run_id: str) -> Path:
+    """Write a run-specific executable team config for the selected pipeline."""
+    pipeline = resolve_pipeline_reference(pipeline_ref)
+    template_config = _hydrate_yaml_config(pipeline.get("yaml_config") or {})
+    stages = template_config.get("stages")
+    if not isinstance(stages, list) or not stages:
+        raise ValueError(f"Pipeline {pipeline.get('id')} has no executable stages")
+
+    loaded = load_config(project_root)
+    config = copy.deepcopy(loaded.config)
+    execution_mode = template_config.get("execution_mode") or config.get("pipeline_settings", {}).get("execution_mode", "parallel")
+    config["pipeline"] = {"execution_mode": execution_mode, "stages": stages}
+    config.pop("pipeline_settings", None)
+    metadata = dict(config.get("metadata") or {})
+    metadata.update(
+        {
+            "name": pipeline.get("name"),
+            "pipeline_id": pipeline.get("id"),
+            "pipeline_ref": pipeline_ref,
+            "pipeline_source": pipeline.get("source", "custom"),
+            "pipeline_category": pipeline.get("category"),
+        }
+    )
+    config["metadata"] = metadata
+
+    path = project_root / ".ai" / "pipeline-configs" / f"{run_id}.yaml"
+    _dump_yaml(path, config)
+    return path
 
 
 def _save_pipeline_to_file(pipeline_id: str, data: Dict[str, Any]) -> None:

@@ -1418,11 +1418,15 @@ class TestPipelineRunRepoExtra:
                     trigger_source="api",
                     worktree_path="/tmp/wt",
                     app_run_id="app-new",
+                    context={"pipeline_ref": "template:bugfix", "config_path": "/tmp/cfg.yaml"},
                 )
             )
             assert mock_conn.execute.called
             sql = mock_conn.execute.call_args[0][0]
             assert "'pending'" in sql
+            context_arg = mock_conn.execute.call_args[0][8]
+            assert "template:bugfix" in context_arg
+            assert "/tmp/cfg.yaml" in context_arg
         finally:
             loop.close()
 
@@ -1445,6 +1449,20 @@ class TestPipelineRunRepoExtra:
             assert mock_conn.execute.called
         finally:
             loop.close()
+
+    def test_run_row_to_summary_prefers_pipeline_ref(self) -> None:
+        from persistence.repository import run_row_to_summary
+
+        summary = run_row_to_summary(
+            _make_row(
+                id="run-001",
+                status="running",
+                context='{"app_run_id":"api-run-1","pipeline_ref":"template:bugfix","config_path":"/tmp/cfg.yaml"}',
+            )
+        )
+
+        assert summary["run_id"] == "api-run-1"
+        assert summary["pipeline"] == "template:bugfix"
 
     def test_get_run_with_details_returns_none(self, mock_conn: MagicMock) -> None:
         repo = PipelineRunRepo()

@@ -1,7 +1,7 @@
 import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { apiFetch, fetchPipelines, rememberRunWorkdir, runQuery } from '../lib/api';
-import type { Pipeline } from '../lib/types';
+import { createRun, fetchPipelineTemplates, fetchPipelines, rememberRunWorkdir, runQuery } from '../lib/api';
+import type { Pipeline, PipelineTemplate } from '../lib/types';
 
 interface Props {
   open: boolean;
@@ -9,26 +9,55 @@ interface Props {
   onRefreshNeeded: () => void;
 }
 
+interface PipelineChoice {
+  ref: string;
+  name: string;
+  description: string;
+  source: 'template' | 'pipeline';
+}
+
+function templateChoice(template: PipelineTemplate): PipelineChoice {
+  return {
+    ref: `template:${template.id}`,
+    name: template.name,
+    description: template.description,
+    source: 'template',
+  };
+}
+
+function customPipelineChoice(pipeline: Pipeline): PipelineChoice {
+  return {
+    ref: `pipeline:${pipeline.id}`,
+    name: pipeline.name,
+    description: pipeline.description,
+    source: 'pipeline',
+  };
+}
+
 export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
   const [workdir, setWorkdir] = useState('');
   const [requirement, setRequirement] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [pipelines, setPipelines] = useState<Pipeline[]>([]);
+  const [pipelineChoices, setPipelineChoices] = useState<PipelineChoice[]>([]);
   const [selectedPipeline, setSelectedPipeline] = useState('');
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (open) {
       setSelectedPipeline('');
-      fetchPipelines()
-        .then((list) => {
-          setPipelines(list);
-          if (list.length > 0) {
-            setSelectedPipeline(list[0].name);
+      Promise.all([fetchPipelineTemplates(), fetchPipelines()])
+        .then(([templates, pipelines]) => {
+          const choices = [
+            ...templates.map(templateChoice),
+            ...pipelines.map(customPipelineChoice),
+          ];
+          setPipelineChoices(choices);
+          if (choices.length > 0) {
+            setSelectedPipeline(choices[0].ref);
           }
         })
-        .catch(() => undefined);
+        .catch((e: Error) => setError(e.message || '加载 Pipeline 模板失败'));
       setError('');
       setValidationErrors({});
     }
@@ -47,16 +76,11 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
     setSubmitting(true);
     setError('');
     try {
-      const response = await apiFetch('/runs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workdir: workdir.trim(), requirement: requirement.trim(), pipeline: selectedPipeline || undefined, yes: false }),
-      });
-      if (!response.ok) {
-        const body = await response.text();
-        throw new Error(body || `HTTP ${response.status}`);
-      }
-      const payload = await response.json();
+      const payload = await createRun(
+        workdir.trim(),
+        requirement.trim(),
+        selectedPipeline ? { pipeline_id: selectedPipeline } : undefined,
+      );
       rememberRunWorkdir(payload.run_id, workdir.trim());
       onRefreshNeeded();
       window.history.pushState({}, '', `/runs/${payload.run_id}${runQuery(workdir.trim())}`);
@@ -80,12 +104,12 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
           </button>
         </div>
         {error && <div className="formError">{error}</div>}
-        <label>Pipeline 模板</label>
-        {pipelines.length > 0 ? (
+        <label htmlFor="new-run-pipeline">Pipeline 模板</label>
+        {pipelineChoices.length > 0 ? (
           <>
-            <select value={selectedPipeline} onChange={(event) => setSelectedPipeline(event.target.value)}>
-              {pipelines.map((pipeline) => (
-                <option key={pipeline.id} value={pipeline.name}>{pipeline.name}</option>
+            <select id="new-run-pipeline" value={selectedPipeline} onChange={(event) => setSelectedPipeline(event.target.value)}>
+              {pipelineChoices.map((choice) => (
+                <option key={choice.ref} value={choice.ref}>{choice.name}</option>
               ))}
             </select>
             {validationErrors.pipeline && <span className="fieldError">{validationErrors.pipeline}</span>}
@@ -95,11 +119,11 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
             <option>无可用模板</option>
           </select>
         )}
-        <label>项目路径</label>
-        <input value={workdir} onChange={(event) => setWorkdir(event.target.value)} />
+        <label htmlFor="new-run-workdir">项目路径</label>
+        <input id="new-run-workdir" value={workdir} onChange={(event) => setWorkdir(event.target.value)} />
         {validationErrors.workdir && <span className="fieldError">{validationErrors.workdir}</span>}
-        <label>需求描述</label>
-        <textarea value={requirement} onChange={(event) => setRequirement(event.target.value)} />
+        <label htmlFor="new-run-requirement">需求描述</label>
+        <textarea id="new-run-requirement" value={requirement} onChange={(event) => setRequirement(event.target.value)} />
         {validationErrors.requirement && <span className="fieldError">{validationErrors.requirement}</span>}
         <div className="modalActions">
           <button className="button" onClick={onClose}>取消</button>

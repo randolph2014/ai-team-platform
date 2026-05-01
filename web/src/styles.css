@@ -856,6 +856,70 @@ tbody tr:hover td { background: var(--bg-hover); }
 }
 .artifactItem:hover { background: var(--bg-hover); }
 
+/* File changes panel */
+.fileChangesPanel {
+  margin-bottom: 18px;
+}
+.fileChangesList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.fileChangeItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.fileChangeDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.fileChangeName {
+  font-size: 12px;
+}
+.fileChangesStat {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
+}
+.fileChangesStat svg { margin-top: 1px; flex-shrink: 0; }
+
+/* Diff viewer modal */
+.modalWide { max-width: 900px; }
+.diffContent {
+  max-height: calc(80vh - 120px);
+  overflow: auto;
+}
+.diffPre {
+  margin: 0;
+  padding: 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* Pipeline table */
 .pipelineName { font-weight: 700; }
 .tableActions { display: flex; align-items: center; gap: 6px; }
@@ -881,6 +945,25 @@ tbody tr:hover td { background: var(--bg-hover); }
 .pipelineCard h2 { margin-bottom: 8px; }
 .pipelineCard p { color: var(--text-secondary); line-height: 1.6; margin-bottom: 14px; }
 .pipelineStats { display: flex; flex-wrap: wrap; gap: 10px; color: var(--text-secondary); font-size: 12px; }
+.pipelineStageSummary {
+  min-height: 38px;
+  font-size: 12px;
+  color: var(--text-muted) !important;
+  margin: 12px 0 10px !important;
+}
+.tagRow { display: flex; flex-wrap: wrap; gap: 6px; }
+.tagPill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+}
 
 /* Settings */
 .settingsGrid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 18px; align-items: start; }

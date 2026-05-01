@@ -1,6 +1,7 @@
 # Dependencies
 __pycache__/
 .pytest_cache/
+.coverage
 *.pyc
 *.pyo
 *.egg-info/
@@ -28,6 +29,7 @@ Thumbs.db
 *.sqlite3
 
 # AI worktree artifacts
+.ai/team.yaml
 .ai/worktrees/
 .ai/runs/
 .ai/team-output/
