@@ -349,7 +349,7 @@ if router:
         report_file = output_dir / "report.json"
         if report_file.exists():
             report = load_report(report_file)
-            if report.status not in {"failed", "running", "waiting"}:
+            if report.status not in {"failed", "running", "waiting", "blocked"}:
                 raise HTTPException(status_code=400, detail=f"run status is {report.status}, cannot resume")
             config_path = config_path or report.config_path
 

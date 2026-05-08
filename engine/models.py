@@ -7,18 +7,19 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-RunStatus = Literal["pending", "running", "completed", "failed", "cancelled", "waiting", "archived"]
+RunStatus = Literal["pending", "running", "completed", "failed", "cancelled", "waiting", "archived", "blocked"]
 StageStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled", "waiting"]
 AgentStatus = Literal["pending", "running", "completed", "failed", "timeout", "cancelled"]
 GateStatus = Literal["pending", "running", "passed", "failed", "skipped", "warning"]
 
 RUN_TRANSITIONS: Dict[str, set] = {
     "pending": {"running", "cancelled"},
-    "running": {"completed", "failed", "cancelled", "waiting"},
+    "running": {"completed", "failed", "cancelled", "waiting", "blocked"},
     "waiting": {"running", "cancelled"},
     "failed": {"running", "archived"},
     "completed": {"archived"},
     "cancelled": {"archived"},
+    "blocked": {"running", "cancelled", "failed"},
     "archived": set(),
 }
 
@@ -250,6 +251,7 @@ class RunReport(BaseModel):
     error_message: Optional[str] = None
     error_detail: Optional[StructuredError] = None
     status_timeline: List[StatusTimelineEntry] = Field(default_factory=list)
+    pr_info: Optional[Dict[str, Any]] = None
 
     def write(self, path: Path) -> None:
         import json

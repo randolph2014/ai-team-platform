@@ -60,7 +60,7 @@ from .logging_config import (
     log_stage_start,
 )
 from .metrics import record_gate_result, record_run, record_stage_duration
-from .worktree import WorktreeManager
+from .worktree import WorktreeError, WorktreeManager
 
 
 class OrchestratorError(RuntimeError):
@@ -292,18 +292,30 @@ class Orchestrator:
                 report.status = "waiting"
 
             if report.status == "running":
-                report.status = "completed"
                 if worktree_path and worktree_manager:
-                    if merge or self.config.get("worktree", {}).get("merge_on_success"):
-                        report.merge_result = worktree_manager.merge(worktree_path)
-                    else:
-                        report.merge_result = {"status": "skipped", "reason": "merge_on_success disabled"}
                     report.changed_files = worktree_manager.get_changed_files(worktree_path)
                     report.diff_stat = worktree_manager.get_diff_stat(worktree_path)
                     self.bus.emit("files:changed", run_id, changed_files=report.changed_files, diff_stat=report.diff_stat)
-                    if self.config.get("worktree", {}).get("auto_cleanup") and report.merge_result.get("status") in {"merged", "no_changes"}:
-                        worktree_manager.cleanup(worktree_path)
-                if report.status == "completed" and worktree_path:
+
+                    if self.config.get("ci_cd", {}).get("create_pr"):
+                        delivery_result = self._deliver_pr(worktree_manager, worktree_path, report, output_dir)
+                        report.pr_info = delivery_result
+                        if delivery_result.get("status") == "blocked":
+                            report.status = "blocked"
+                        else:
+                            report.status = "completed"
+                    elif merge or self.config.get("worktree", {}).get("merge_on_success"):
+                        report.merge_result = worktree_manager.merge(worktree_path)
+                        report.status = "completed"
+                        if self.config.get("worktree", {}).get("auto_cleanup") and report.merge_result.get("status") in {"merged", "no_changes"}:
+                            worktree_manager.cleanup(worktree_path)
+                    else:
+                        report.merge_result = {"status": "skipped", "reason": "merge_on_success disabled"}
+                        report.status = "completed"
+                else:
+                    report.status = "completed"
+
+                if report.status == "completed" and worktree_path and not report.pr_info:
                     self._run_ci_cd_hook(worktree_path, report, output_dir)
             report.completed_at = utc_now()
             report.duration_seconds = _duration(start)
@@ -1555,6 +1567,62 @@ class Orchestrator:
                     json_path = output_dir / f"{stem}.json"
                 json_path.parent.mkdir(parents=True, exist_ok=True)
                 json_path.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _deliver_pr(
+        self,
+        worktree_manager: WorktreeManager,
+        worktree_path: Path,
+        report: RunReport,
+        output_dir: Path,
+    ) -> Dict[str, Any]:
+        from .pr_manager import PRManager
+
+        ci_cd_config = self.config.get("ci_cd", {})
+        logger = get_logger("orchestrator", run_id=report.run_id)
+
+        if worktree_manager.has_changes(worktree_path):
+            worktree_manager.commit_all(worktree_path, f"ai-team: {report.run_id}")
+
+        try:
+            worktree_manager.push_branch(worktree_path)
+        except WorktreeError as e:
+            logger.error("Push failed: %s", e)
+            return {"status": "failed", "error": str(e)}
+
+        pr_manager = PRManager(ci_cd_config)
+        report_summary = {
+            "run_id": report.run_id,
+            "requirement": report.requirement,
+            "changed_files": report.changed_files,
+            "diff_stat": report.diff_stat,
+            "duration_seconds": report.duration_seconds,
+            "stages": [s.model_dump(mode="json") for s in report.stages],
+        }
+        pr_result = pr_manager.create_pr(str(worktree_path), report_summary)
+
+        if pr_result.get("status") not in ("created", "existing"):
+            return pr_result
+
+        pr_number = pr_result.get("number")
+        if pr_number and ci_cd_config.get("wait_for_checks"):
+            timeout = int(ci_cd_config.get("check_timeout", 600))
+            interval = int(ci_cd_config.get("check_interval", 30))
+            ci_result = pr_manager.wait_ci(pr_number, timeout, interval)
+            pr_result["ci_status"] = ci_result
+            if ci_result.get("status") == "failed":
+                pr_result["status"] = "blocked"
+                logger.warning("CI checks failed for PR #%d", pr_number)
+                self.bus.emit("ci_cd:checks_failed", report.run_id, pr_number=pr_number, checks=ci_result.get("failed", []))
+            elif ci_result.get("status") == "timeout":
+                pr_result["status"] = "blocked"
+                logger.warning("CI checks timed out for PR #%d", pr_number)
+                self.bus.emit("ci_cd:checks_timeout", report.run_id, pr_number=pr_number)
+            else:
+                self.bus.emit("ci_cd:checks_passed", report.run_id, pr_number=pr_number)
+        else:
+            self.bus.emit("ci_cd:pr_created", report.run_id, url=pr_result.get("url"), number=pr_number)
+
+        return pr_result
 
     def _run_ci_cd_hook(self, worktree_path: Path, report: RunReport, output_dir: Path) -> None:
         ci_cd_config = self.config.get("ci_cd", {})
