@@ -5,7 +5,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import List
 
-from fastapi import Body, Depends, Request
+from fastapi import Body, Depends, HTTPException, Request
 
 from .runtime import event_store
 
@@ -105,7 +105,17 @@ def create_app():
     @app.post("/api/auth/login")
     async def login(request: Request, api_key: str = Body(..., embed=True)):
         from engine.audit import record_audit
-        result = await handle_login(api_key)
+        try:
+            result = await handle_login(api_key)
+        except HTTPException as exc:
+            await record_audit(
+                action="login",
+                actor="api-user",
+                detail={"success": False, "status_code": exc.status_code},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+            raise
         await record_audit(
             action="login",
             actor="api-user",

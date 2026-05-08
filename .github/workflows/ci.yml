@@ -44,7 +44,7 @@ jobs:
         run: |
           source .venv/bin/activate
           pip install mypy
-          mypy engine/ api/ persistence/ --ignore-missing-imports --no-error-summary || true
+          mypy engine/release_readiness.py engine/audit.py engine/metrics.py engine/secret_store.py engine/webhook_delivery.py engine/pr_manager.py engine/worktree.py scripts/fail_on_detect_secrets.py --ignore-missing-imports --follow-imports=silent --no-error-summary
 
   secret-scan:
     name: Secret Scan
@@ -57,7 +57,7 @@ jobs:
         run: |
           pip install detect-secrets
           detect-secrets scan --all-files --force-use-all-plugins . 2>/dev/null > /tmp/baseline.json
-          detect-secrets audit --report --fail-on-unaudited /tmp/baseline.json || true
+          python scripts/fail_on_detect_secrets.py /tmp/baseline.json
 
   dependency-audit:
     name: Dependency Audit
@@ -73,7 +73,7 @@ jobs:
           pip install --upgrade pip
           pip install -e ".[dev]"
           pip install pip-audit
-          pip-audit --desc 2>/dev/null || true
+          pip-audit --desc
 
   test-backend:
     name: Python Tests

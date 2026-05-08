@@ -106,12 +106,11 @@ def record_audit_sync(
 ) -> Dict[str, Any]:
     import asyncio
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
         import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            return loop.run_in_executor(
-                pool,
-                lambda: asyncio.run(record_audit(action, actor, resource_type, resource_id, detail)),
-            )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(
+                lambda: asyncio.run(record_audit(action, actor, resource_type, resource_id, detail))
+            ).result(timeout=30)
     except RuntimeError:
         return asyncio.run(record_audit(action, actor, resource_type, resource_id, detail))

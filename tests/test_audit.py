@@ -79,3 +79,23 @@ class TestAuditLogging(unittest.TestCase):
             self.assertEqual(entry["action"], "sync_action")
         finally:
             audit_mod._AUDIT_DB_AVAILABLE = original
+
+    def test_record_audit_sync_inside_running_loop_returns_entry(self):
+        import asyncio
+        import engine.audit as audit_mod
+
+        original = audit_mod._AUDIT_DB_AVAILABLE
+        audit_mod._AUDIT_DB_AVAILABLE = False
+
+        async def run_sync_call():
+            return audit_mod.record_audit_sync(
+                action="sync_in_loop",
+                actor="sync_user",
+            )
+
+        try:
+            entry = asyncio.run(run_sync_call())
+            self.assertEqual(entry["action"], "sync_in_loop")
+            self.assertEqual(entry["actor"], "sync_user")
+        finally:
+            audit_mod._AUDIT_DB_AVAILABLE = original

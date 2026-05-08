@@ -291,6 +291,7 @@ class PRManager:
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         self.config = config or {}
         provider = self.config.get("provider", "github")
+        self._provider: GitHubPRProvider | GitLabPRProvider
         if provider == "gitlab":
             self._provider = GitLabPRProvider(self.config)
         else:

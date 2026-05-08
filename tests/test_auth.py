@@ -188,8 +188,14 @@ class TestAuthEnabled(_AuthTestBase):
         """POST /api/auth/login with invalid API key returns 401."""
         try:
             self._setup_auth_env()
-            response = self.client.post("/api/auth/login", json={"api_key": "wrong-key"})
+            with patch("engine.audit.record_audit", new=AsyncMock()) as mock_audit:
+                response = self.client.post("/api/auth/login", json={"api_key": "wrong-key"})
             self.assertEqual(response.status_code, 401)
+            mock_audit.assert_awaited_once()
+            audit_kwargs = mock_audit.await_args.kwargs
+            self.assertEqual(audit_kwargs["action"], "login")
+            self.assertFalse(audit_kwargs["detail"]["success"])
+            self.assertEqual(audit_kwargs["detail"]["status_code"], 401)
         finally:
             self._teardown_auth_env()
 
@@ -374,6 +380,14 @@ class TestManagementEndpointsAuth(_AuthTestBase):
         try:
             self._setup_auth_env()
             response = self.client.get("/api/costs", params={"run_id": "test"})
+            self.assertEqual(response.status_code, 401)
+        finally:
+            self._teardown_auth_env()
+
+    def test_metrics_returns_401_without_token(self) -> None:
+        try:
+            self._setup_auth_env()
+            response = self.client.get("/metrics")
             self.assertEqual(response.status_code, 401)
         finally:
             self._teardown_auth_env()
