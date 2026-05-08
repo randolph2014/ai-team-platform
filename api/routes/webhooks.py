@@ -215,6 +215,14 @@ if router:
         finally:
             await release(conn)
 
+    @router.post("/webhooks/deliveries/retry-due")
+    async def retry_due_deliveries(limit: int = Query(default=100, ge=1, le=500), user: Dict[str, Any] = _get_auth()):
+        from engine.webhook_delivery import process_due_webhook_deliveries
+
+        result = await process_due_webhook_deliveries(limit=limit)
+        await _audit("retry_webhook_deliveries", user, detail=result)
+        return result
+
     @router.post("/webhooks/trigger")
     async def trigger_webhook(request: Request):
         raw_body = await request.body()

@@ -72,6 +72,29 @@ class TestMaskSecret(unittest.TestCase):
         self.assertEqual(mask_secret("123456789"), "1234****6789")
 
 
+class TestWebhookSecretStore(unittest.TestCase):
+    def test_encrypt_decrypt_roundtrip(self):
+        from engine.secret_store import decrypt_webhook_secret, encrypt_webhook_secret, is_encrypted_secret
+
+        with patch.dict("os.environ", {"AI_TEAM_WEBHOOK_SECRET_KEY": "test-webhook-secret-key"}, clear=False):
+            encrypted = encrypt_webhook_secret("super-secret-value")
+            self.assertTrue(is_encrypted_secret(encrypted))
+            self.assertNotIn("super-secret-value", encrypted)
+            self.assertEqual(decrypt_webhook_secret(encrypted), "super-secret-value")
+
+    def test_encrypt_requires_key(self):
+        from engine.secret_store import SecretEncryptionError, encrypt_webhook_secret
+
+        with patch.dict("os.environ", {"AI_TEAM_WEBHOOK_SECRET_KEY": ""}, clear=False):
+            with self.assertRaises(SecretEncryptionError):
+                encrypt_webhook_secret("super-secret-value")
+
+    def test_decrypt_plain_legacy_secret(self):
+        from engine.secret_store import decrypt_webhook_secret
+
+        self.assertEqual(decrypt_webhook_secret("legacy-secret"), "legacy-secret")
+
+
 class TestGitHubEventParsing(unittest.TestCase):
 
     def test_parse_github_push(self):
@@ -240,6 +263,11 @@ class TestWebhookApiRoutes(unittest.TestCase):
 
     def setUp(self) -> None:
         reset_auth()
+        self._secret_env = patch.dict("os.environ", {"AI_TEAM_WEBHOOK_SECRET_KEY": "test-webhook-secret-key"}, clear=False)
+        self._secret_env.start()
+
+    def tearDown(self) -> None:
+        self._secret_env.stop()
 
     def test_create_webhook_requires_auth(self):
         from api.app import create_app
@@ -345,6 +373,11 @@ class TestWebhookRepo(unittest.TestCase):
 
     def setUp(self) -> None:
         reset_auth()
+        self._secret_env = patch.dict("os.environ", {"AI_TEAM_WEBHOOK_SECRET_KEY": "test-webhook-secret-key"}, clear=False)
+        self._secret_env.start()
+
+    def tearDown(self) -> None:
+        self._secret_env.stop()
 
     def test_create_and_get_webhook(self):
         self._run_async_test(self._test_create_and_get_webhook)
@@ -424,6 +457,9 @@ class TestWebhookRepo(unittest.TestCase):
         self.assertNotEqual(record["secret"], "test-secret-value-here")
         self.assertIn("****", record["secret"])
         self.assertEqual(record["events"], ["push"])
+        stored_secret = mock_conn.execute.await_args.args[3]
+        self.assertNotEqual(stored_secret, "test-secret-value-here")
+        self.assertTrue(stored_secret.startswith("fernet:v1:"))
 
     async def _test_list_all_webhooks(self):
         from persistence.repository import WebhookRepo
@@ -532,17 +568,19 @@ class TestWebhookRepo(unittest.TestCase):
         self.assertIn("****", records[0]["secret"])
 
     async def _test_get_by_id_without_mask(self):
+        from engine.secret_store import encrypt_webhook_secret
         from persistence.repository import WebhookRepo
         from unittest.mock import AsyncMock
 
         repo = WebhookRepo()
         raw_secret = "a-very-long-secret-value"
+        stored_secret = encrypt_webhook_secret(raw_secret)
         mock_conn = MagicMock()
         mock_conn.fetchrow = AsyncMock(
             return_value={
                 "id": "wh-004",
                 "url": "https://example.com",
-                "secret": raw_secret,
+                "secret": stored_secret,
                 "events": '[]',
                 "pipeline_id": None,
                 "enabled": True,
@@ -563,6 +601,9 @@ class TestWebhookRepo(unittest.TestCase):
 
         result = await repo.rotate_secret(mock_conn, "wh-001", "new-secret-value")
         self.assertTrue(result)
+        stored_secret = mock_conn.execute.await_args.args[2]
+        self.assertNotEqual(stored_secret, "new-secret-value")
+        self.assertTrue(stored_secret.startswith("fernet:v1:"))
 
         mock_conn.execute.return_value = "UPDATE 0"
         result = await repo.rotate_secret(mock_conn, "wh-nonexistent", "new-secret")
@@ -579,6 +620,23 @@ class TestWebhookDeliveryRepo(unittest.TestCase):
 
     def test_mark_status(self):
         self._run_async_test(self._test_mark_status)
+
+    def test_list_pending_retries(self):
+        self._run_async_test(self._test_list_pending_retries)
+
+    def test_retry_schedule_uses_first_delay_after_first_attempt(self):
+        from persistence.repository import webhook_next_retry_at
+        from datetime import datetime, timezone
+
+        before = datetime.now(timezone.utc)
+        retry_at = webhook_next_retry_at(1)
+        after = datetime.now(timezone.utc)
+
+        self.assertIsNotNone(retry_at)
+        delay = (retry_at - before).total_seconds()
+        self.assertGreaterEqual(delay, 59)
+        self.assertLessEqual(delay, 61 + (after - before).total_seconds())
+        self.assertIsNone(webhook_next_retry_at(3))
 
     def _run_async_test(self, coro_func):
         import asyncio
@@ -659,6 +717,90 @@ class TestWebhookDeliveryRepo(unittest.TestCase):
 
         result = await repo.mark_status(mock_conn, "del-001", "failed", response_status=500, error_message="timeout")
         self.assertTrue(result)
+        sql = mock_conn.execute.await_args.args[0]
+        self.assertIn("next_retry_at", sql)
+
+    async def _test_list_pending_retries(self):
+        from persistence.repository import WebhookDeliveryRepo
+        from unittest.mock import AsyncMock
+        from datetime import datetime, timezone
+
+        repo = WebhookDeliveryRepo()
+        now = datetime.now(timezone.utc)
+        mock_conn = MagicMock()
+        mock_conn.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": "del-001",
+                    "webhook_id": "wh-001",
+                    "event_type": "push",
+                    "status": "failed",
+                    "request_url": "https://example.com/hook",
+                    "request_body": "{}",
+                    "attempts": 1,
+                    "next_retry_at": now,
+                    "created_at": now,
+                }
+            ]
+        )
+
+        rows = await repo.list_pending_retries(mock_conn)
+        self.assertEqual(rows[0]["id"], "del-001")
+        self.assertEqual(rows[0]["webhook_id"], "wh-001")
+
+
+class TestWebhookDeliveryRetry(unittest.TestCase):
+    def test_process_due_delivery_marks_success(self):
+        self._run_async_test(self._test_process_due_delivery_marks_success)
+
+    def _run_async_test(self, coro_func):
+        import asyncio
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(coro_func())
+        else:
+            import threading
+            event = threading.Event()
+            def runner():
+                asyncio.run(coro_func())
+                event.set()
+            threading.Thread(target=runner, daemon=True).start()
+            event.wait(timeout=10)
+
+    async def _test_process_due_delivery_marks_success(self):
+        from engine.webhook_delivery import process_due_webhook_deliveries
+        from unittest.mock import AsyncMock
+
+        conn = MagicMock()
+        repo = MagicMock()
+        repo.list_pending_retries = AsyncMock(
+            return_value=[
+                {
+                    "id": "del-001",
+                    "webhook_id": "wh-001",
+                    "event_type": "push",
+                    "request_url": "https://example.com/hook",
+                    "request_body": {"ok": True},
+                    "attempts": 1,
+                }
+            ]
+        )
+        repo.mark_status = AsyncMock(return_value=True)
+
+        with (
+            patch("persistence.connection.get_connection", AsyncMock(return_value=conn)),
+            patch("persistence.connection.release_connection", AsyncMock(return_value=None)),
+            patch("persistence.repository.WebhookDeliveryRepo", return_value=repo),
+            patch("engine.webhook_delivery._post_json", return_value={"ok": True, "status": 200, "body": "ok"}),
+        ):
+            result = await process_due_webhook_deliveries(limit=10)
+
+        self.assertEqual(result, {"processed": 1, "delivered": 1, "failed": 0})
+        repo.mark_status.assert_awaited_once()
+        args = repo.mark_status.await_args.args
+        self.assertEqual(args[1], "del-001")
+        self.assertEqual(args[2], "delivered")
 
 
 def reset_auth():

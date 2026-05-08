@@ -30,6 +30,7 @@ class ProductionGuard:
         for check in (
             self._check_api_keys,
             self._check_jwt_secret,
+            self._check_webhook_secret_key,
             self._check_cors_origins,
             self._check_database,
             self._check_redis,
@@ -54,6 +55,13 @@ class ProductionGuard:
         raw = os.environ.get("AI_TEAM_API_KEYS", "").strip()
         if not raw:
             return ("error", "AI_TEAM_API_KEYS is not set")
+        return None
+
+    def _check_webhook_secret_key(self) -> Optional[Tuple[str, str]]:
+        if not self.production:
+            return None
+        if not os.environ.get("AI_TEAM_WEBHOOK_SECRET_KEY", "").strip():
+            return ("error", "AI_TEAM_WEBHOOK_SECRET_KEY is not set")
         return None
 
     def _check_jwt_secret(self) -> Optional[Tuple[str, str]]:

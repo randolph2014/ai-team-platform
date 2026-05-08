@@ -115,6 +115,21 @@ class TestProductionGuardCorsCheck(unittest.TestCase):
         self.assertFalse(any("CORS_ORIGINS" in e for e in errors))
 
 
+class TestProductionGuardWebhookSecretCheck(unittest.TestCase):
+    @patch.dict("os.environ", {"AI_TEAM_WEBHOOK_SECRET_KEY": ""}, clear=False)
+    def test_missing_webhook_secret_key_in_production(self):
+        guard = ProductionGuard(production=True)
+        passed, errors, _ = guard.check_all()
+        self.assertFalse(passed)
+        self.assertTrue(any("AI_TEAM_WEBHOOK_SECRET_KEY is not set" in e for e in errors))
+
+    @patch.dict("os.environ", {"AI_TEAM_WEBHOOK_SECRET_KEY": "webhook-secret-key"}, clear=False)
+    def test_webhook_secret_key_present_in_production(self):
+        guard = ProductionGuard(production=True)
+        _, errors, _ = guard.check_all()
+        self.assertFalse(any("AI_TEAM_WEBHOOK_SECRET_KEY" in e for e in errors))
+
+
 class TestProductionGuardDatabaseCheck(unittest.TestCase):
     @patch.dict("os.environ", {"DATABASE_URL": "", "AI_TEAM_DB_URL": ""}, clear=False)
     def test_missing_database_url_in_production(self):
@@ -260,6 +275,7 @@ class TestProductionGuardAllPass(unittest.TestCase):
         "AI_TEAM_PRODUCTION": "true",
         "AI_TEAM_API_KEYS": "key1",
         "AI_TEAM_JWT_SECRET": "real-secret-abc",
+        "AI_TEAM_WEBHOOK_SECRET_KEY": "webhook-secret-key",
         "AI_TEAM_CORS_ORIGINS": "https://app.example.com",
         "DATABASE_URL": "postgresql://localhost/db",
         "AI_TEAM_REDIS_URL": "redis://localhost:6379/0",
