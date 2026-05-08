@@ -24,6 +24,18 @@ def _get_auth():
     return Depends(get_current_user)
 
 
+async def _audit(action: str, user: dict, resource_id: str = None, detail: dict = None) -> None:
+    from engine.audit import record_audit
+    actor = (user or {}).get("sub", "anonymous")
+    await record_audit(
+        action=action,
+        actor=actor,
+        resource_type="webhook",
+        resource_id=resource_id,
+        detail=detail or {},
+    )
+
+
 class WebhookCreate(BaseModel):
     url: str
     secret: str
@@ -295,4 +307,11 @@ if router:
             finally:
                 await release(conn)
 
+        from engine.audit import record_audit
+        await record_audit(
+            action="webhook_trigger",
+            actor="external",
+            resource_type="webhook",
+            detail={"event": event_type_header},
+        )
         return {"status": "processed", "event": event_type_header}

@@ -26,6 +26,18 @@ def _get_auth():
     from ..auth import get_current_user
     return Depends(get_current_user)
 
+
+async def _audit(action: str, user: dict, resource_id: str = None, detail: dict = None) -> None:
+    from engine.audit import record_audit
+    actor = (user or {}).get("sub", "anonymous")
+    await record_audit(
+        action=action,
+        actor=actor,
+        resource_type="pipeline",
+        resource_id=resource_id,
+        detail=detail or {},
+    )
+
 PIPELINES_DIR = TEMPLATES_ROOT / "pipelines"
 
 DEFAULT_STAGE_BY_ID = {stage.get("id"): stage for stage in DEFAULT_CONFIG.get("pipeline", []) if stage.get("id")}
@@ -424,6 +436,7 @@ if router:
     async def create_pipeline(body: PipelineCreate, auth: dict = _get_auth()):
         if _find_pipeline(body.id):
             raise HTTPException(status_code=409, detail="Pipeline with this id already exists")
+        await _audit("create_pipeline", auth, body.id)
 
         data = {
             "id": body.id,
@@ -466,6 +479,7 @@ if router:
         existing = _find_pipeline(pipeline_id)
         if not existing:
             raise HTTPException(status_code=404, detail="Pipeline not found")
+        await _audit("update_pipeline", auth, pipeline_id, {"keys": list(body.model_dump(exclude_none=True).keys())})
 
         updates = body.model_dump(exclude_none=True)
         for key, value in updates.items():
@@ -505,6 +519,7 @@ if router:
     async def delete_pipeline(pipeline_id: str, auth: dict = _get_auth()):
         if not _find_pipeline(pipeline_id):
             raise HTTPException(status_code=404, detail="Pipeline not found")
+        await _audit("delete_pipeline", auth, pipeline_id)
 
         from persistence.connection import get_connection, release_connection, is_available
         if not is_available():

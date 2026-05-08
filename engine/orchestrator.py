@@ -60,6 +60,7 @@ from .logging_config import (
     log_stage_start,
 )
 from .metrics import record_gate_result, record_run, record_stage_duration
+from .release_readiness import generate_release_readiness
 from .worktree import WorktreeError, WorktreeManager
 
 
@@ -323,7 +324,7 @@ class Orchestrator:
             logger.info("pipeline run completed status=%s duration=%.1fs", report.status, report.duration_seconds)
             self.bus.emit("run:completed", report.run_id, status=report.status, summary={"duration": report.duration_seconds})
             self._write_report(report, output_dir)
-            # 清理 checkpoint
+            generate_release_readiness(report, output_dir)
             if report.status == "completed":
                 self._cleanup_checkpoint(output_dir)
             return report
@@ -336,6 +337,7 @@ class Orchestrator:
             logger.error("pipeline run failed: %s", exc)
             self.bus.emit("run:completed", report.run_id, status="failed", summary={"error": str(exc)})
             self._write_report(report, output_dir)
+            generate_release_readiness(report, output_dir)
             if worktree_path and worktree_manager and self.config.get("worktree", {}).get("auto_cleanup_on_failure", False):
                 worktree_manager.cleanup(worktree_path)
             return report

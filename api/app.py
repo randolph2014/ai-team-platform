@@ -5,6 +5,8 @@ import os
 from contextlib import asynccontextmanager
 from typing import List
 
+from fastapi import Body, Depends, Request
+
 from .runtime import event_store
 
 logger = logging.getLogger(__name__)
@@ -94,16 +96,24 @@ def create_app():
     )
     app.state.event_store = event_store
 
-    from .auth import auth_enabled, handle_login
-    from fastapi import Body
+    from .auth import auth_enabled, get_current_user, handle_login
 
     @app.get("/api/auth/status")
     def auth_status():
         return {"auth_enabled": auth_enabled()}
 
     @app.post("/api/auth/login")
-    async def login(api_key: str = Body(..., embed=True)):
-        return await handle_login(api_key)
+    async def login(request: Request, api_key: str = Body(..., embed=True)):
+        from engine.audit import record_audit
+        result = await handle_login(api_key)
+        await record_audit(
+            action="login",
+            actor="api-user",
+            detail={"success": True},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+        return result
 
     # ---- Application routes ----
     app.include_router(runs_router, prefix="/api")
@@ -122,7 +132,7 @@ def create_app():
         return {"status": "ok"}
 
     @app.get("/metrics")
-    def metrics():
+    def metrics(user: dict = Depends(get_current_user)):
         from engine.metrics import get_metrics_output
 
         body, content_type = get_metrics_output()

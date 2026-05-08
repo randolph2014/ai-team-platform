@@ -33,6 +33,18 @@ def _get_auth():
     from ..auth import get_current_user
     return Depends(get_current_user)
 
+
+async def _audit(action: str, user: dict, detail: dict = None) -> None:
+    from engine.audit import record_audit
+    actor = (user or {}).get("sub", "anonymous")
+    await record_audit(
+        action=action,
+        actor=actor,
+        resource_type="settings",
+        resource_id="default",
+        detail=detail or {},
+    )
+
 SENSITIVE_KEY_PATTERNS: List[re.Pattern] = [
     re.compile(r"(api[_-]?key|apikey)", re.IGNORECASE),
     re.compile(r"(secret|token|password|passwd|credential)", re.IGNORECASE),
@@ -277,14 +289,17 @@ if router:
 
     @router.put("/settings")
     async def update_settings_put(body: SettingsUpdate, workdir: str = Query(default="."), auth: dict = _get_auth()):
+        await _audit("update_settings_put", auth, {"keys": list(body.model_dump(exclude_none=True).keys())})
         return await _do_update(body, workdir, replace_runtimes=True)
 
     @router.post("/settings")
     async def update_settings(body: SettingsUpdate, workdir: str = Query(default="."), auth: dict = _get_auth()):
+        await _audit("update_settings", auth, {"keys": list(body.model_dump(exclude_none=True).keys())})
         return await _do_update(body, workdir)
 
     @router.post("/settings/reset")
     async def reset_settings(workdir: str = Query(default="."), auth: dict = _get_auth()):
+        await _audit("reset_settings", auth)
         project_root = find_project_root(workdir)
 
         db_ok = await _db_delete_settings()

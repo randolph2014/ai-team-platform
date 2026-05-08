@@ -30,6 +30,18 @@ def _get_auth():
     return Depends(get_current_user)
 
 
+async def _audit(action: str, user: dict, resource_id: str = None, detail: dict = None) -> None:
+    from engine.audit import record_audit
+    actor = (user or {}).get("sub", "anonymous")
+    await record_audit(
+        action=action,
+        actor=actor,
+        resource_type="run",
+        resource_id=resource_id,
+        detail=detail or {},
+    )
+
+
 def _get_project_repo():
     from persistence.repository import ProjectRepo
     return ProjectRepo()
@@ -250,6 +262,7 @@ if router:
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc))
+        await _audit("create_run", user, run_id, {"requirement": body.requirement[:200]})
         return {
             "run_id": run_id,
             "status": "queued",
@@ -429,6 +442,7 @@ if router:
         except (ValueError, RuntimeError) as exc:
             code = 503 if isinstance(exc, RuntimeError) else 400
             raise HTTPException(status_code=code, detail=str(exc))
+        await _audit("human_decision", user, run_id, {"stage_id": body.stage_id, "decision": body.decision})
         return {"run_id": run_id, "status": "queued", "output_dir": str(resumed_output_dir)}
 
     @router.post("/runs/{run_id}/cancel")
@@ -465,11 +479,13 @@ if router:
             result = cancel_rq_job(rq_job_id)
             if result.get("cancelled"):
                 _update_run_status(run_id, resolved_workdir, "cancelled")
+                await _audit("cancel_run", user, run_id, {"rq_cancelled": True})
                 return {"run_id": run_id, "status": "cancelled", "rq_cancel": result}
             return {"run_id": run_id, "status": "cancel_failed", "rq_cancel": result}
 
         if output_dir.exists():
             _update_run_status(run_id, resolved_workdir, "cancelled")
+            await _audit("cancel_run", user, run_id)
             return {"run_id": run_id, "status": "cancelled"}
 
         raise HTTPException(status_code=404, detail="run not found")
@@ -518,6 +534,7 @@ if router:
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc))
+        await _audit("retry_run", user, new_run_id, {"original_run_id": run_id})
         return {
             "run_id": new_run_id,
             "original_run_id": run_id,
