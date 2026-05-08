@@ -1129,9 +1129,6 @@ tbody tr:hover td { background: var(--bg-hover); }
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
-.settingsFormGrid3Col {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
 .settingsFormGrid label {
   display: flex;
   flex-direction: column;
@@ -1168,24 +1165,19 @@ tbody tr:hover td { background: var(--bg-hover); }
 .settingsFormGrid input:focus,
 .settingsFormGrid select:focus,
 .settingsFormGrid textarea:focus { border-color: var(--accent); }
-.settingsReadOnlyInput {
-  color: var(--text-secondary) !important;
-  background: var(--bg-hover) !important;
-}
-.settingsReadOnlyField {
-  position: relative;
-}
-.settingsReadOnlyLabel {
-  position: absolute;
-  top: -6px;
-  right: 8px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-muted);
-  background: var(--bg-secondary);
-  padding: 1px 6px;
-  border-radius: 3px;
-  z-index: 1;
+.runtimeModelValue {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
 }
 .settingsFieldHint {
   display: block;
@@ -1243,16 +1235,6 @@ tbody tr:hover td { background: var(--bg-hover); }
 .metaTagRed { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
 .metaTagMuted { background: var(--bg-hover); color: var(--text-secondary); }
 .metaTagAccent { background: rgba(99, 102, 241, 0.15); color: var(--accent); }
-.runtimeMetaGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 12px;
-  margin-top: 12px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-.settingsWideMeta { grid-column: 1 / -1; }
 .iconButton.danger { color: var(--red); }
 .configNestedList { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .configNestedItem { padding: 6px 0; border-bottom: 1px solid var(--border); }

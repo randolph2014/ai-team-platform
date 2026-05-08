@@ -224,6 +224,18 @@ function normalizeConfig(config: AppConfig): AppConfig {
   };
 }
 
+function isAutoRuntime(id: string, runtime?: RuntimeConfig): boolean {
+  return id === 'auto' || runtime?.cli === 'auto';
+}
+
+function availableRuntimeCandidates(catalog: RuntimeCatalogResponse | null): RuntimeCandidate[] {
+  return (catalog?.candidates || []).filter((candidate) => candidate.available && candidate.supported);
+}
+
+function textValue(value?: string | null): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 async function readPromptDrafts(config: AppConfig): Promise<Record<string, PromptDraft>> {
   const agents = config.agents || [];
   const entries = await Promise.all(
@@ -268,10 +280,43 @@ function runtimeFromCandidate(candidate: RuntimeCandidate): RuntimeConfig {
   };
 }
 
+function materializeDetectedRuntimeDefaults(config: AppConfig, catalog: RuntimeCatalogResponse | null): AppConfig {
+  const normalized = normalizeConfig(config);
+  const currentRuntimes = normalized.runtimes || {};
+  const detectedRuntimes = availableRuntimeCandidates(catalog);
+  const hasAutoRuntime = Object.entries(currentRuntimes).some(([id, runtime]) => isAutoRuntime(id, runtime));
+  if (!hasAutoRuntime || detectedRuntimes.length === 0) return normalized;
+
+  const nextRuntimes: Record<string, RuntimeConfig> = {};
+  Object.entries(currentRuntimes).forEach(([id, runtime]) => {
+    if (!isAutoRuntime(id, runtime)) nextRuntimes[id] = runtime;
+  });
+  detectedRuntimes.forEach((candidate) => {
+    nextRuntimes[candidate.id] = {
+      ...runtimeFromCandidate(candidate),
+      ...(nextRuntimes[candidate.id] || {}),
+    };
+  });
+
+  const replacementRuntimeId = Object.keys(nextRuntimes)[0] || detectedRuntimes[0].id;
+  const nextAgents = (normalized.agents || []).map((agent) => (
+    agent.runtime_id === 'auto' ? { ...agent, runtime_id: replacementRuntimeId } : agent
+  ));
+  return {
+    ...normalized,
+    runtimes: nextRuntimes,
+    agents: nextAgents,
+  };
+}
+
 function candidateStatus(candidate: RuntimeCandidate): string {
   if (!candidate.available) return '未安装';
   if (!candidate.supported) return candidate.unsupported_reason || '暂未支持';
   return '可添加';
+}
+
+function runtimeDisplayModel(runtime: RuntimeConfig): string {
+  return textValue(runtime.model) || textValue(runtime.default_model);
 }
 
 function formatConfigValue(key: string, value: unknown): React.ReactNode {
@@ -362,7 +407,7 @@ export function Settings() {
         fetchSettings(),
         fetchRuntimeCatalog(),
       ]);
-      const normalized = normalizeConfig(settingsResult.config);
+      const normalized = materializeDetectedRuntimeDefaults(settingsResult.config, catalogResult);
       const prompts = await readPromptDrafts(normalized);
       setSettings(settingsResult);
       setRuntimeCatalog(catalogResult);
@@ -388,6 +433,9 @@ export function Settings() {
     [draftConfig],
   );
   const runtimeIds = Object.keys(runtimes);
+  const visibleRuntimeIds = runtimeIds.filter((id) => !isAutoRuntime(id, runtimes[id]));
+  const runtimeDisplayEntries = visibleRuntimeIds.map((id) => [id, runtimes[id]] as const);
+  const selectableRuntimeIds = visibleRuntimeIds.length > 0 ? visibleRuntimeIds : runtimeIds;
   const runtimeCandidates = runtimeCatalog?.candidates || [];
   const addableRuntimeCandidates = useMemo(
     () => runtimeCandidates.filter((candidate) => !runtimes[candidate.id]),
@@ -407,10 +455,6 @@ export function Settings() {
   function updateDraft(section: Partial<AppConfig>) {
     setDraftConfig((current) => ({ ...(current || {}), ...section }));
     setSaveMessage('');
-  }
-
-  function updateRuntime(id: string, value: RuntimeConfig) {
-    updateDraft({ runtimes: { ...runtimes, [id]: value } });
   }
 
   function addRuntimeFromCandidate() {
@@ -443,10 +487,12 @@ export function Settings() {
       : `确定删除 Runtime「${runtimeName}」？`;
     if (!window.confirm(msg)) return;
     const { [id]: _removed, ...nextRuntimes } = runtimes;
+    const nextVisibleRuntimeIds = Object.keys(nextRuntimes).filter((runtimeId) => !isAutoRuntime(runtimeId, nextRuntimes[runtimeId]));
+    const replacementRuntimeId = nextVisibleRuntimeIds[0] || Object.keys(nextRuntimes)[0] || '';
     updateDraft({
       runtimes: nextRuntimes,
       agents: agents.map((agent) =>
-        agent.runtime_id === id ? { ...agent, runtime_id: Object.keys(nextRuntimes)[0] || '' } : agent,
+        agent.runtime_id === id ? { ...agent, runtime_id: replacementRuntimeId } : agent,
       ),
     });
   }
@@ -490,7 +536,7 @@ export function Settings() {
         ...agents,
         {
           name: `agent-${agents.length + 1}`,
-          runtime_id: runtimeIds[0] || '',
+          runtime_id: selectableRuntimeIds[0] || '',
         },
       ],
     });
@@ -508,15 +554,13 @@ export function Settings() {
     setSaveMessage('');
     try {
       const result = await resetSettings();
-      const normalized = normalizeConfig(result.config);
-      const [catalog, prompts] = await Promise.all([
-        fetchRuntimeCatalog(),
-        readPromptDrafts(normalized),
-      ]);
+      const catalog = await fetchRuntimeCatalog();
+      const normalized = materializeDetectedRuntimeDefaults(result.config, catalog);
+      const promptDrafts = await readPromptDrafts(normalized);
       setSettings({ ...result, warnings: result.warnings || [] });
       setRuntimeCatalog(catalog);
       setDraftConfig(normalized);
-      setAgentPrompts(prompts);
+      setAgentPrompts(promptDrafts);
       setSaveMessage('设置已重置');
     } catch (e: unknown) {
       setSaveMessage(e instanceof Error ? e.message : '重置失败');
@@ -563,15 +607,13 @@ export function Settings() {
       }) as AppConfig;
       const result = await updateSettings(payload);
       await Promise.all(promptUpdates.map((item) => updateAgentPrompt(item.agentName, item.content)));
-      const normalized = normalizeConfig(result.config);
-      const [catalog, prompts] = await Promise.all([
-        fetchRuntimeCatalog(),
-        readPromptDrafts(normalized),
-      ]);
+      const catalog = await fetchRuntimeCatalog();
+      const normalized = materializeDetectedRuntimeDefaults(result.config, catalog);
+      const promptDrafts = await readPromptDrafts(normalized);
       setSettings(result);
       setRuntimeCatalog(catalog);
       setDraftConfig(normalized);
-      setAgentPrompts(prompts);
+      setAgentPrompts(promptDrafts);
       setSaveMessage(promptUpdates.length > 0 ? '设置和 Prompt 已保存' : '设置已保存');
     } catch (e: unknown) {
       setSaveMessage(e instanceof Error ? e.message : '保存失败');
@@ -648,41 +690,43 @@ export function Settings() {
           {activeSection === 'runtimes' && (
             <div className="settingGroup">
               <div className="configSectionHeader">
-                <h2><Cpu size={18} /> Runtimes<span className="configItemCount">{Object.keys(runtimes).length} 个 Runtime</span></h2>
-                <p className="configSectionSubtitle">管理 AI Agent 的命令行运行时环境，配置 CLI 路径、模型覆盖及环境变量。</p>
+                <h2><Cpu size={18} /> Runtimes<span className="configItemCount">{runtimeDisplayEntries.length} 个 Runtime</span></h2>
+                <p className="configSectionSubtitle">展示当前可用的 AI Agent 命令行运行时、版本和模型。</p>
               </div>
-              <div className="settingsSectionHeader">
-                <div></div>
-                <div className="runtimeAddRow">
-                  <select value={selectedCandidateId} onChange={(e) => setSelectedCandidateId(e.target.value)}>
-                    {addableRuntimeCandidates.length === 0 && <option value="">没有可添加 Runtime</option>}
-                    {addableRuntimeCandidates.map((candidate) => (
-                      <option key={candidate.id} value={candidate.id}>
-                        {candidate.name} · {candidateStatus(candidate)}
-                      </option>
-                    ))}
-                  </select>
-                  <button className="button" onClick={addRuntimeFromCandidate} disabled={!canAddSelectedCandidate}>
-                    <Plus size={14} /> 添加 Runtime
-                  </button>
+              {addableRuntimeCandidates.length > 0 && (
+                <div className="settingsSectionHeader">
+                  <div></div>
+                  <div className="runtimeAddRow">
+                    <select value={selectedCandidateId} onChange={(e) => setSelectedCandidateId(e.target.value)}>
+                      {addableRuntimeCandidates.map((candidate) => (
+                        <option key={candidate.id} value={candidate.id}>
+                          {candidate.name} · {candidateStatus(candidate)}
+                        </option>
+                      ))}
+                    </select>
+                    <button className="button" onClick={addRuntimeFromCandidate} disabled={!canAddSelectedCandidate}>
+                      <Plus size={14} /> 添加 Runtime
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
               {selectedCandidate && (!selectedCandidate.available || !selectedCandidate.supported) && (
                 <div className="settingsMetaLine" style={{ marginBottom: 12 }}>
                   {selectedCandidate.name}: {candidateStatus(selectedCandidate)}
                 </div>
               )}
               <div className="settingsCards">
-                {Object.entries(runtimes).map(([id, runtime]) => {
+                {runtimeDisplayEntries.map(([id, runtime]) => {
                   const candidateRuntime = runtimeCandidates.find((candidate) => candidate.id === id);
                   const displayRuntime = { ...(candidateRuntime || {}), ...(runtimeCatalog?.runtimes?.[id] || {}), ...runtime };
+                  const version = textValue(displayRuntime.version);
+                  const model = runtimeDisplayModel(displayRuntime);
                   return (
                     <div className="settingsEditCard" key={id}>
                       <div className="settingsCardHeader">
                         <div className="settingsCardTitleGroup">
                           <strong className="settingsCardTitle">{runtime.name || displayRuntime.name || id}</strong>
-                          {displayRuntime.version && <span className="settingsCardSubtitle">{displayRuntime.cli || runtime.cli} · v{displayRuntime.version}</span>}
-                          {!displayRuntime.version && <span className="settingsCardSubtitle">{displayRuntime.cli || runtime.cli}</span>}
+                          {version && <span className="settingsCardSubtitle">{version}</span>}
                         </div>
                         <div className="settingsCardActions">
                           <span className={`metaTag ${displayRuntime.available === false ? 'metaTagRed' : 'metaTagGreen'}`}>
@@ -693,30 +737,9 @@ export function Settings() {
                           </button>
                         </div>
                       </div>
-                      <div className="settingsFormGrid settingsFormGrid3Col">
-                        <label>
-                          Name
-                          <input value={runtime.name || ''} onChange={(e) => updateRuntime(id, { ...runtime, name: e.target.value })} />
-                        </label>
-                        <label>
-                          CLI
-                          <div className="settingsReadOnlyField">
-                            <span className="settingsReadOnlyLabel">自动检测</span>
-                            <input value={displayRuntime.cli || runtime.cli || ''} readOnly className="settingsReadOnlyInput" />
-                          </div>
-                        </label>
-                        <label>
-                          Model Override
-                          <input
-                            value={runtime.model || runtime.default_model || ''}
-                            placeholder={displayRuntime.model ? `CLI 当前配置: ${displayRuntime.model}` : '留空时使用 CLI 当前配置'}
-                            onChange={(e) => updateRuntime(id, { ...runtime, model: e.target.value, default_model: undefined })}
-                          />
-                        </label>
-                      </div>
-                      {displayRuntime.model && (
-                        <div className="settingsMetaLine settingsMetaInline" style={{ justifyContent: 'flex-start' }}>
-                          <span className="metaTag">{displayRuntime.model}</span>
+                      {model && (
+                        <div className="runtimeModelValue">
+                          {model}
                         </div>
                       )}
                       {runtime.env && (
@@ -728,7 +751,7 @@ export function Settings() {
                     </div>
                   );
                 })}
-                {Object.keys(runtimes).length === 0 && <div className="emptyState">暂无 Runtime 配置</div>}
+                {runtimeDisplayEntries.length === 0 && <div className="emptyState">暂无可用 Runtime</div>}
               </div>
             </div>
           )}
@@ -793,7 +816,7 @@ export function Settings() {
                             Runtime
                             <select className="agentRuntimeSelect" value={agent.runtime_id} onChange={(e) => updateAgent(activeAgentTab, { runtime_id: e.target.value })}>
                               <option value="">选择 Runtime</option>
-                              {runtimeIds.map((runtimeId) => (
+                              {selectableRuntimeIds.map((runtimeId) => (
                                 <option key={runtimeId} value={runtimeId}>{runtimes[runtimeId]?.name || runtimeId}</option>
                               ))}
                             </select>
@@ -803,9 +826,9 @@ export function Settings() {
                             <input
                               value={agent.role || ''}
                               onChange={(e) => updateAgent(activeAgentTab, { role: e.target.value })}
-                              placeholder="如：summarizer、developer、reviewer 等"
+                              placeholder="如：planner、challenger、coder、reviewer"
                             />
-                            <span className="settingsFieldHint">Agent 在协作流程中的职责定位，如 summarizer（总结者）、developer（开发者）</span>
+                            <span className="settingsFieldHint">Agent 在协作流程中的职责定位，默认收敛为 planner、challenger、coder、reviewer</span>
                           </label>
                           <label className="settingsWideField">
                             Soul
