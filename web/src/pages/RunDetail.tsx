@@ -65,46 +65,58 @@ export function RunDetail({ runId }: { runId: string }) {
 
   useEffect(() => {
     if (!run || !workdir) return;
-    const socket = new WebSocket(runWebSocketUrl(runId));
     let disposed = false;
-    socket.onopen = () => {
-      if (!disposed) setWsConnected(true);
-    };
-    socket.onclose = () => {
-      if (!disposed) setWsConnected(false);
-    };
-    socket.onerror = () => {
-      if (!disposed) setWsConnected(false);
-    };
-    socket.onmessage = (message) => {
-      const event = JSON.parse(message.data) as RunEvent;
-      if (event.type === 'agent:output' && typeof event.payload.text === 'string') {
-        setLiveLines((lines) => [...lines.slice(-120), event.payload.text as string]);
-      }
-      if (event.type === 'run:completed') {
-        fetchRun(runId, workdir).then((updated) => {
-          if (!disposed) {
-            setRun(updated);
-            if (updated.changed_files?.length) setChangedFiles(updated.changed_files);
-            if (updated.diff_stat) setDiffStat(updated.diff_stat);
-          }
-        }).catch(() => undefined);
-      }
-      if (event.type === 'files:changed') {
-        const files = (event.payload.changed_files as string[]) || [];
-        if (files.length) setChangedFiles(files);
-        if (typeof event.payload.diff_stat === 'string') setDiffStat(event.payload.diff_stat);
-      }
-    };
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectDelay = 1000;
+    const MAX_RECONNECT_DELAY = 30000;
+
+    function connect() {
+      if (disposed) return;
+      const socket = new WebSocket(runWebSocketUrl(runId));
+      socket.onopen = () => {
+        if (!disposed) {
+          setWsConnected(true);
+          reconnectDelay = 1000;
+        }
+      };
+      socket.onclose = () => {
+        if (!disposed) {
+          setWsConnected(false);
+          reconnectTimer = setTimeout(() => {
+            reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+            connect();
+          }, reconnectDelay);
+        }
+      };
+      socket.onerror = () => {
+        if (!disposed) setWsConnected(false);
+      };
+      socket.onmessage = (message) => {
+        const event = JSON.parse(message.data) as RunEvent;
+        if (event.type === 'agent:output' && typeof event.payload.text === 'string') {
+          setLiveLines((lines) => [...lines.slice(-120), event.payload.text as string]);
+        }
+        if (event.type === 'run:completed') {
+          fetchRun(runId, workdir).then((updated) => {
+            if (!disposed) {
+              setRun(updated);
+              if (updated.changed_files?.length) setChangedFiles(updated.changed_files);
+              if (updated.diff_stat) setDiffStat(updated.diff_stat);
+            }
+          }).catch(() => undefined);
+        }
+        if (event.type === 'files:changed') {
+          const files = (event.payload.changed_files as string[]) || [];
+          if (files.length) setChangedFiles(files);
+          if (typeof event.payload.diff_stat === 'string') setDiffStat(event.payload.diff_stat);
+        }
+      };
+    }
+
+    connect();
     return () => {
       disposed = true;
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.close();
-      } else if (socket.readyState === WebSocket.CONNECTING) {
-        socket.onopen = () => {
-          if (disposed) socket.close();
-        };
-      }
+      if (reconnectTimer) clearTimeout(reconnectTimer);
     };
   }, [run ? run.run_id : '', workdir]);
 

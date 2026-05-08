@@ -46,11 +46,12 @@ def execute_pipeline(
     execution_mode: str | None = None,
 ) -> str:
     from engine.config import find_project_root
-    from engine.events import EventBus
+    from engine.events import EventBus, RedisEventBus
     from engine.orchestrator import Orchestrator
 
     project_root = find_project_root(workdir)
     bus = EventBus()
+    redis_bus = RedisEventBus(bus)
     orchestrator = Orchestrator(
         Path(project_root),
         config_path=config_path,
@@ -68,6 +69,8 @@ def execute_pipeline(
     except Exception as exc:
         _persist_run_failure(run_id, requirement, workdir, config_path, str(exc))
         raise
+    finally:
+        redis_bus.close()
 
 
 def execute_resume(
@@ -80,7 +83,7 @@ def execute_resume(
     human_decision: Optional[Dict[str, Any]] = None,
 ) -> str:
     from engine.config import find_project_root
-    from engine.events import EventBus
+    from engine.events import EventBus, RedisEventBus
     from engine.models import HumanDecision
     from engine.orchestrator import Orchestrator
 
@@ -99,6 +102,7 @@ def execute_resume(
             decision = HumanDecision(**human_decision)
 
     bus = EventBus()
+    redis_bus = RedisEventBus(bus)
     orchestrator = Orchestrator(
         Path(project_root),
         config_path=config_path,
@@ -118,6 +122,8 @@ def execute_resume(
     except Exception as exc:
         _persist_run_failure(run_id, requirement, workdir, config_path, str(exc))
         raise
+    finally:
+        redis_bus.close()
 
 
 if __name__ == "__main__":
