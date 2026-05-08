@@ -11,9 +11,11 @@ import {
 vi.mock('../lib/api', () => ({
   apiFetch: vi.fn(() => Promise.resolve({
     ok: true,
-    json: () => Promise.resolve([]),
+    json: () => Promise.resolve([
+      { id: 'proj-1', name: 'Repo', root_path: '/repo', created_at: '2026-01-01T00:00:00' },
+    ]),
   })),
-  createRun: vi.fn(() => Promise.resolve({ run_id: 'api-run-1', status: 'running' })),
+  createRun: vi.fn(() => Promise.resolve({ run_id: 'api-run-1', status: 'running', project_root: '/repo' })),
   fetchPipelineTemplates: vi.fn(() => Promise.resolve([
     {
       id: 'project-delivery',
@@ -70,11 +72,12 @@ describe('NewRunModal pipeline selection', () => {
     render(<NewRunModal open onClose={vi.fn()} onRefreshNeeded={vi.fn()} />);
 
     await screen.findByRole('option', { name: '修复 bug 流水线' });
+    await screen.findByRole('option', { name: 'Repo (/repo)' });
     fireEvent.change(screen.getByLabelText('Pipeline 模板'), {
       target: { value: 'template:bugfix' },
     });
-    fireEvent.change(screen.getByLabelText('项目路径（手动输入）'), {
-      target: { value: '/repo' },
+    fireEvent.change(screen.getByLabelText('项目'), {
+      target: { value: 'proj-1' },
     });
     fireEvent.change(screen.getByLabelText('需求描述'), {
       target: { value: '修复登录失败' },
@@ -82,7 +85,7 @@ describe('NewRunModal pipeline selection', () => {
     fireEvent.click(screen.getByRole('button', { name: '开始运行' }));
 
     await waitFor(() => {
-      expect(createRunMock).toHaveBeenCalledWith('/repo', '修复登录失败', { pipeline_id: 'template:bugfix' });
+      expect(createRunMock).toHaveBeenCalledWith('', '修复登录失败', { pipeline_id: 'template:bugfix', project_id: 'proj-1' });
     });
     expect(rememberRunWorkdirMock).toHaveBeenCalledWith('api-run-1', '/repo');
   });

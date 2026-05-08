@@ -1208,6 +1208,24 @@ class TestArtifactsRoutes(BaseRoutesTest):
         )
         self.assertEqual(response.status_code, 404)
 
+    def test_artifact_path_rejects_sibling_prefix_escape(self) -> None:
+        """artifact 文件边界必须按路径层级判断，不能让 run2 命中 run。"""
+        from fastapi import HTTPException
+        from api.routes.artifacts import _resolve_artifact_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            run_dir = base / "run"
+            sibling_dir = base / "run2"
+            run_dir.mkdir()
+            sibling_dir.mkdir()
+            (sibling_dir / "secret.txt").write_text("secret", encoding="utf-8")
+
+            with self.assertRaises(HTTPException) as ctx:
+                _resolve_artifact_path(run_dir, "../run2/secret.txt")
+
+            self.assertEqual(ctx.exception.status_code, 404)
+
 
 class TestSettingsDesensitization(BaseRoutesTest):
     """测试 settings GET 敏感字段脱敏"""
@@ -1528,6 +1546,48 @@ class TestRunsFallbackToFilesystem(BaseRoutesTest):
 class TestProjectRoutes(BaseRoutesTest):
     """测试 /api/projects CRUD 端点"""
 
+    def test_validate_root_path_allows_allowed_root_child(self) -> None:
+        """AI_TEAM_ALLOWED_ROOTS 允许 root 自身及其子路径。"""
+        from api.routes.projects import _validate_root_path
+
+        allowed_root = self.project_root
+        child = allowed_root / "child"
+        child.mkdir()
+
+        with patch.dict(os.environ, {"AI_TEAM_ALLOWED_ROOTS": str(allowed_root)}, clear=False):
+            self.assertEqual(_validate_root_path(str(child)), str(child.resolve()))
+
+    def test_validate_root_path_rejects_sibling_prefix(self) -> None:
+        """root2 不能因为字符串前缀匹配 root 而越过项目根目录边界。"""
+        from fastapi import HTTPException
+        from api.routes.projects import _validate_root_path
+
+        base = self.project_root.parent
+        allowed_root = base / f"{self.project_root.name}-allowed-root"
+        sibling = base / f"{self.project_root.name}-allowed-root2"
+        allowed_root.mkdir()
+        sibling.mkdir()
+
+        with patch.dict(os.environ, {"AI_TEAM_ALLOWED_ROOTS": str(allowed_root)}, clear=False):
+            with self.assertRaises(HTTPException) as ctx:
+                _validate_root_path(str(sibling))
+
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_create_project_rejects_sibling_prefix_outside_allowed_roots(self) -> None:
+        """POST /api/projects 也必须拒绝 root/root2 这类字符串前缀逃逸。"""
+        allowed_root = self.project_root
+        sibling = allowed_root.parent / f"{allowed_root.name}2"
+        sibling.mkdir()
+
+        with patch.dict(os.environ, {"AI_TEAM_ALLOWED_ROOTS": str(allowed_root)}, clear=False):
+            response = self.client.post(
+                "/api/projects",
+                json={"name": "Bad Project", "root_path": str(sibling)},
+            )
+
+        self.assertEqual(response.status_code, 403)
+
     def test_list_projects_empty(self) -> None:
         """GET /api/projects 无 DB 时返回空列表"""
         with patch("api.routes.projects.try_persistence", return_value=None):
@@ -1681,7 +1741,8 @@ class TestProductionWorkdirRejection(BaseRoutesTest):
         conn = AsyncMock()
         fake_db = (AsyncMock(return_value=conn), AsyncMock(), None, None, None)
 
-        with patch("api.routes.runs.is_production_mode", return_value=True), \
+        with patch.dict(os.environ, {"AI_TEAM_ALLOWED_ROOTS": ""}, clear=False), \
+             patch("api.routes.runs.is_production_mode", return_value=True), \
              patch("api.routes.runs.try_persistence", return_value=fake_db), \
              patch("api.routes.runs._get_project_repo", return_value=fake_repo):
             response = self.client.post(
@@ -1695,6 +1756,38 @@ class TestProductionWorkdirRejection(BaseRoutesTest):
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["run_id"], "prod-test-run")
+
+    def test_create_run_rejects_project_id_root_outside_allowed_roots(self) -> None:
+        """通过 project_id 解析出的 root_path 仍必须经过 allowlist 校验。"""
+        from unittest.mock import AsyncMock
+
+        outside_root = self.project_root.parent / f"{self.project_root.name}2"
+        outside_root.mkdir()
+
+        async def fake_get_by_id(conn, id):
+            return {"id": id, "name": "Outside", "root_path": str(outside_root), "created_at": "2026-01-01T00:00:00"}
+
+        fake_repo = type("FakeRepo", (), {"get_by_id": staticmethod(fake_get_by_id)})()
+
+        conn = AsyncMock()
+        fake_db = (AsyncMock(return_value=conn), AsyncMock(), None, None, None)
+
+        with patch.dict(os.environ, {"AI_TEAM_ALLOWED_ROOTS": str(self.project_root)}, clear=False), \
+             patch("api.routes.runs.try_persistence", return_value=fake_db), \
+             patch("api.routes.runs._get_project_repo", return_value=fake_repo), \
+             patch("api.routes.runs.start_run_background") as start_bg:
+            response = self.client.post(
+                "/api/runs",
+                json={
+                    "requirement": "test",
+                    "project_id": "proj-outside",
+                    "run_id": "outside-project-run",
+                    "yes": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 403)
+        start_bg.assert_not_called()
 
 
 class TestProjectOwnershipValidation(BaseRoutesTest):

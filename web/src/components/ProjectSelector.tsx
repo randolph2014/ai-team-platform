@@ -9,12 +9,13 @@ export interface Project {
 }
 
 interface Props {
+  id?: string;
   value: string;
   onChange: (projectId: string) => void;
   error?: string;
 }
 
-export function ProjectSelector({ value, onChange, error }: Props) {
+export function ProjectSelector({ id, value, onChange, error }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -33,7 +34,7 @@ export function ProjectSelector({ value, onChange, error }: Props) {
   if (loading) {
     return (
       <>
-        <select disabled>
+        <select id={id} disabled>
           <option>加载中...</option>
         </select>
       </>
@@ -43,7 +44,7 @@ export function ProjectSelector({ value, onChange, error }: Props) {
   if (projects.length === 0) {
     return (
       <>
-        <select disabled>
+        <select id={id} disabled>
           <option>无可用项目</option>
         </select>
         <span className="fieldError">请先在 /api/projects 创建项目</span>
@@ -53,7 +54,7 @@ export function ProjectSelector({ value, onChange, error }: Props) {
 
   return (
     <>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
+      <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">选择项目</option>
         {projects.map((p) => (
           <option key={p.id} value={p.id}>{p.name} ({p.root_path})</option>

@@ -35,6 +35,11 @@ def _get_project_repo():
     return ProjectRepo()
 
 
+def _validate_project_root(root_path: str) -> str:
+    from .projects import _validate_root_path
+    return _validate_root_path(root_path)
+
+
 async def _resolve_workdir(project_id: Optional[str], workdir: Optional[str]) -> str:
     if project_id:
         db = try_persistence()
@@ -49,7 +54,7 @@ async def _resolve_workdir(project_id: Optional[str], workdir: Optional[str]) ->
             project = await repo.get_by_id(conn, project_id)
             if project is None:
                 raise HTTPException(status_code=404, detail="project not found")
-            return project["root_path"]
+            return _validate_project_root(project["root_path"])
         finally:
             await release_connection(conn)
 
@@ -73,7 +78,7 @@ async def _resolve_workdir_optional(project_id: Optional[str], workdir: Optional
             project = await repo.get_by_id(conn, project_id)
             if project is None:
                 return None
-            return project["root_path"]
+            return _validate_project_root(project["root_path"])
         finally:
             await release_connection(conn)
     return workdir

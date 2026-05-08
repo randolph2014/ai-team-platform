@@ -14,10 +14,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from urllib.parse import quote
+from unittest.mock import AsyncMock, patch
 
 try:
     from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
 except ImportError:
     HAS_FASTAPI = False
 else:
@@ -103,6 +105,28 @@ class TestAuthDisabled(_AuthTestBase):
             response = client.get("/api/runs", params={"workdir": str(self.project_root)})
             self.assertEqual(response.status_code, 200)
 
+    def test_websocket_allows_connection_when_auth_disabled(self) -> None:
+        """WS /ws/runs/{run_id} accepts clients when auth is not configured."""
+        with patch.dict(os.environ, {"AI_TEAM_API_KEYS": "", "AI_TEAM_JWT_SECRET": ""}, clear=False):
+            from api.auth import reset_auth_config
+            from api.app import create_app
+            from api.runtime import event_store
+            from engine.models import Event
+
+            reset_auth_config()
+            run_id = "ws-auth-disabled"
+            event_store.publish(Event(type="test_event", run_id=run_id, payload={"ok": True}))
+            client = TestClient(create_app())
+
+            with patch("api.ws._load_db_events", new=AsyncMock(return_value=[])), \
+                 patch("api.ws._load_legacy_db_events", new=AsyncMock(return_value=[])), \
+                 patch("api.ws._try_redis_subscribe", new=AsyncMock(return_value=None)):
+                with client.websocket_connect(f"/ws/runs/{run_id}") as ws:
+                    data = ws.receive_json()
+
+            self.assertEqual(data["type"], "test_event")
+            self.assertEqual(data["payload"], {"ok": True})
+
 
 class TestAuthEnabled(_AuthTestBase):
     """Tests when AI_TEAM_API_KEYS is configured."""
@@ -186,6 +210,49 @@ class TestAuthEnabled(_AuthTestBase):
                 headers={"Authorization": f"Bearer {token}"},
             )
             self.assertEqual(response.status_code, 200)
+        finally:
+            self._teardown_auth_env()
+
+    def test_websocket_rejects_missing_token_when_auth_enabled(self) -> None:
+        """WS /ws/runs/{run_id} rejects clients without a JWT when auth is enabled."""
+        try:
+            self._setup_auth_env()
+            try:
+                with patch("api.ws._load_db_events", new=AsyncMock(return_value=[])), \
+                     patch("api.ws._load_legacy_db_events", new=AsyncMock(return_value=[])), \
+                     patch("api.ws._try_redis_subscribe", new=AsyncMock(return_value=None)):
+                    with self.client.websocket_connect("/ws/runs/ws-auth-required") as ws:
+                        message = ws.receive()
+                self.assertEqual(message["type"], "websocket.close")
+                self.assertEqual(message["code"], 4001)
+            except WebSocketDisconnect as exc:
+                self.assertEqual(exc.code, 4001)
+        finally:
+            self._teardown_auth_env()
+
+    def test_websocket_accepts_valid_jwt_when_auth_enabled(self) -> None:
+        """WS /ws/runs/{run_id} accepts clients with a valid JWT."""
+        try:
+            self._setup_auth_env()
+
+            login_resp = self.client.post("/api/auth/login", json={"api_key": "test-key-1"})
+            self.assertEqual(login_resp.status_code, 200)
+            token = login_resp.json()["access_token"]
+
+            from api.runtime import event_store
+            from engine.models import Event
+
+            run_id = "ws-auth-valid"
+            event_store.publish(Event(type="test_event", run_id=run_id, payload={"ok": True}))
+
+            with patch("api.ws._load_db_events", new=AsyncMock(return_value=[])), \
+                 patch("api.ws._load_legacy_db_events", new=AsyncMock(return_value=[])), \
+                 patch("api.ws._try_redis_subscribe", new=AsyncMock(return_value=None)):
+                with self.client.websocket_connect(f"/ws/runs/{run_id}?token={quote(token)}") as ws:
+                    data = ws.receive_json()
+
+            self.assertEqual(data["type"], "test_event")
+            self.assertEqual(data["payload"], {"ok": True})
         finally:
             self._teardown_auth_env()
 

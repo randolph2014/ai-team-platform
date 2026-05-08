@@ -156,7 +156,7 @@ export async function createRun(
   workdir: string,
   requirement: string,
   options?: string | CreateRunOptions,
-): Promise<{ run_id: string; status: string }> {
+): Promise<{ run_id: string; status: string; project_root?: string; output_dir?: string }> {
   const extra: CreateRunOptions = typeof options === 'string' ? { config_path: options } : (options || {});
   const body: Record<string, unknown> = { requirement, yes: false, ...extra };
   if (extra.project_id) {

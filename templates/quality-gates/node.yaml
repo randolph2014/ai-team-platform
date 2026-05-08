@@ -1,6 +1,12 @@
 # Node.js 项目质量门禁模板
 # 用于 develop 阶段后自动验证代码质量
 quality_gates:
+  - name: node-build
+    type: command
+    command: "npm run build 2>&1"
+    required: true
+    timeout: 300
+    max_retries: 1
   - name: typescript-check
     type: command
     command: "npx tsc --noEmit 2>&1"

@@ -101,6 +101,8 @@ async def _validate_project_ownership(run_id: str, project_id: Optional[str]) ->
         project = await _get_project_repo().get_by_id(conn, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="project not found")
+        from .projects import _validate_root_path
+        _validate_root_path(project["root_path"])
         repo = PipelineRunRepo()
         run = await repo.get_by_id(conn, run_db_id(run_id))
         if run is None:
@@ -121,6 +123,22 @@ def _run_dir(workdir: Optional[str], run_id: str) -> Path:
         if path.parent.name == run_id:
             return path.parent
     raise FileNotFoundError(run_id)
+
+
+def _is_within_path(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_artifact_path(run_dir: Path, filename: str) -> Path:
+    run_root = run_dir.resolve()
+    path = (run_dir / filename).resolve()
+    if not _is_within_path(path, run_root) or not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return path
 
 
 if router:
@@ -153,9 +171,7 @@ if router:
             run_dir = _run_dir(workdir, run_id)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="run not found")
-        path = (run_dir / filename).resolve()
-        if not str(path).startswith(str(run_dir.resolve())) or not path.exists() or not path.is_file():
-            raise HTTPException(status_code=404, detail="artifact not found")
+        path = _resolve_artifact_path(run_dir, filename)
 
         suffix = path.suffix.lower()
         media_type = _TEXT_MIME_MAP.get(suffix)

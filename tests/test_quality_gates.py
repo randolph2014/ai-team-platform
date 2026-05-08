@@ -190,8 +190,11 @@ class TestInjectDefaultGates(unittest.TestCase):
             result = inject_default_gates(root, [])
             self.assertGreater(len(result), 0)
             names = [g["name"] for g in result]
+            commands = [g["command"] for g in result]
+            self.assertIn("node-build", names)
             self.assertIn("typescript-check", names)
             self.assertIn("test", names)
+            self.assertIn("npm run build 2>&1", commands)
 
     def test_go_project_gets_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+from queue import Empty
 from typing import Optional
 
 from .db import run_db_id, try_persistence
@@ -148,12 +149,20 @@ async def _try_redis_subscribe(run_id: str, websocket: "WebSocket"):
                 pass
 
 
+async def _wait_for_disconnect(websocket: "WebSocket") -> None:
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        return
+
+
 if router:
 
     @router.websocket("/ws/runs/{run_id}")
     async def run_events(websocket: WebSocket, run_id: str, token: Optional[str] = None):
         try:
-            from ..auth import verify_ws_token
+            from .auth import verify_ws_token
             await verify_ws_token(token)
         except Exception:
             await websocket.accept()
@@ -189,9 +198,13 @@ if router:
         redis_task = asyncio.create_task(_try_redis_subscribe(run_id, websocket))
 
         queue = event_store.subscribe(run_id)
+        disconnect_task = asyncio.create_task(_wait_for_disconnect(websocket))
         try:
-            while True:
-                event = await asyncio.to_thread(queue.get)
+            while not disconnect_task.done():
+                try:
+                    event = await asyncio.to_thread(queue.get, True, 0.25)
+                except Empty:
+                    continue
                 await websocket.send_json(event.model_dump(mode="json"))
         except WebSocketDisconnect:
             pass
@@ -199,7 +212,12 @@ if router:
             pass
         finally:
             event_store.unsubscribe(run_id, queue)
+            disconnect_task.cancel()
             redis_task.cancel()
+            try:
+                await disconnect_task
+            except (asyncio.CancelledError, Exception):
+                pass
             try:
                 await redis_task
             except (asyncio.CancelledError, Exception):

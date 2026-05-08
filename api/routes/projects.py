@@ -38,17 +38,25 @@ def _get_allowed_roots() -> List[str]:
     return [r.strip() for r in raw.split(",") if r.strip()]
 
 
+def _is_within_path(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def _validate_root_path(root_path: str) -> str:
-    resolved = str(Path(root_path).resolve())
+    resolved_path = Path(root_path).resolve()
     allowed = _get_allowed_roots()
     if not allowed:
-        return resolved
+        return str(resolved_path)
     for prefix in allowed:
-        if resolved.startswith(str(Path(prefix).resolve())):
-            return resolved
+        if _is_within_path(resolved_path, Path(prefix).resolve()):
+            return str(resolved_path)
     raise HTTPException(
         status_code=403,
-        detail=f"root_path '{resolved}' is not within allowed roots",
+        detail=f"root_path '{resolved_path}' is not within allowed roots",
     )
 
 

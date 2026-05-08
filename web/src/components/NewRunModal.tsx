@@ -88,11 +88,12 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
           project_id: projectId || undefined,
         },
       );
-      if (!projectId) {
-        rememberRunWorkdir(payload.run_id, workdir.trim());
+      const resolvedWorkdir = workdir.trim() || payload.project_root || '';
+      if (resolvedWorkdir) {
+        rememberRunWorkdir(payload.run_id, resolvedWorkdir);
       }
       onRefreshNeeded();
-      window.history.pushState({}, '', `/runs/${payload.run_id}${runQuery(workdir.trim())}`);
+      window.history.pushState({}, '', `/runs/${payload.run_id}${runQuery(resolvedWorkdir)}`);
       window.dispatchEvent(new PopStateEvent('popstate'));
       onClose();
     } catch (e: unknown) {
@@ -129,7 +130,7 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
           </select>
         )}
         <label htmlFor="new-run-project">项目</label>
-        <ProjectSelector value={projectId} onChange={(id) => { setProjectId(id); if (id) setWorkdir(''); }} error={validationErrors.project} />
+        <ProjectSelector id="new-run-project" value={projectId} onChange={(id) => { setProjectId(id); if (id) setWorkdir(''); }} error={validationErrors.project} />
         {!projectId && (
           <>
             <label htmlFor="new-run-workdir">项目路径（手动输入）</label>
