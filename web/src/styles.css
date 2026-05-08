@@ -443,10 +443,10 @@ tbody tr:hover td { background: var(--bg-hover); }
   font-weight: 700;
   white-space: nowrap;
 }
-.badge-running { color: var(--blue); background: var(--blue-bg); border: 1px solid #1e40af; }
+.badge-running, .badge-resuming { color: var(--blue); background: var(--blue-bg); border: 1px solid #1e40af; }
 .badge-completed, .badge-passed { color: var(--green); background: var(--green-bg); border: 1px solid #166534; }
-.badge-failed { color: var(--red); background: var(--red-bg); border: 1px solid #991b1b; }
-.badge-pending, .badge-waiting, .badge-warning { color: var(--yellow); background: var(--yellow-bg); border: 1px solid #854d0e; }
+.badge-failed, .badge-blocked { color: var(--red); background: var(--red-bg); border: 1px solid #991b1b; }
+.badge-queued, .badge-paused, .badge-pending, .badge-waiting, .badge-warning { color: var(--yellow); background: var(--yellow-bg); border: 1px solid #854d0e; }
 .spin, .spinner { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

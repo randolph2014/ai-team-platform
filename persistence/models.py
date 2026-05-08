@@ -75,7 +75,7 @@ class PipelineRunRecord(BaseModel):
 
     id: str
     pipeline_id: Optional[str] = None
-    status: str = "pending"
+    status: str = "queued"
     project_root: str = ""
     main_branch: str = "main"
     requirement: Optional[str] = None

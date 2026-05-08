@@ -20,14 +20,24 @@ describe('StatusBadge', () => {
     expect(screen.getByText('失败')).toBeInTheDocument();
   });
 
-  it('renders pending status', () => {
-    render(<StatusBadge status="pending" />);
-    expect(screen.getByText('等待中')).toBeInTheDocument();
+  it('renders queued status', () => {
+    render(<StatusBadge status="queued" />);
+    expect(screen.getByText('排队中')).toBeInTheDocument();
   });
 
-  it('renders waiting status', () => {
-    render(<StatusBadge status="waiting" />);
-    expect(screen.getByText('待验收')).toBeInTheDocument();
+  it('renders paused status', () => {
+    render(<StatusBadge status="paused" />);
+    expect(screen.getByText('已暂停')).toBeInTheDocument();
+  });
+
+  it('renders resuming status', () => {
+    render(<StatusBadge status="resuming" />);
+    expect(screen.getByText('恢复中')).toBeInTheDocument();
+  });
+
+  it('renders blocked status', () => {
+    render(<StatusBadge status="blocked" />);
+    expect(screen.getByText('已阻断')).toBeInTheDocument();
   });
 
   it('renders cancelled status', () => {

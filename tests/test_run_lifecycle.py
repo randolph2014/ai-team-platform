@@ -14,11 +14,11 @@ from engine.models import (
 
 
 class TestRunStateMachine(unittest.TestCase):
-    def test_pending_to_running(self):
-        validate_run_transition("pending", "running")
+    def test_queued_to_running(self):
+        validate_run_transition("queued", "running")
 
-    def test_pending_to_cancelled(self):
-        validate_run_transition("pending", "cancelled")
+    def test_queued_to_cancelled(self):
+        validate_run_transition("queued", "cancelled")
 
     def test_running_to_completed(self):
         validate_run_transition("running", "completed")
@@ -29,17 +29,23 @@ class TestRunStateMachine(unittest.TestCase):
     def test_running_to_cancelled(self):
         validate_run_transition("running", "cancelled")
 
-    def test_running_to_waiting(self):
-        validate_run_transition("running", "waiting")
+    def test_running_to_paused(self):
+        validate_run_transition("running", "paused")
 
-    def test_waiting_to_running(self):
-        validate_run_transition("waiting", "running")
+    def test_paused_to_resuming(self):
+        validate_run_transition("paused", "resuming")
 
-    def test_waiting_to_cancelled(self):
-        validate_run_transition("waiting", "cancelled")
+    def test_resuming_to_running(self):
+        validate_run_transition("resuming", "running")
+
+    def test_paused_to_cancelled(self):
+        validate_run_transition("paused", "cancelled")
 
     def test_failed_to_running(self):
         validate_run_transition("failed", "running")
+
+    def test_failed_to_resuming(self):
+        validate_run_transition("failed", "resuming")
 
     def test_failed_to_archived(self):
         validate_run_transition("failed", "archived")
@@ -80,6 +86,12 @@ class TestRunStateMachine(unittest.TestCase):
         with self.assertRaises(InvalidStatusTransition):
             validate_run_transition("running", "archived")
 
+    def test_legacy_pending_alias(self):
+        validate_run_transition("pending", "running")
+
+    def test_legacy_waiting_alias(self):
+        validate_run_transition("running", "waiting")
+
 
 class TestStructuredError(unittest.TestCase):
     def test_structured_error_fields(self):
@@ -119,6 +131,20 @@ class TestRunReportNewFields(unittest.TestCase):
         )
         self.assertIsNone(report.error_detail)
         self.assertEqual(report.status_timeline, [])
+        self.assertEqual(report.status, "queued")
+
+    def test_report_normalizes_legacy_status(self):
+        report = RunReport(
+            run_id="legacy",
+            status="waiting",
+            requirement="req",
+            project_root="/tmp",
+            output_dir="/tmp/out",
+            config_source="default",
+            status_timeline=[StatusTimelineEntry(status="pending")],
+        )
+        self.assertEqual(report.status, "paused")
+        self.assertEqual(report.status_timeline[0].status, "queued")
 
     def test_report_with_error_detail(self):
         report = RunReport(
@@ -142,7 +168,7 @@ class TestRunReportNewFields(unittest.TestCase):
             output_dir="/tmp/out",
             config_source="default",
             status_timeline=[
-                StatusTimelineEntry(status="pending"),
+                StatusTimelineEntry(status="queued"),
                 StatusTimelineEntry(status="running"),
             ],
         )
@@ -156,7 +182,7 @@ class TestRunReportNewFields(unittest.TestCase):
             output_dir="/tmp/out",
             config_source="default",
             error_detail=StructuredError(error_type="Err"),
-            status_timeline=[StatusTimelineEntry(status="pending")],
+            status_timeline=[StatusTimelineEntry(status="queued")],
         )
         data = report.model_dump(mode="json")
         self.assertIn("error_detail", data)
@@ -175,7 +201,7 @@ class TestRunReportNewFields(unittest.TestCase):
             config_source="default",
             error_detail=StructuredError(error_type="TestErr", error_message="msg"),
             status_timeline=[
-                StatusTimelineEntry(status="pending"),
+                StatusTimelineEntry(status="queued"),
                 StatusTimelineEntry(status="running"),
                 StatusTimelineEntry(status="failed", reason="timeout"),
             ],

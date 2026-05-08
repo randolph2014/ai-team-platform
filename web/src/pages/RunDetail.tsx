@@ -194,9 +194,9 @@ export function RunDetail({ runId }: { runId: string }) {
     setRun(updated);
   }
 
-  const canCancel = ['running', 'pending', 'waiting'].includes(run.status);
-  const canRetry = run.status === 'failed';
-  const canArchive = ['completed', 'failed', 'cancelled'].includes(run.status);
+  const canCancel = ['queued', 'running', 'paused', 'resuming', 'blocked'].includes(run.status);
+  const canRetry = run.status === 'failed' || run.status === 'blocked';
+  const canArchive = ['completed', 'failed', 'cancelled', 'blocked'].includes(run.status);
 
   return (
     <div className="page">

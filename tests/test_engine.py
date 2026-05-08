@@ -741,7 +741,7 @@ worktree:
 
             report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("manual decision", yes=True)
 
-            self.assertEqual(report.status, "waiting")
+            self.assertEqual(report.status, "paused")
             self.assertEqual(report.stages[-1].stage_id, "accept")
 
     def test_skip_if_no_blocker_requires_explicit_auto_skip_opt_in(self) -> None:
@@ -876,7 +876,7 @@ worktree:
             with patch("sys.stdin.isatty", return_value=False):
                 report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("auth", yes=False)
 
-            self.assertEqual(report.status, "waiting")
+            self.assertEqual(report.status, "paused")
             stages = {stage.stage_id: stage for stage in report.stages}
             self.assertEqual(stages["plan_confirm"].status, "waiting")
             output_dir = Path(report.output_dir)
@@ -941,7 +941,7 @@ worktree:
 
             with patch("sys.stdin.isatty", return_value=False):
                 waiting = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("auth", run_id="resume-plan-confirm", yes=False)
-            self.assertEqual(waiting.status, "waiting")
+            self.assertEqual(waiting.status, "paused")
             self.assertTrue((Path(waiting.output_dir) / "checkpoint.json").exists())
 
             resumed = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("auth", run_id="resume-plan-confirm", yes=True, resume=True)
@@ -1239,7 +1239,7 @@ worktree:
 
             report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("x" * 30, yes=True)
 
-            self.assertEqual(report.status, "waiting")
+            self.assertEqual(report.status, "paused")
             self.assertEqual(report.mode, "multi-unit")
             self.assertEqual(report.stages[-1].stage_id, "requirement_confirm")
             self.assertFalse((Path(report.output_dir) / "requirement-units" / "unit-1" / "tech-lead-output.md").exists())
@@ -1348,7 +1348,7 @@ worktree:
                 (root / ".ai" / "agents" / f"{name}.md").write_text(f"You are {name}.", encoding="utf-8")
 
             first_wait = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("x" * 30, run_id="multi-unit-acceptance")
-            self.assertEqual(first_wait.status, "waiting")
+            self.assertEqual(first_wait.status, "paused")
             self.assertEqual(first_wait.stages[-1].stage_id, "requirement_confirm")
 
             approved_requirement = HumanDecision(stage_id="requirement_confirm", decision="approved", reason="需求确认")
@@ -1358,7 +1358,7 @@ worktree:
                 resume=True,
                 human_decision=approved_requirement,
             )
-            self.assertEqual(acceptance_wait.status, "waiting")
+            self.assertEqual(acceptance_wait.status, "paused")
             self.assertEqual(acceptance_wait.stages[-1].stage_id, "acceptance_confirm")
 
             rejected_acceptance = HumanDecision(
@@ -1376,7 +1376,7 @@ worktree:
             )
 
             output_dir = Path(waiting_again.output_dir)
-            self.assertEqual(waiting_again.status, "waiting")
+            self.assertEqual(waiting_again.status, "paused")
             self.assertEqual(waiting_again.stages[-1].stage_id, "acceptance_confirm")
             self.assertTrue((output_dir / "requirement-units" / "unit-1" / "tech-lead-output.md").exists())
             self.assertFalse((output_dir / "tech-lead-output.md").exists())
@@ -1471,7 +1471,7 @@ worktree:
 
             report = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-waits", yes=True)
 
-            self.assertEqual(report.status, "waiting")
+            self.assertEqual(report.status, "paused")
             gate = report.stages[-1]
             self.assertEqual(gate.stage_id, "requirement_confirm")
             self.assertEqual(gate.status, "waiting")
@@ -1485,7 +1485,7 @@ worktree:
             root = Path(tmp)
             config = self._write_config(root)
             waiting = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-reject")
-            self.assertEqual(waiting.status, "waiting")
+            self.assertEqual(waiting.status, "paused")
 
             decision = HumanDecision(
                 stage_id="requirement_confirm",
@@ -1501,7 +1501,7 @@ worktree:
                 human_decision=decision,
             )
 
-            self.assertEqual(resumed.status, "waiting")
+            self.assertEqual(resumed.status, "paused")
             stage_ids = [stage.stage_id for stage in resumed.stages]
             self.assertGreaterEqual(stage_ids.count("requirement_synthesis"), 2)
             feedback = Path(resumed.output_dir) / "human-feedback-requirement_confirm-1.md"
@@ -1513,7 +1513,7 @@ worktree:
             root = Path(tmp)
             config = self._write_config(root)
             waiting = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-invalid-target")
-            self.assertEqual(waiting.status, "waiting")
+            self.assertEqual(waiting.status, "paused")
 
             decision = HumanDecision(
                 stage_id="requirement_confirm",
@@ -1557,7 +1557,7 @@ worktree:
             root = Path(tmp)
             config = self._write_config(root)
             waiting = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-multi-reject")
-            self.assertEqual(waiting.status, "waiting")
+            self.assertEqual(waiting.status, "paused")
 
             first = HumanDecision(
                 stage_id="requirement_confirm",
@@ -1572,7 +1572,7 @@ worktree:
                 resume=True,
                 human_decision=first,
             )
-            self.assertEqual(waiting_again.status, "waiting")
+            self.assertEqual(waiting_again.status, "paused")
 
             second = HumanDecision(
                 stage_id="requirement_confirm",
@@ -1588,7 +1588,7 @@ worktree:
                 human_decision=second,
             )
 
-            self.assertEqual(waiting_third.status, "waiting")
+            self.assertEqual(waiting_third.status, "paused")
             output_dir = Path(waiting_third.output_dir)
             self.assertEqual(
                 [item.reason for item in waiting_third.human_decisions],
@@ -1618,7 +1618,7 @@ worktree:
             root = Path(tmp)
             config = self._write_config(root)
             waiting = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-malformed-history")
-            self.assertEqual(waiting.status, "waiting")
+            self.assertEqual(waiting.status, "paused")
             checkpoint_path = Path(waiting.output_dir) / "checkpoint.json"
             checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
             checkpoint["human_decisions"] = [
@@ -1648,7 +1648,7 @@ worktree:
             root = Path(tmp)
             config = self._write_config(root)
             waiting = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-checkpoint-order")
-            self.assertEqual(waiting.status, "waiting")
+            self.assertEqual(waiting.status, "paused")
             snapshots = []
             original_save_checkpoint = Orchestrator._save_checkpoint
 
@@ -1670,7 +1670,7 @@ worktree:
                     human_decision=decision,
                 )
 
-            self.assertEqual(resumed.status, "waiting")
+            self.assertEqual(resumed.status, "paused")
             self.assertTrue(snapshots)
             self.assertFalse(any("requirement_confirm" in snapshot for snapshot in snapshots))
 
@@ -1679,7 +1679,7 @@ worktree:
             root = Path(tmp)
             config = self._write_config(root)
             waiting = Orchestrator(root, config_path=str(config)).run("ship auth", run_id="gate-history")
-            self.assertEqual(waiting.status, "waiting")
+            self.assertEqual(waiting.status, "paused")
 
             rejected = HumanDecision(
                 stage_id="requirement_confirm",
@@ -1694,7 +1694,7 @@ worktree:
                 resume=True,
                 human_decision=rejected,
             )
-            self.assertEqual(waiting_again.status, "waiting")
+            self.assertEqual(waiting_again.status, "paused")
             self.assertEqual([item.decision for item in waiting_again.human_decisions], ["rejected"])
             checkpoint = json.loads((Path(waiting_again.output_dir) / "checkpoint.json").read_text(encoding="utf-8"))
             self.assertEqual([item["decision"] for item in checkpoint["human_decisions"]], ["rejected"])

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from engine.config import find_project_root
-from engine.models import HumanDecision, InvalidStatusTransition, validate_run_transition
+from engine.models import HumanDecision, InvalidStatusTransition, normalize_run_status, validate_run_transition
 from engine.orchestrator import find_run_reports, load_report
 from engine.production_guard import is_production_mode
 
@@ -180,14 +180,14 @@ async def _db_get_run(run_id: str) -> Optional[Dict[str, Any]]:
         await release_connection(conn)
 
 
-async def _db_create_pending(
+async def _db_create_queued(
     run_id: str,
     workdir: str,
     requirement: str,
     pipeline_ref: Optional[str] = None,
     config_path: Optional[str] = None,
 ) -> None:
-    """在 DB 中创建 pending 状态的 run 记录。失败静默跳过。"""
+    """在 DB 中创建 queued 状态的 run 记录。失败静默跳过。"""
     db = try_persistence()
     if db is None:
         return
@@ -215,7 +215,7 @@ async def _db_create_pending(
             },
         )
     except Exception:
-        logger.debug("DB create_pending failed for run %s", run_id, exc_info=True)
+        logger.debug("DB create_queued failed for run %s", run_id, exc_info=True)
     finally:
         await release_connection(conn)
 
@@ -248,7 +248,7 @@ if router:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        await _db_create_pending(run_id, resolved_workdir, body.requirement, pipeline_ref=pipeline_ref, config_path=config_path)
+        await _db_create_queued(run_id, resolved_workdir, body.requirement, pipeline_ref=pipeline_ref, config_path=config_path)
 
         try:
             output_dir = start_run_background(
@@ -286,9 +286,10 @@ if router:
         resolved_workdir = await _resolve_workdir_optional(project_id, workdir) or "."
         project_root = find_project_root(resolved_workdir)
         reports = []
+        normalized_status = normalize_run_status(status) if status else None
         for path in find_run_reports(Path(project_root)):
             report = load_report(path)
-            if status and report.status != status:
+            if normalized_status and report.status != normalized_status:
                 continue
             reports.append(
                 {
@@ -362,7 +363,7 @@ if router:
         report_file = output_dir / "report.json"
         if report_file.exists():
             report = load_report(report_file)
-            if report.status not in {"failed", "running", "waiting", "blocked"}:
+            if normalize_run_status(report.status) not in {"failed", "running", "paused", "resuming", "blocked"}:
                 raise HTTPException(status_code=400, detail=f"run status is {report.status}, cannot resume")
             config_path = config_path or report.config_path
 
@@ -377,7 +378,7 @@ if router:
             )
             return {
                 "run_id": run_id,
-                "status": "queued",
+                "status": "resuming",
                 "output_dir": str(output_dir),
             }
         except (ValueError, RuntimeError) as exc:
@@ -412,7 +413,7 @@ if router:
             raise HTTPException(status_code=400, detail="report not found, cannot submit human decision")
 
         report = load_report(report_file)
-        if report.status != "waiting":
+        if normalize_run_status(report.status) != "paused":
             raise HTTPException(status_code=400, detail=f"run status is {report.status}, cannot submit human decision")
         config_path = config_path or report.config_path
 
@@ -443,7 +444,7 @@ if router:
             code = 503 if isinstance(exc, RuntimeError) else 400
             raise HTTPException(status_code=code, detail=str(exc))
         await _audit("human_decision", user, run_id, {"stage_id": body.stage_id, "decision": body.decision})
-        return {"run_id": run_id, "status": "queued", "output_dir": str(resumed_output_dir)}
+        return {"run_id": run_id, "status": "resuming", "output_dir": str(resumed_output_dir)}
 
     @router.post("/runs/{run_id}/cancel")
     async def cancel_run(
@@ -516,7 +517,7 @@ if router:
         if new_output_dir.exists():
             raise HTTPException(status_code=409, detail="generated retry run_id already exists")
 
-        await _db_create_pending(
+        await _db_create_queued(
             new_run_id,
             resolved_workdir,
             report.requirement,

@@ -1053,7 +1053,7 @@ class TestPipelineRunRecord:
         from persistence.models import PipelineRunRecord
         record = PipelineRunRecord(id="r1")
         d = record.to_dict()
-        assert d["status"] == "pending"
+        assert d["status"] == "queued"
 
 
 class TestStageRunRecord:
@@ -1332,6 +1332,7 @@ class TestRunRowToSummary:
         )
         result = run_row_to_summary(row)
         assert result["run_id"] == "db-id-004"
+        assert result["status"] == "queued"
 
     def test_empty_dict_context(self) -> None:
         from persistence.repository import run_row_to_summary
@@ -1485,6 +1486,7 @@ class TestRunDetailToResponse:
 
         result = run_detail_to_response(detail)
 
+        assert result["status"] == "paused"
         assert result["human_decisions"][0]["reason"] == "任务缺少回滚方案"
         stage = result["stages"][0]
         assert stage["type"] == "human_review"
@@ -1529,6 +1531,7 @@ class TestRunDetailToResponse:
         }
         result = run_detail_to_response(detail)
         assert result["run_id"] == "db-id-003"
+        assert result["status"] == "queued"
         assert result["artifacts"] == []
 
     def test_none_context(self) -> None:
@@ -1658,7 +1661,7 @@ class TestPipelineRunRepoExtra:
             )
             assert mock_conn.execute.called
             sql = mock_conn.execute.call_args[0][0]
-            assert "'pending'" in sql
+            assert "'queued'" in sql
             context_arg = mock_conn.execute.call_args[0][8]
             assert "template:bugfix" in context_arg
             assert "/tmp/cfg.yaml" in context_arg

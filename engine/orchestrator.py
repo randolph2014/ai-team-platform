@@ -290,7 +290,7 @@ class Orchestrator:
                     resume=resume,
                 )
             if sequence_status == "waiting":
-                report.status = "waiting"
+                report.status = "paused"
 
             if report.status == "running":
                 if worktree_path and worktree_manager:

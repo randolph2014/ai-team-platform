@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from engine.models import AgentRun, QualityGateRun, RunReport, StageRun, model_to_dict
+from engine.models import AgentRun, QualityGateRun, RunReport, StageRun, model_to_dict, normalize_run_status
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +208,7 @@ class PipelineRunRepo:
         return [dict(row) for row in rows]
 
     async def list_by_status(self, conn, status: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+        status = normalize_run_status(status)
         rows = await conn.fetch(
             f"SELECT * FROM {self.TABLE} WHERE status = $1 ORDER BY created_at DESC LIMIT $2",
             status,
@@ -220,6 +221,7 @@ class PipelineRunRepo:
     ) -> List[Dict[str, Any]]:
         offset = (page - 1) * size
         if status:
+            status = normalize_run_status(status)
             rows = await conn.fetch(
                 f"SELECT * FROM {self.TABLE} WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
                 status,
@@ -236,6 +238,7 @@ class PipelineRunRepo:
 
     async def count(self, conn, status: Optional[str] = None) -> int:
         if status:
+            status = normalize_run_status(status)
             row = await conn.fetchrow(
                 f"SELECT COUNT(*) as cnt FROM {self.TABLE} WHERE status = $1",
                 status,
@@ -295,7 +298,7 @@ class PipelineRunRepo:
             f"""
             INSERT INTO {self.TABLE} (id, pipeline_id, status, project_root, main_branch,
                                        requirement, trigger_source, worktree_path, context)
-            VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7, $8::jsonb)
+            VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8::jsonb)
             ON CONFLICT (id) DO NOTHING
             """,
             id,
@@ -1012,7 +1015,7 @@ def run_row_to_summary(row: Dict[str, Any]) -> Dict[str, Any]:
             ctx = {}
     return {
         "run_id": ctx.get("app_run_id") or row.get("id"),
-        "status": row.get("status"),
+        "status": normalize_run_status(row.get("status")),
         "pipeline": ctx.get("pipeline_ref") or ctx.get("config_path"),
         "output_dir": ctx.get("output_dir"),
         "started_at": _dt_to_str(row.get("started_at")),
@@ -1083,7 +1086,7 @@ def run_detail_to_response(detail: Dict[str, Any]) -> Dict[str, Any]:
         })
     return {
         "run_id": ctx.get("app_run_id") or detail.get("id"),
-        "status": detail.get("status"),
+        "status": normalize_run_status(detail.get("status")),
         "mode": "single",
         "project_root": detail.get("project_root"),
         "output_dir": detail.get("output_dir") or "",
@@ -1101,7 +1104,11 @@ def run_detail_to_response(detail: Dict[str, Any]) -> Dict[str, Any]:
         "error_detail": _json_or_default(ctx.get("error_detail"), None),
         "artifacts": ctx.get("artifacts", []),
         "human_decisions": _json_or_default(ctx.get("human_decisions"), []),
-        "status_timeline": _json_or_default(ctx.get("status_timeline"), []),
+        "status_timeline": [
+            {**entry, "status": normalize_run_status(entry.get("status"))}
+            if isinstance(entry, dict) else entry
+            for entry in _json_or_default(ctx.get("status_timeline"), [])
+        ],
         "stages": stages,
     }
 

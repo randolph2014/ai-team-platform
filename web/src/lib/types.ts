@@ -1,4 +1,4 @@
-export type RunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'waiting' | 'archived';
+export type RunStatus = 'queued' | 'running' | 'paused' | 'resuming' | 'completed' | 'failed' | 'cancelled' | 'archived' | 'blocked';
 
 export interface AgentRun {
   agent_name: string;

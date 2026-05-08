@@ -4,22 +4,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
-RunStatus = Literal["pending", "running", "completed", "failed", "cancelled", "waiting", "archived", "blocked"]
+RunStatus = Literal["queued", "running", "paused", "resuming", "completed", "failed", "cancelled", "archived", "blocked"]
 StageStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled", "waiting"]
 AgentStatus = Literal["pending", "running", "completed", "failed", "timeout", "cancelled"]
 GateStatus = Literal["pending", "running", "passed", "failed", "skipped", "warning"]
 
+RUN_STATUS_ALIASES: Dict[str, str] = {
+    "pending": "queued",
+    "waiting": "paused",
+}
+
 RUN_TRANSITIONS: Dict[str, set] = {
-    "pending": {"running", "cancelled"},
-    "running": {"completed", "failed", "cancelled", "waiting", "blocked"},
-    "waiting": {"running", "cancelled"},
-    "failed": {"running", "archived"},
+    "queued": {"running", "cancelled"},
+    "running": {"completed", "failed", "cancelled", "paused", "blocked"},
+    "paused": {"resuming", "cancelled"},
+    "resuming": {"running", "failed", "cancelled", "paused"},
+    "failed": {"resuming", "running", "archived"},
     "completed": {"archived"},
     "cancelled": {"archived"},
-    "blocked": {"running", "cancelled", "failed"},
+    "blocked": {"resuming", "running", "cancelled", "failed", "archived"},
     "archived": set(),
 }
 
@@ -28,7 +34,13 @@ class InvalidStatusTransition(ValueError):
     pass
 
 
+def normalize_run_status(status: str) -> str:
+    return RUN_STATUS_ALIASES.get(status, status)
+
+
 def validate_run_transition(current: str, target: str) -> None:
+    current = normalize_run_status(current)
+    target = normalize_run_status(target)
     allowed = RUN_TRANSITIONS.get(current, set())
     if target not in allowed:
         raise InvalidStatusTransition(
@@ -220,6 +232,13 @@ class StatusTimelineEntry(BaseModel):
     timestamp: str = Field(default_factory=utc_now)
     reason: Optional[str] = None
 
+    @field_validator("status", mode="before")
+    @classmethod
+    def _normalize_status(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return normalize_run_status(value)
+        return value
+
 
 class StructuredError(BaseModel):
     error_type: Optional[str] = None
@@ -229,7 +248,7 @@ class StructuredError(BaseModel):
 
 class RunReport(BaseModel):
     run_id: str
-    status: RunStatus = "pending"
+    status: RunStatus = "queued"
     mode: Literal["single", "multi-unit"] = "single"
     requirement: str
     project_root: str
@@ -252,6 +271,13 @@ class RunReport(BaseModel):
     error_detail: Optional[StructuredError] = None
     status_timeline: List[StatusTimelineEntry] = Field(default_factory=list)
     pr_info: Optional[Dict[str, Any]] = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _normalize_status(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return normalize_run_status(value)
+        return value
 
     def write(self, path: Path) -> None:
         import json

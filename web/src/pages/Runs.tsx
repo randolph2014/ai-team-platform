@@ -7,7 +7,7 @@ import type { RunListItem } from '../lib/types';
 type SortField = 'started_at' | 'duration_seconds' | 'status' | 'pipeline';
 type SortDir = 'asc' | 'desc';
 
-const STATUS_OPTIONS = ['completed', 'failed', 'running', 'pending', 'waiting', 'cancelled', 'archived'] as const;
+const STATUS_OPTIONS = ['queued', 'running', 'paused', 'resuming', 'completed', 'failed', 'blocked', 'cancelled', 'archived'] as const;
 const SORT_FIELDS: { field: SortField; label: string }[] = [
   { field: 'started_at', label: '开始时间' },
   { field: 'duration_seconds', label: '耗时' },

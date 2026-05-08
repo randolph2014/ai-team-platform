@@ -9,8 +9,10 @@ const CHART_COLORS = {
   completed: '#22c55e',
   failed: '#ef4444',
   running: '#3b82f6',
-  pending: '#eab308',
-  waiting: '#a855f7',
+  queued: '#eab308',
+  paused: '#a855f7',
+  resuming: '#06b6d4',
+  blocked: '#f97316',
   cancelled: '#9898b0',
 };
 
@@ -81,7 +83,7 @@ export function Dashboard({ onNewRun }: { onNewRun: () => void }) {
       ? completedRuns.reduce((sum, r) => sum + (r.duration_seconds || 0), 0) / completedRuns.length
       : 0;
 
-    const statusDistribution = (['completed', 'failed', 'running', 'pending', 'waiting', 'cancelled'] as const)
+    const statusDistribution = (['completed', 'failed', 'running', 'queued', 'paused', 'resuming', 'blocked', 'cancelled'] as const)
       .map((s) => ({ name: s, value: runs.filter((r) => r.status === s).length }))
       .filter((d) => d.value > 0);
 

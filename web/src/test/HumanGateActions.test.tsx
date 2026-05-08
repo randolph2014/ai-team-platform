@@ -7,7 +7,7 @@ import { resumeRun, submitHumanDecision } from '../lib/api';
 vi.mock('../lib/api', () => ({
   rememberedWorkdir: vi.fn(() => '/repo'),
   resumeRun: vi.fn(),
-  submitHumanDecision: vi.fn(() => Promise.resolve({ run_id: 'r1', status: 'waiting' })),
+  submitHumanDecision: vi.fn(() => Promise.resolve({ run_id: 'r1', status: 'resuming' })),
 }));
 
 const submitHumanDecisionMock = vi.mocked(submitHumanDecision);
@@ -29,7 +29,7 @@ function stage(overrides: Partial<StageRun> = {}): StageRun {
 function runReport(stages: StageRun[]): RunReport {
   return {
     run_id: 'r1',
-    status: 'waiting',
+    status: 'paused',
     requirement: '实现人工确认',
     project_root: '/repo',
     output_dir: '/repo/.ai/runs/r1',
