@@ -610,7 +610,7 @@ class TestRunsRoutes(BaseRoutesTest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["run_id"], "api-test-run-001")
-        self.assertEqual(data["status"], "running")
+        self.assertEqual(data["status"], "queued")
 
     def test_create_run_duplicate_id_returns_409(self) -> None:
         """POST /api/runs 重复 run_id 返回 409"""
@@ -737,7 +737,7 @@ class TestRunsRoutes(BaseRoutesTest):
             encoding="utf-8",
         )
 
-        with patch("api.runtime.resume_run_background", return_value=output_dir) as resume_bg:
+        with patch("api.routes.runs.resume_run_background", return_value=output_dir) as resume_bg:
             response = self.client.post(
                 f"/api/runs/{run_id}/resume",
                 params={"workdir": str(self.project_root), "yes": True, "execution_mode": "serial"},
@@ -830,7 +830,7 @@ class TestRunsRoutes(BaseRoutesTest):
             encoding="utf-8",
         )
 
-        with patch("api.runtime.resume_run_background", return_value=output_dir) as resume_bg:
+        with patch("api.routes.runs.resume_run_background", return_value=output_dir) as resume_bg:
             response = self.client.post(
                 f"/api/runs/{run_id}/human-decision",
                 params={"workdir": str(self.project_root)},
@@ -859,7 +859,7 @@ class TestRunsRoutes(BaseRoutesTest):
         )
         (output_dir / "requirement.md").write_text("req", encoding="utf-8")
 
-        with patch("api.runtime.resume_run_background", return_value=output_dir) as resume_bg:
+        with patch("api.routes.runs.resume_run_background", return_value=output_dir) as resume_bg:
             response = self.client.post(
                 f"/api/runs/{run_id}/human-decision",
                 params={"workdir": str(self.project_root)},
@@ -904,7 +904,7 @@ class TestRunsRoutes(BaseRoutesTest):
             encoding="utf-8",
         )
 
-        with patch("api.runtime.resume_run_background", return_value=output_dir) as resume_bg:
+        with patch("api.routes.runs.resume_run_background", return_value=output_dir) as resume_bg:
             response = self.client.post(
                 f"/api/runs/{run_id}/human-decision",
                 params={"workdir": str(self.project_root)},
@@ -958,7 +958,7 @@ class TestRunsRoutes(BaseRoutesTest):
             encoding="utf-8",
         )
 
-        with patch("api.runtime.resume_run_background", return_value=output_dir) as resume_bg:
+        with patch("api.routes.runs.resume_run_background", return_value=output_dir) as resume_bg:
             response = self.client.post(
                 f"/api/runs/{run_id}/human-decision",
                 params={"workdir": str(self.project_root)},
@@ -1002,7 +1002,7 @@ class TestRunsRoutes(BaseRoutesTest):
             encoding="utf-8",
         )
 
-        with patch("api.runtime.resume_run_background", return_value=output_dir) as resume_bg:
+        with patch("api.routes.runs.resume_run_background", return_value=output_dir) as resume_bg:
             response = self.client.post(
                 f"/api/runs/{run_id}/human-decision",
                 params={"workdir": str(self.project_root)},
@@ -1055,6 +1055,141 @@ class TestRunsRoutes(BaseRoutesTest):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("requirement.md", response.json()["detail"])
+
+
+class TestCancelRetryRoutes(BaseRoutesTest):
+    def test_cancel_queued_run(self) -> None:
+        from engine.models import RunReport
+
+        run_id = "cancel-test-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        report = RunReport(
+            run_id=run_id,
+            status="running",
+            requirement="req",
+            project_root=str(self.project_root),
+            output_dir=str(output_dir),
+            config_source="default",
+        )
+        report.write(output_dir / "report.json")
+
+        mock_result = {"cancelled": True, "job_id": "rq-job-1", "previous_status": "queued"}
+        with patch("engine.task_queue.get_redis_conn") as mock_conn, \
+             patch("engine.task_queue.cancel_rq_job", return_value=mock_result):
+            mock_conn.return_value.get.return_value = b"rq-job-1"
+            response = self.client.post(
+                f"/api/runs/{run_id}/cancel",
+                params={"workdir": str(self.project_root)},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "cancelled")
+
+    def test_cancel_completed_run_returns_400(self) -> None:
+        from engine.models import RunReport
+
+        run_id = "cancel-completed-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        report = RunReport(
+            run_id=run_id,
+            status="completed",
+            requirement="req",
+            project_root=str(self.project_root),
+            output_dir=str(output_dir),
+            config_source="default",
+        )
+        report.write(output_dir / "report.json")
+
+        response = self.client.post(
+            f"/api/runs/{run_id}/cancel",
+            params={"workdir": str(self.project_root)},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("completed", response.json()["detail"])
+
+    def test_cancel_nonexistent_run_returns_404(self) -> None:
+        response = self.client.post(
+            "/api/runs/nonexistent-cancel/cancel",
+            params={"workdir": str(self.project_root)},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_retry_failed_run(self) -> None:
+        from engine.models import RunReport
+
+        run_id = "retry-failed-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        report = RunReport(
+            run_id=run_id,
+            status="failed",
+            requirement="original requirement",
+            project_root=str(self.project_root),
+            output_dir=str(output_dir),
+            config_source="project",
+            config_path=str(self.project_root / "config.yaml"),
+        )
+        report.write(output_dir / "report.json")
+
+        with patch("api.routes.runs.start_run_background", return_value=output_dir):
+            response = self.client.post(
+                f"/api/runs/{run_id}/retry",
+                params={"workdir": str(self.project_root)},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["original_run_id"], run_id)
+        self.assertEqual(data["status"], "queued")
+        self.assertTrue(data["run_id"].startswith("retry-"))
+
+    def test_retry_completed_run_returns_400(self) -> None:
+        from engine.models import RunReport
+
+        run_id = "retry-completed-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        report = RunReport(
+            run_id=run_id,
+            status="completed",
+            requirement="req",
+            project_root=str(self.project_root),
+            output_dir=str(output_dir),
+            config_source="default",
+        )
+        report.write(output_dir / "report.json")
+
+        response = self.client.post(
+            f"/api/runs/{run_id}/retry",
+            params={"workdir": str(self.project_root)},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("completed", response.json()["detail"])
+
+    def test_retry_nonexistent_run_returns_404(self) -> None:
+        response = self.client.post(
+            "/api/runs/nonexistent-retry/retry",
+            params={"workdir": str(self.project_root)},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_enqueue_failure_returns_503(self) -> None:
+        with patch("api.routes.runs.start_run_background", side_effect=RuntimeError("Redis unavailable")):
+            response = self.client.post(
+                "/api/runs",
+                json={
+                    "requirement": "test 503",
+                    "workdir": str(self.project_root),
+                    "run_id": "api-503-test-2",
+                    "yes": True,
+                },
+            )
+        self.assertEqual(response.status_code, 503)
 
 
 class TestArtifactsRoutes(BaseRoutesTest):

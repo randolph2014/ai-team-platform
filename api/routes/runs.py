@@ -11,7 +11,7 @@ from engine.orchestrator import find_run_reports, load_report
 from engine.production_guard import is_production_mode
 
 from ..db import run_db_id, try_persistence
-from ..runtime import expected_output_dir, project_for_run, start_run_background
+from ..runtime import expected_output_dir, project_for_run, start_run_background, resume_run_background
 
 try:
     from fastapi import APIRouter, Depends, HTTPException, Query
@@ -231,18 +231,21 @@ if router:
 
         await _db_create_pending(run_id, resolved_workdir, body.requirement, pipeline_ref=pipeline_ref, config_path=config_path)
 
-        output_dir = start_run_background(
-            body.requirement,
-            resolved_workdir,
-            run_id=run_id,
-            yes=body.yes,
-            config_path=config_path,
-            only_stage=body.only_stage,
-            execution_mode=body.execution_mode,
-        )
+        try:
+            output_dir = start_run_background(
+                body.requirement,
+                resolved_workdir,
+                run_id=run_id,
+                yes=body.yes,
+                config_path=config_path,
+                only_stage=body.only_stage,
+                execution_mode=body.execution_mode,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
         return {
             "run_id": run_id,
-            "status": "running",
+            "status": "queued",
             "project_root": str(project_for_run(run_id, resolved_workdir)),
             "output_dir": str(output_dir),
         }
@@ -323,20 +326,16 @@ if router:
         execution_mode: Optional[str] = Query(default=None),
         user: Dict[str, Any] = _get_auth(),
     ):
-        from ..runtime import resume_run_background
-
         resolved_workdir = await _resolve_workdir(project_id, workdir)
         project_root = project_for_run(run_id, resolved_workdir)
         output_dir = project_root / ".ai" / "team-output" / run_id
         if not output_dir.exists():
             raise HTTPException(status_code=404, detail="run not found")
 
-        # 检查是否有 checkpoint
         checkpoint_file = output_dir / "checkpoint.json"
         if not checkpoint_file.exists():
             raise HTTPException(status_code=400, detail="no checkpoint found, cannot resume")
 
-        # 检查当前状态
         report_file = output_dir / "report.json"
         if report_file.exists():
             report = load_report(report_file)
@@ -355,11 +354,12 @@ if router:
             )
             return {
                 "run_id": run_id,
-                "status": "resuming",
+                "status": "queued",
                 "output_dir": str(output_dir),
             }
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        except (ValueError, RuntimeError) as exc:
+            code = 503 if isinstance(exc, RuntimeError) else 400
+            raise HTTPException(status_code=code, detail=str(exc))
 
     @router.post("/runs/{run_id}/human-decision")
     async def submit_human_decision(
@@ -371,8 +371,6 @@ if router:
         execution_mode: Optional[str] = Query(default=None),
         user: Dict[str, Any] = _get_auth(),
     ):
-        from ..runtime import resume_run_background
-
         if body.decision not in {"approved", "rejected"}:
             raise HTTPException(status_code=400, detail="decision must be approved or rejected")
         if body.decision == "rejected" and not body.reason.strip():
@@ -418,6 +416,126 @@ if router:
                 execution_mode=execution_mode,
                 human_decision=decision,
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        return {"run_id": run_id, "status": "resuming", "output_dir": str(resumed_output_dir)}
+        except (ValueError, RuntimeError) as exc:
+            code = 503 if isinstance(exc, RuntimeError) else 400
+            raise HTTPException(status_code=code, detail=str(exc))
+        return {"run_id": run_id, "status": "queued", "output_dir": str(resumed_output_dir)}
+
+    @router.post("/runs/{run_id}/cancel")
+    async def cancel_run(
+        run_id: str,
+        workdir: str = Query(default="."),
+        project_id: Optional[str] = Query(default=None),
+        user: Dict[str, Any] = _get_auth(),
+    ):
+        from engine.task_queue import cancel_rq_job, get_redis_conn
+
+        resolved_workdir = await _resolve_workdir(project_id, workdir)
+        project_root = project_for_run(run_id, resolved_workdir)
+        output_dir = project_root / ".ai" / "team-output" / run_id
+
+        report_file = output_dir / "report.json"
+        if report_file.exists():
+            report = load_report(report_file)
+            if report.status in {"completed", "failed", "cancelled"}:
+                raise HTTPException(status_code=400, detail=f"run status is {report.status}, cannot cancel")
+
+        rq_job_id = None
+        try:
+            conn = get_redis_conn()
+            rq_job_id = conn.get(f"ai-team:run_job:{run_id}")
+            if rq_job_id:
+                rq_job_id = rq_job_id.decode("utf-8") if isinstance(rq_job_id, bytes) else rq_job_id
+        except Exception:
+            pass
+
+        if rq_job_id:
+            result = cancel_rq_job(rq_job_id)
+            if result.get("cancelled"):
+                _update_run_status(run_id, resolved_workdir, "cancelled")
+                return {"run_id": run_id, "status": "cancelled", "rq_cancel": result}
+            return {"run_id": run_id, "status": "cancel_failed", "rq_cancel": result}
+
+        if output_dir.exists():
+            _update_run_status(run_id, resolved_workdir, "cancelled")
+            return {"run_id": run_id, "status": "cancelled"}
+
+        raise HTTPException(status_code=404, detail="run not found")
+
+    @router.post("/runs/{run_id}/retry")
+    async def retry_run(
+        run_id: str,
+        workdir: str = Query(default="."),
+        project_id: Optional[str] = Query(default=None),
+        user: Dict[str, Any] = _get_auth(),
+    ):
+        resolved_workdir = await _resolve_workdir(project_id, workdir)
+        project_root = project_for_run(run_id, resolved_workdir)
+        output_dir = project_root / ".ai" / "team-output" / run_id
+
+        report_file = output_dir / "report.json"
+        if not report_file.exists():
+            raise HTTPException(status_code=404, detail="run not found")
+
+        report = load_report(report_file)
+        if report.status != "failed":
+            raise HTTPException(status_code=400, detail=f"run status is {report.status}, can only retry failed runs")
+
+        new_run_id = f"retry-{uuid.uuid4().hex[:12]}"
+        new_output_dir = expected_output_dir(new_run_id, resolved_workdir)
+        if new_output_dir.exists():
+            raise HTTPException(status_code=409, detail="generated retry run_id already exists")
+
+        await _db_create_pending(
+            new_run_id,
+            resolved_workdir,
+            report.requirement,
+            pipeline_ref=None,
+            config_path=report.config_path,
+        )
+
+        try:
+            out = start_run_background(
+                report.requirement,
+                resolved_workdir,
+                run_id=new_run_id,
+                yes=True,
+                config_path=report.config_path,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        return {
+            "run_id": new_run_id,
+            "original_run_id": run_id,
+            "status": "queued",
+            "output_dir": str(out),
+        }
+
+
+def _update_run_status(run_id: str, workdir: str, status: str) -> None:
+    try:
+        from engine.models import RunReport, utc_now
+        from persistence import save_report_sync
+
+        project_root = find_project_root(workdir)
+        output_dir = project_root / ".ai" / "team-output" / run_id
+        report_file = output_dir / "report.json"
+        if report_file.exists():
+            report = load_report(report_file)
+            report.status = status
+            report.completed_at = utc_now()
+            report.write(output_dir / "report.json")
+            save_report_sync(report, {})
+        else:
+            report = RunReport(
+                run_id=run_id,
+                status=status,
+                requirement="",
+                project_root=str(project_root),
+                output_dir=str(output_dir),
+                started_at=utc_now(),
+                completed_at=utc_now(),
+            )
+            save_report_sync(report, {})
+    except Exception:
+        logger.warning("Failed to update run %s status to %s", run_id, status)
