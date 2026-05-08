@@ -1,6 +1,8 @@
-import { Activity, Boxes, CircleDollarSign, History, LogOut, PenLine, Settings2, Webhook } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Activity, Boxes, CircleDollarSign, History, LogOut, Settings2, Webhook } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Navigate, NavLink, Outlet, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { checkAuthStatus, clearToken, isLoggedIn } from './lib/api';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { NewRunModal } from './components/NewRunModal';
 import { Costs } from './pages/Costs';
 import { Dashboard } from './pages/Dashboard';
@@ -12,87 +14,59 @@ import { Runs } from './pages/Runs';
 import { Settings } from './pages/Settings';
 import { Webhooks } from './pages/Webhooks';
 
-type Route = 'dashboard' | 'runs' | 'run-detail' | 'pipelines' | 'pipeline-editor' | 'settings' | 'webhooks' | 'costs' | 'login';
-
-function currentRoute(): { route: Route; runId?: string; pipelineId?: string } {
-  const path = window.location.pathname;
-  if (path === '/login') return { route: 'login' };
-  if (path.startsWith('/runs/')) return { route: 'run-detail', runId: path.split('/')[2] };
-  if (path === '/runs') return { route: 'runs' };
-  if (path.startsWith('/pipelines/editor/')) return { route: 'pipeline-editor', pipelineId: path.split('/')[3] };
-  if (path === '/pipelines/editor' || path === '/pipeline-editor') return { route: 'pipeline-editor' };
-  if (path === '/pipelines') return { route: 'pipelines' };
-  if (path === '/settings') return { route: 'settings' };
-  if (path === '/webhooks') return { route: 'webhooks' };
-  if (path === '/costs') return { route: 'costs' };
-  return { route: 'dashboard' };
+function RunDetailRoute() {
+  const { runId } = useParams();
+  return <RunDetail runId={runId || ''} />;
 }
 
-function navigate(path: string) {
-  window.history.pushState({}, '', path);
-  window.dispatchEvent(new PopStateEvent('popstate'));
+function PipelineEditorRoute() {
+  const { pipelineId } = useParams();
+  return <PipelineEditor pipelineId={pipelineId} />;
 }
 
-export function App() {
-  const [route, setRoute] = useState(currentRoute());
-  const [modalOpen, setModalOpen] = useState(false);
-  const [authenticated, setAuthenticated] = useState(isLoggedIn());
+function AuthGate({ children }: { children: React.ReactNode }) {
   const [authChecked, setAuthChecked] = useState(false);
+  const [authEnabled, setAuthEnabled] = useState(true);
 
   useEffect(() => {
     checkAuthStatus().then((enabled) => {
-      if (!enabled) {
-        setAuthenticated(true);
-      }
+      setAuthEnabled(enabled);
       setAuthChecked(true);
     });
   }, []);
 
+  if (!authChecked) return null;
+  if (authEnabled && !isLoggedIn()) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
+
+function AppLayout() {
+  const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+
   useEffect(() => {
-    const listener = () => {
-      setRoute(currentRoute());
+    const onAuthExpired = () => {
+      navigateRef.current('/login', { replace: true });
     };
-    const authListener = () => {
-      setAuthenticated(false);
-    };
-    window.addEventListener('popstate', listener);
-    window.addEventListener('auth:expired', authListener);
-    return () => {
-      window.removeEventListener('popstate', listener);
-      window.removeEventListener('auth:expired', authListener);
-    };
+    window.addEventListener('auth:expired', onAuthExpired);
+    return () => window.removeEventListener('auth:expired', onAuthExpired);
   }, []);
 
-  useEffect(() => {
-    if (!authenticated && route.route !== 'login') {
-      navigate('/login');
-    }
-    if (authenticated && route.route === 'login') {
-      navigate('/dashboard');
-    }
-  }, [authenticated, route.route]);
-
-  if (!authChecked) {
-    return null;
-  }
-
-  if (!authenticated) {
-    return <Login />;
-  }
+  const [modalOpen, setModalOpen] = useState(false);
 
   const nav = [
-    ['dashboard', '/dashboard', Activity, '仪表盘'],
-    ['runs', '/runs', History, '执行记录'],
-    ['pipelines', '/pipelines', Boxes, 'Pipeline 模板'],
-    ['webhooks', '/webhooks', Webhook, 'Webhook'],
-    ['costs', '/costs', CircleDollarSign, '成本追踪'],
-    ['settings', '/settings', Settings2, '设置'],
+    ['/dashboard', Activity, '仪表盘'],
+    ['/runs', History, '执行记录'],
+    ['/pipelines', Boxes, 'Pipeline 模板'],
+    ['/webhooks', Webhook, 'Webhook'],
+    ['/costs', CircleDollarSign, '成本追踪'],
+    ['/settings', Settings2, '设置'],
   ] as const;
 
   function handleLogout() {
     clearToken();
-    setAuthenticated(false);
-    navigate('/login');
+    navigate('/login', { replace: true });
   }
 
   return (
@@ -101,16 +75,16 @@ export function App() {
         <div className="brand"><div className="brandIcon">AI</div><span>AI Team Platform</span></div>
         <nav>
           <div className="navSection">概览</div>
-          {nav.slice(0, 2).map(([key, path, Icon, label]) => (
-            <button key={key} className={route.route === key ? 'active' : ''} onClick={() => navigate(path)}>
+          {nav.slice(0, 2).map(([path, Icon, label]) => (
+            <NavLink key={path} to={path} className={({ isActive }) => isActive ? 'active' : ''}>
               <Icon size={17} /> <span>{label}</span>
-            </button>
+            </NavLink>
           ))}
           <div className="navSection">配置</div>
-          {nav.slice(2).map(([key, path, Icon, label]) => (
-            <button key={key} className={route.route === key ? 'active' : ''} onClick={() => navigate(path)}>
+          {nav.slice(2).map(([path, Icon, label]) => (
+            <NavLink key={path} to={path} className={({ isActive }) => isActive ? 'active' : ''}>
               <Icon size={17} /> <span>{label}</span>
-            </button>
+            </NavLink>
           ))}
         </nav>
         <footer>
@@ -120,16 +94,38 @@ export function App() {
         </footer>
       </aside>
       <main>
-        {route.route === 'dashboard' && <Dashboard onNewRun={() => setModalOpen(true)} />}
-        {route.route === 'runs' && <Runs onNewRun={() => setModalOpen(true)} />}
-        {route.route === 'run-detail' && <RunDetail runId={route.runId ?? ''} />}
-        {route.route === 'pipelines' && <Pipelines />}
-        {route.route === 'pipeline-editor' && <PipelineEditor pipelineId={route.pipelineId} />}
-        {route.route === 'webhooks' && <Webhooks />}
-        {route.route === 'costs' && <Costs />}
-        {route.route === 'settings' && <Settings />}
+        <ErrorBoundary>
+          <Outlet />
+        </ErrorBoundary>
       </main>
       <NewRunModal open={modalOpen} onClose={() => setModalOpen(false)} onRefreshNeeded={() => {}} />
     </div>
+  );
+}
+
+export function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route
+        path="/*"
+        element={
+          <AuthGate>
+            <AppLayout />
+          </AuthGate>
+        }
+      >
+        <Route index element={<Navigate to="/dashboard" replace />} />
+        <Route path="dashboard" element={<Dashboard onNewRun={() => {}} />} />
+        <Route path="runs" element={<Runs onNewRun={() => {}} />} />
+        <Route path="runs/:runId" element={<RunDetailRoute />} />
+        <Route path="pipelines" element={<Pipelines />} />
+        <Route path="pipelines/editor" element={<PipelineEditorRoute />} />
+        <Route path="pipelines/editor/:pipelineId" element={<PipelineEditorRoute />} />
+        <Route path="webhooks" element={<Webhooks />} />
+        <Route path="costs" element={<Costs />} />
+        <Route path="settings" element={<Settings />} />
+      </Route>
+    </Routes>
   );
 }

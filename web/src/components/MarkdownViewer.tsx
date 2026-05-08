@@ -1,3 +1,4 @@
+import DOMPurify from 'dompurify';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -8,18 +9,18 @@ interface MarkdownViewerProps {
   className?: string;
 }
 
-/**
- * Markdown 渲染组件
- * 支持 GFM（表格、任务列表、删除线等）、代码高亮、HTML 原生标签
- */
 export function MarkdownViewer({ content, className }: MarkdownViewerProps) {
+  const safe = DOMPurify.sanitize(content, {
+    ADD_TAGS: ['details', 'summary'],
+    ADD_ATTR: ['target', 'rel'],
+  });
+
   return (
     <div className={`markdown-body ${className ?? ''}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight, rehypeRaw]}
         components={{
-          // 自定义链接：外部链接在新标签页打开
           a({ href, children, ...props }) {
             const isExternal = href && (href.startsWith('http://') || href.startsWith('https://'));
             return (
@@ -33,7 +34,6 @@ export function MarkdownViewer({ content, className }: MarkdownViewerProps) {
               </a>
             );
           },
-          // 自定义表格 wrapper，支持横向滚动
           table({ children, ...props }) {
             return (
               <div className="markdown-table-wrap">
@@ -41,7 +41,6 @@ export function MarkdownViewer({ content, className }: MarkdownViewerProps) {
               </div>
             );
           },
-          // 自定义代码块添加复制按钮
           pre({ children, ...props }) {
             return (
               <div className="markdown-code-block">

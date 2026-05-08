@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronRight, Loader2, Maximize2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { rememberedWorkdir, runQuery } from '../lib/api';
+import { apiFetch, rememberedWorkdir, runQuery } from '../lib/api';
 import { ArtifactViewer } from './ArtifactViewer';
 import { MarkdownViewer } from './MarkdownViewer';
 
@@ -10,20 +10,10 @@ interface ArtifactContentProps {
   label?: string;
 }
 
-/**
- * 判断文件是否为 Markdown 类型
- */
 function isMarkdownFile(filename: string): boolean {
   return /\.(md|markdown|mdx)$/i.test(filename);
 }
 
-/**
- * 内联产物内容查看器（嵌在时间线中）
- * - 支持展开/折叠
- * - Markdown 文件自动渲染为富文本
- * - 其他文件以代码块显示
- * - 提供全屏按钮，打开 ArtifactViewer
- */
 export function ArtifactContent({ runId, artifactName, label }: ArtifactContentProps) {
   const [expanded, setExpanded] = useState(false);
   const [content, setContent] = useState<string | null>(null);
@@ -36,11 +26,8 @@ export function ArtifactContent({ runId, artifactName, label }: ArtifactContentP
     setLoading(true);
     setError(null);
     const wd = rememberedWorkdir(runId);
-    const token = localStorage.getItem('ai-team.token') || '';
-    fetch(`/api/runs/${runId}/artifacts/${encodeURIComponent(artifactName)}${runQuery(wd)}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-      .then(async (res) => {
+    apiFetch(`/runs/${runId}/artifacts/${encodeURIComponent(artifactName)}${runQuery(wd)}`)
+      .then((res) => {
         if (!res.ok) throw new Error(`加载失败: ${res.status}`);
         return res.text();
       })

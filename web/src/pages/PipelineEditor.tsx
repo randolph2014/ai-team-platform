@@ -1,5 +1,6 @@
 import { AlertTriangle, ArrowLeft, Boxes, ChevronDown, ChevronRight, Download, Plus, Save, Wand2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Background,
   BackgroundVariant,
@@ -200,11 +201,6 @@ function stagesForSave(stages: StageConfig[]): StageConfig[] {
     ...stage,
     agent_defs: stage.agent_defs?.map((agent) => normalizeAgentRuntime(agent as AgentDefWithRuntime)),
   })) as unknown as StageConfig[];
-}
-
-function navigate(path: string) {
-  window.history.pushState({}, '', path);
-  window.dispatchEvent(new PopStateEvent('popstate'));
 }
 
 function slugForPipeline(name: string): string {
@@ -456,6 +452,7 @@ function useConfigToFlow(config: PipelineConfig) {
 }
 
 export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
+  const navigate = useNavigate();
   const [config, setConfig] = useState<PipelineConfig>(defaultPipeline());
   const [selectedStage, setSelectedStage] = useState<StageConfig | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('canvas');

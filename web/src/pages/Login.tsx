@@ -1,8 +1,10 @@
 import { KeyRound, Loader2 } from 'lucide-react';
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { login } from '../lib/api';
 
 export function Login() {
+  const navigate = useNavigate();
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -14,7 +16,7 @@ export function Login() {
     setError('');
     try {
       await login(apiKey.trim());
-      window.location.href = '/';
+      navigate('/dashboard', { replace: true });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '登录失败');
     } finally {

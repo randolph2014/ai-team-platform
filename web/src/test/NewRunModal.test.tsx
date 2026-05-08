@@ -9,7 +9,10 @@ import {
 } from '../lib/api';
 
 vi.mock('../lib/api', () => ({
-  apiFetch: vi.fn(),
+  apiFetch: vi.fn(() => Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve([]),
+  })),
   createRun: vi.fn(() => Promise.resolve({ run_id: 'api-run-1', status: 'running' })),
   fetchPipelineTemplates: vi.fn(() => Promise.resolve([
     {
@@ -70,7 +73,7 @@ describe('NewRunModal pipeline selection', () => {
     fireEvent.change(screen.getByLabelText('Pipeline 模板'), {
       target: { value: 'template:bugfix' },
     });
-    fireEvent.change(screen.getByLabelText('项目路径'), {
+    fireEvent.change(screen.getByLabelText('项目路径（手动输入）'), {
       target: { value: '/repo' },
     });
     fireEvent.change(screen.getByLabelText('需求描述'), {
