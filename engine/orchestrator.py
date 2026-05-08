@@ -12,7 +12,16 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from .agent_runner import AgentRunner
-from .artifact_contracts import has_artifact_validation_failure, stage_schema_hint, validate_required_artifacts
+from .artifact_contracts import (
+    SchemaValidationError,
+    has_artifact_validation_failure,
+    load_schema_for_artifact,
+    stage_schema_hint,
+    validate_artifact,
+    validate_requirement_for_planning,
+    validate_required_artifacts,
+    validate_review_for_loopback,
+)
 from .config import (
     ConfigError,
     agent_map,
@@ -401,6 +410,10 @@ class Orchestrator:
                     human_decisions=report.human_decisions,
                 )
 
+            entry_error = self._validate_stage_entry(stage_id, artifact_dir)
+            if entry_error:
+                raise OrchestratorError(f"Stage {stage_id} blocked by schema validation: {entry_error}")
+
             stage_runs_to_append: List[StageRun]
             if stage.get("type") == "context_scan":
                 stage_run = self._run_context_stage(stage, report, artifact_dir, worktree_path)
@@ -561,6 +574,52 @@ class Orchestrator:
                 self._write_report(report, report_dir)
                 index = target_index
                 continue
+
+            if stage.get("loopback_to") and stage_id == "review":
+                review_info = self._check_review_loopback(stage_id, artifact_dir)
+                if review_info:
+                    count = loop_counts.get(stage_id, 0) + 1
+                    loop_counts[stage_id] = count
+                    max_retries = int(stage.get("max_retries") or 0)
+                    if count > max_retries:
+                        raise OrchestratorError(f"Stage {stage_id} requested loopback more than {max_retries} times")
+                    target = stage.get("loopback_to")
+                    if target not in stage_index_by_id:
+                        raise OrchestratorError(f"Loopback target not found: {target}")
+                    self.bus.emit(
+                        "loopback:triggered",
+                        report.run_id,
+                        from_stage=stage_id,
+                        to_stage=target,
+                        iteration=count + 1,
+                    )
+                    log_loopback(report.run_id, stage_id, target, count)
+                    target_index = stage_index_by_id[target]
+                    target_stage_ids = {s.get("id") for s in stages[target_index:]}
+                    completed_stages[:] = [item for item in completed_stages if item not in target_stage_ids]
+                    if unit_progress:
+                        unit_progress.completed_stages = list(completed_stages)
+                    extra_feedback = (
+                        f"## Review 结构化回流\n\n"
+                        f"- Verdict: {review_info['verdict']}\n"
+                        f"- Blocking findings: {review_info['blocking_count']}\n"
+                        f"- 详情: {review_info['summary']}\n\n"
+                        f"请根据以上 review 反馈修复问题。"
+                    )
+                    feedback_file = artifact_dir / f"loopback-feedback-{stage_id}-{count}.md"
+                    feedback_file.write_text(extra_feedback, encoding="utf-8")
+                    self._save_checkpoint(
+                        report_dir,
+                        report.run_id,
+                        completed_stages,
+                        worktree_path,
+                        mode=checkpoint_mode,
+                        units=checkpoint_units,
+                        human_decisions=report.human_decisions,
+                    )
+                    self._write_report(report, report_dir)
+                    index = target_index
+                    continue
 
             index += 1
 
@@ -1534,6 +1593,58 @@ class Orchestrator:
         except Exception:
             logger = get_logger("orchestrator", run_id=run_id)
             logger.debug("推送文件变更失败", exc_info=True)
+
+    def _validate_stage_entry(self, stage_id: str, artifact_dir: Path) -> Optional[str]:
+        if stage_id == "plan":
+            req_path = artifact_dir / "requirement-final.json"
+            if req_path.exists():
+                try:
+                    payload = json.loads(req_path.read_text(encoding="utf-8"))
+                    errors = validate_requirement_for_planning(payload)
+                    if errors:
+                        return "; ".join(errors)
+                except Exception:
+                    pass
+        if stage_id == "develop":
+            plan_path = artifact_dir / "task-plan.json"
+            if plan_path.exists():
+                try:
+                    payload = json.loads(plan_path.read_text(encoding="utf-8"))
+                    errors, _ = validate_artifact(payload, "task-plan.json")
+                    if errors:
+                        return f"task-plan.json schema invalid: {'; '.join(errors[:5])}"
+                except Exception:
+                    pass
+        return None
+
+    def _check_review_loopback(self, stage_id: str, artifact_dir: Path) -> Optional[Dict[str, Any]]:
+        review_path = artifact_dir / "review-report.json"
+        if not review_path.exists():
+            return None
+        try:
+            payload = json.loads(review_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if validate_review_for_loopback(payload):
+            blocking = payload.get("blocking_findings", [])
+            findings_summary = "; ".join(
+                f"[{f.get('severity', '?')}] {f.get('file_path', '?')}: {f.get('description', '?')}"
+                for f in blocking[:5]
+            )
+            if not findings_summary:
+                critical = [f for f in payload.get("findings", []) if f.get("severity") == "Critical"]
+                findings_summary = "; ".join(
+                    f"[Critical] {f.get('file_path', '?')}: {f.get('description', '?')}"
+                    for f in critical[:5]
+                )
+            return {
+                "verdict": payload.get("verdict"),
+                "blocking_count": len(blocking),
+                "summary": findings_summary or "Request Changes with no detail",
+            }
+        return None
 
     def _write_report(self, report: RunReport, output_dir: Path) -> None:
         self._refresh_artifacts(report, output_dir)

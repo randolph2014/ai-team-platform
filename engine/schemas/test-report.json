@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "test-report.json",
+  "title": "Test Report Artifact",
+  "description": "结构化 QA 测试报告产物，包含命令、退出码、耗时和汇总",
+  "type": "object",
+  "required": ["status", "summary", "commands", "results"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["completed", "failed", "partial"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command", "exit_code", "duration"],
+        "properties": {
+          "command": {"type": "string", "minLength": 1},
+          "exit_code": {"type": "integer"},
+          "duration": {"type": "number", "minimum": 0}
+        },
+        "additionalProperties": false
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["test_name", "status", "duration"],
+        "properties": {
+          "test_name": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "enum": ["passed", "failed", "skipped", "error"]},
+          "duration": {"type": "number", "minimum": 0},
+          "message": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "acceptance_coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["acceptance_id", "status"],
+        "properties": {
+          "acceptance_id": {"type": "string"},
+          "covered_by": {"type": "string"},
+          "status": {"type": "string", "enum": ["passed", "failed", "skipped"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "finding"],
+        "properties": {
+          "source": {"type": "string"},
+          "finding": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,212 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "requirement-final.json",
+  "title": "Requirement Final Artifact",
+  "description": "结构化定稿需求产物，包含目标、非目标、范围、验收标准和风险",
+  "type": "object",
+  "required": ["status", "summary", "goals", "non_goals", "scope", "acceptance_criteria", "risks"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["completed", "failed", "partial"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "goals": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "description"],
+        "properties": {
+          "id": {"type": "string"},
+          "description": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "non_goals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["description"],
+        "properties": {
+          "description": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "scope": {
+      "type": "object",
+      "required": ["included", "excluded"],
+      "properties": {
+        "included": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "excluded": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "verification_method"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^AC-"},
+          "description": {"type": "string", "minLength": 1},
+          "verification_method": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["risk", "impact"],
+        "properties": {
+          "risk": {"type": "string", "minLength": 1},
+          "impact": {"type": "string", "minLength": 1},
+          "mitigation": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "inputs_used": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "target_users": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["role", "needs", "scenarios"],
+        "properties": {
+          "role": {"type": "string"},
+          "needs": {"type": "string"},
+          "scenarios": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "business_scenarios": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "trigger", "flow"],
+        "properties": {
+          "name": {"type": "string"},
+          "trigger": {"type": "string"},
+          "flow": {"type": "string"},
+          "frequency": {"type": "string", "enum": ["high", "medium", "low"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "must_have": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "edge_cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["case", "impact"],
+        "properties": {
+          "case": {"type": "string"},
+          "impact": {"type": "string"},
+          "mitigation": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "description"],
+        "properties": {
+          "type": {"type": "string", "enum": ["technical", "business", "time", "resource", "security", "compliance", "other"]},
+          "description": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["topic", "decision"],
+        "properties": {
+          "topic": {"type": "string"},
+          "decision": {"type": "string"},
+          "accepted_inputs": {"type": "array", "items": {"type": "string"}},
+          "rejected_inputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["input", "reason"],
+              "properties": {
+                "input": {"type": "string"},
+                "reason": {"type": "string"}
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["question"],
+        "properties": {
+          "question": {"type": "string"},
+          "impact": {"type": "string"},
+          "options": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      }
+    },
+    "acceptance_coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["acceptance_id", "covered_by", "status"],
+        "properties": {
+          "acceptance_id": {"type": "string"},
+          "covered_by": {"type": "string"},
+          "status": {"type": "string", "enum": ["covered", "open", "blocked"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "finding"],
+        "properties": {
+          "source": {"type": "string"},
+          "finding": {"type": "string"},
+          "supports": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "next_stage_contract": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

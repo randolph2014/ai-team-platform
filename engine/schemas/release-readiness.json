@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "release-readiness.json",
+  "title": "Release Readiness Artifact",
+  "description": "发布就绪检查产物，汇总各阶段产物校验结果",
+  "type": "object",
+  "required": ["status", "verdict", "checks", "summary"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["completed", "failed", "partial"]
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["Ready", "Not Ready"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "source_artifact"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "enum": ["passed", "failed", "skipped"]},
+          "source_artifact": {"type": "string"},
+          "message": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "blocking_issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "issue"],
+        "properties": {
+          "source": {"type": "string"},
+          "issue": {"type": "string"},
+          "severity": {"type": "string", "enum": ["Critical", "Warning"]}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

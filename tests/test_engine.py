@@ -1848,7 +1848,7 @@ worktree:
 ```
 
 ```json
-{"status": "completed", "summary": "tasks", "tasks": [], "execution_order": [], "file_boundaries": [], "test_plan": [], "rollback_considerations": [], "acceptance_coverage": [], "evidence": [], "next_stage_contract": {}}
+{"status": "completed", "summary": "tasks", "tasks": [{"id": "task-001", "title": "t", "description": "d", "priority": "P0", "acceptance_criteria_refs": ["AC-001"]}], "execution_order": [["task-001"]], "file_boundaries": [], "test_plan": [], "rollback_considerations": [], "acceptance_coverage": [], "evidence": [], "next_stage_contract": {}}
 ```
 """
         with tempfile.TemporaryDirectory() as tmp:
@@ -1941,7 +1941,10 @@ worktree:
 
             self.assertEqual(report.status, "failed")
             self.assertIn("task-plan.json", report.error_message or "")
-            self.assertIn("file_boundaries", report.error_message or "")
+            self.assertTrue(
+                "execution_order" in (report.error_message or "") or "tasks" in (report.error_message or ""),
+                f"Expected schema validation error, got: {report.error_message}",
+            )
 
     def test_stage_json_artifacts_rejects_parent_directory_path(self) -> None:
         response = """# Plan

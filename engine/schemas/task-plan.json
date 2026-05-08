@@ -1,0 +1,133 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "task-plan.json",
+  "title": "Task Plan Artifact",
+  "description": "结构化任务计划产物，每个任务必须绑定 acceptance_criteria_refs",
+  "type": "object",
+  "required": ["status", "summary", "tasks", "execution_order"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["completed", "failed", "partial"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "description", "priority", "acceptance_criteria_refs"],
+        "properties": {
+          "id": {"type": "string"},
+          "title": {"type": "string", "minLength": 1},
+          "description": {"type": "string", "minLength": 1},
+          "priority": {"type": "string", "enum": ["P0", "P1", "P2", "P3"]},
+          "depends_on": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "deliverable": {
+            "type": "object",
+            "properties": {
+              "type": {"type": "string", "enum": ["file", "test", "doc", "config"]},
+              "path": {"type": "string"},
+              "description": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "estimated_effort": {"type": "string", "enum": ["S", "M", "L", "XL"]},
+          "acceptance_criteria_refs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "pattern": "^AC-"}
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "execution_order": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "array",
+        "items": {"type": "string"}
+      }
+    },
+    "file_boundaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "allowed_files"],
+        "properties": {
+          "task_id": {"type": "string"},
+          "allowed_files": {"type": "array", "items": {"type": "string"}},
+          "forbidden_scope": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "test_plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "command"],
+        "properties": {
+          "task_id": {"type": "string"},
+          "command": {"type": "string"},
+          "covers": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      }
+    },
+    "rollback_considerations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["scope", "strategy"],
+        "properties": {
+          "scope": {"type": "string"},
+          "strategy": {"type": "string"},
+          "risk": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "acceptance_coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["acceptance_id", "covered_by_tasks", "status"],
+        "properties": {
+          "acceptance_id": {"type": "string"},
+          "covered_by_tasks": {"type": "array", "items": {"type": "string"}},
+          "status": {"type": "string", "enum": ["covered", "open", "blocked"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "finding"],
+        "properties": {
+          "source": {"type": "string"},
+          "finding": {"type": "string"},
+          "supports": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "risk_items": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "next_stage_contract": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}
