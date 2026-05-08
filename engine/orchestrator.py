@@ -427,7 +427,7 @@ class Orchestrator:
                     human_decisions=report.human_decisions,
                 )
 
-            entry_error = self._validate_stage_entry(stage_id, artifact_dir)
+            entry_error = self._validate_stage_entry(stage_id, artifact_dir, stages)
             if entry_error:
                 raise OrchestratorError(f"Stage {stage_id} blocked by schema validation: {entry_error}")
 
@@ -1671,67 +1671,43 @@ class Orchestrator:
             logger = get_logger("orchestrator", run_id=run_id)
             logger.debug("推送文件变更失败", exc_info=True)
 
-    def _validate_stage_entry(self, stage_id: str, artifact_dir: Path) -> Optional[str]:
+    def _validate_stage_entry(self, stage_id: str, artifact_dir: Path, stages: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
+        def _check_schema(artifact_name: str) -> Optional[str]:
+            path = artifact_dir / artifact_name
+            if not path.exists():
+                return None
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                return f"{artifact_name} malformed: {exc}"
+            errors, _ = validate_artifact(payload, artifact_name)
+            if errors:
+                return f"{artifact_name} schema invalid: {'; '.join(errors[:5])}"
+            return None
+
         if stage_id == "plan":
-            req_path = artifact_dir / "requirement-final.json"
-            if req_path.exists():
+            path = artifact_dir / "requirement-final.json"
+            if path.exists():
                 try:
-                    payload = json.loads(req_path.read_text(encoding="utf-8"))
+                    payload = json.loads(path.read_text(encoding="utf-8"))
                     errors = validate_requirement_for_planning(payload)
                     if errors:
                         return "; ".join(errors)
-                except Exception:
-                    pass
-        if stage_id == "requirement_confirm":
-            req_path = artifact_dir / "requirement-final.json"
-            if req_path.exists():
-                try:
-                    payload = json.loads(req_path.read_text(encoding="utf-8"))
-                    errors, _ = validate_artifact(payload, "requirement-final.json")
-                    if errors:
-                        return f"requirement-final.json schema invalid: {'; '.join(errors[:5])}"
-                except Exception:
-                    pass
-        if stage_id == "develop":
-            plan_path = artifact_dir / "task-plan.json"
-            if plan_path.exists():
-                try:
-                    payload = json.loads(plan_path.read_text(encoding="utf-8"))
-                    errors, _ = validate_artifact(payload, "task-plan.json")
-                    if errors:
-                        return f"task-plan.json schema invalid: {'; '.join(errors[:5])}"
-                except Exception:
-                    pass
-        if stage_id == "review":
-            test_path = artifact_dir / "test-report.json"
-            if test_path.exists():
-                try:
-                    payload = json.loads(test_path.read_text(encoding="utf-8"))
-                    errors, _ = validate_artifact(payload, "test-report.json")
-                    if errors:
-                        return f"test-report.json schema invalid: {'; '.join(errors[:5])}"
-                except Exception:
-                    pass
-        if stage_id == "acceptance_confirm":
-            review_path = artifact_dir / "review-report.json"
-            if review_path.exists():
-                try:
-                    payload = json.loads(review_path.read_text(encoding="utf-8"))
-                    errors, _ = validate_artifact(payload, "review-report.json")
-                    if errors:
-                        return f"review-report.json schema invalid: {'; '.join(errors[:5])}"
-                except Exception:
-                    pass
-        if stage_id == "retrospect":
-            release_path = artifact_dir / "release-readiness.json"
-            if release_path.exists():
-                try:
-                    payload = json.loads(release_path.read_text(encoding="utf-8"))
-                    errors, _ = validate_artifact(payload, "release-readiness.json")
-                    if errors:
-                        return f"release-readiness.json schema invalid: {'; '.join(errors[:5])}"
-                except Exception:
-                    pass
+                except json.JSONDecodeError as exc:
+                    return f"requirement-final.json malformed: {exc}"
+        if stage_id in ("requirement_confirm", "develop", "review", "acceptance_confirm", "retrospect"):
+            schema_map = {
+                "requirement_confirm": "requirement-final.json",
+                "develop": "task-plan.json",
+                "review": "test-report.json",
+                "acceptance_confirm": "review-report.json",
+                "retrospect": "release-readiness.json",
+            }
+            artifact = schema_map.get(stage_id)
+            if artifact:
+                err = _check_schema(artifact)
+                if err:
+                    return err
         return None
 
     def _check_review_loopback(self, stage_id: str, artifact_dir: Path) -> Optional[Dict[str, Any]]:
