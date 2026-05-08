@@ -216,15 +216,33 @@ class PipelineRunRepo:
         return [dict(row) for row in rows]
 
     async def list_paginated(
-        self, conn, *, page: int = 1, size: int = 20
+        self, conn, *, page: int = 1, size: int = 20, status: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         offset = (page - 1) * size
-        rows = await conn.fetch(
-            f"SELECT * FROM {self.TABLE} ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-            size,
-            offset,
-        )
+        if status:
+            rows = await conn.fetch(
+                f"SELECT * FROM {self.TABLE} WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+                status,
+                size,
+                offset,
+            )
+        else:
+            rows = await conn.fetch(
+                f"SELECT * FROM {self.TABLE} ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+                size,
+                offset,
+            )
         return [dict(row) for row in rows]
+
+    async def count(self, conn, status: Optional[str] = None) -> int:
+        if status:
+            row = await conn.fetchrow(
+                f"SELECT COUNT(*) as cnt FROM {self.TABLE} WHERE status = $1",
+                status,
+            )
+        else:
+            row = await conn.fetchrow(f"SELECT COUNT(*) as cnt FROM {self.TABLE}")
+        return row["cnt"] if row else 0
 
     async def update_status(
         self,
@@ -559,6 +577,10 @@ async def save_report(report: RunReport, config: Optional[Dict[str, Any]] = None
             }
             if report.merge_result:
                 ctx["merge_result"] = report.merge_result
+            if report.error_detail:
+                ctx["error_detail"] = model_to_dict(report.error_detail)
+            if report.status_timeline:
+                ctx["status_timeline"] = [model_to_dict(item) for item in report.status_timeline]
 
             await run_repo.upsert(
                 conn,
@@ -898,6 +920,8 @@ def run_row_to_summary(row: Dict[str, Any]) -> Dict[str, Any]:
         "output_dir": ctx.get("output_dir"),
         "started_at": _dt_to_str(row.get("started_at")),
         "completed_at": _dt_to_str(row.get("completed_at")),
+        "duration_seconds": row.get("duration_seconds"),
+        "requirement": row.get("requirement"),
     }
 
 
@@ -977,8 +1001,10 @@ def run_detail_to_response(detail: Dict[str, Any]) -> Dict[str, Any]:
         "completed_at": _dt_to_str(detail.get("completed_at")),
         "duration_seconds": detail.get("duration_seconds"),
         "error_message": detail.get("error_message"),
+        "error_detail": _json_or_default(ctx.get("error_detail"), None),
         "artifacts": ctx.get("artifacts", []),
         "human_decisions": _json_or_default(ctx.get("human_decisions"), []),
+        "status_timeline": _json_or_default(ctx.get("status_timeline"), []),
         "stages": stages,
     }
 

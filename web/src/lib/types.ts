@@ -1,4 +1,4 @@
-export type RunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'waiting';
+export type RunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'waiting' | 'archived';
 
 export interface AgentRun {
   agent_name: string;
@@ -68,6 +68,18 @@ export interface StageRun {
   loopback_to?: string | null;
 }
 
+export interface StatusTimelineEntry {
+  status: string;
+  timestamp: string;
+  reason?: string;
+}
+
+export interface StructuredError {
+  error_type?: string;
+  error_message?: string;
+  traceback?: string;
+}
+
 export interface RunReport {
   run_id: string;
   status: RunStatus;
@@ -89,6 +101,8 @@ export interface RunReport {
   artifacts: string[];
   warnings?: string[];
   error_message?: string;
+  error_detail?: StructuredError;
+  status_timeline?: StatusTimelineEntry[];
 }
 
 export interface RunEvent {
@@ -107,6 +121,13 @@ export interface RunListItem {
   started_at?: string;
   completed_at?: string;
   duration_seconds?: number;
+}
+
+export interface RunListResponse {
+  items: RunListItem[];
+  total: number;
+  page: number;
+  size: number;
 }
 
 export interface Pipeline {

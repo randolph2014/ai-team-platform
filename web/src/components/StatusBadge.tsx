@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock3, Loader2, XCircle } from 'lucide-react';
+import { Archive, CheckCircle2, Clock3, Loader2, XCircle } from 'lucide-react';
 import type { RunStatus } from '../lib/types';
 
 const labels: Record<string, string> = {
@@ -8,10 +8,12 @@ const labels: Record<string, string> = {
   pending: '等待中',
   waiting: '待验收',
   skipped: '已跳过',
+  cancelled: '已取消',
+  archived: '已归档',
 };
 
 export function StatusBadge({ status }: { status: RunStatus | string }) {
-  const Icon = status === 'completed' ? CheckCircle2 : status === 'failed' ? XCircle : status === 'running' ? Loader2 : Clock3;
+  const Icon = status === 'completed' ? CheckCircle2 : status === 'failed' ? XCircle : status === 'running' ? Loader2 : status === 'archived' ? Archive : Clock3;
   return (
     <span className={`badge badge-${status}`}>
       <Icon size={13} className={status === 'running' ? 'spin' : ''} />

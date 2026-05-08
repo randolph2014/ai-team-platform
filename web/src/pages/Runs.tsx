@@ -1,5 +1,5 @@
-import { AlertTriangle, ArrowUpDown, Loader2, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, ArrowUpDown, ChevronLeft, ChevronRight, Loader2, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { fetchRuns, rememberedWorkdir } from '../lib/api';
 import { StatusBadge } from '../components/StatusBadge';
 import type { RunListItem } from '../lib/types';
@@ -7,13 +7,14 @@ import type { RunListItem } from '../lib/types';
 type SortField = 'started_at' | 'duration_seconds' | 'status' | 'pipeline';
 type SortDir = 'asc' | 'desc';
 
-const STATUS_OPTIONS = ['completed', 'failed', 'running', 'pending', 'waiting', 'cancelled'] as const;
+const STATUS_OPTIONS = ['completed', 'failed', 'running', 'pending', 'waiting', 'cancelled', 'archived'] as const;
 const SORT_FIELDS: { field: SortField; label: string }[] = [
   { field: 'started_at', label: '开始时间' },
   { field: 'duration_seconds', label: '耗时' },
   { field: 'status', label: '状态' },
   { field: 'pipeline', label: 'Pipeline' },
 ];
+const PAGE_SIZE = 20;
 
 function formatDuration(seconds?: number): string {
   if (!seconds || seconds <= 0) return '—';
@@ -29,6 +30,8 @@ function openRun(run: RunListItem) {
 
 export function Runs({ onNewRun }: { onNewRun: () => void }) {
   const [runs, setRuns] = useState<RunListItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -36,25 +39,38 @@ export function Runs({ onNewRun }: { onNewRun: () => void }) {
   const [sortField, setSortField] = useState<SortField>('started_at');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
-  useEffect(() => {
+  const loadRuns = useCallback(() => {
     setLoading(true);
     setError('');
-    fetchRuns(rememberedWorkdir())
-      .then(setRuns)
+    const status = statusFilter.length === 1 ? statusFilter[0] : undefined;
+    fetchRuns(rememberedWorkdir(), { page, size: PAGE_SIZE, status })
+      .then((res) => {
+        setRuns(res.items);
+        setTotal(res.total);
+      })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [page, statusFilter]);
+
+  useEffect(() => {
+    loadRuns();
+  }, [loadRuns]);
 
   const toggleStatus = (s: string) => {
-    setStatusFilter((prev) =>
-      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s],
-    );
+    setStatusFilter((prev) => {
+      const next = prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s];
+      setPage(1);
+      return next;
+    });
   };
 
   const clearFilters = () => {
     setSearch('');
     setStatusFilter([]);
+    setPage(1);
   };
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const filteredSorted = useMemo(() => {
     let result = runs;
@@ -102,14 +118,7 @@ export function Runs({ onNewRun }: { onNewRun: () => void }) {
         <div className="errorPanel">
           <h2><AlertTriangle size={20} /> 加载失败</h2>
           <p>{error}</p>
-          <button className="button primary" onClick={() => {
-            setError('');
-            setLoading(true);
-            fetchRuns(rememberedWorkdir())
-              .then(setRuns)
-              .catch((err: Error) => setError(err.message))
-              .finally(() => setLoading(false));
-          }}>重试</button>
+          <button className="button primary" onClick={loadRuns}>重试</button>
         </div>
       </div>
     );
@@ -170,7 +179,7 @@ export function Runs({ onNewRun }: { onNewRun: () => void }) {
 
           {hasFilters && (
             <div className="runsFilterHint">
-              筛选 {filteredSorted.length}/{runs.length} 条
+              筛选 {filteredSorted.length}/{total} 条
               <button className="linkButton" onClick={clearFilters} style={{ fontSize: 12, padding: 0 }}>清除过滤</button>
             </div>
           )}
@@ -205,6 +214,7 @@ export function Runs({ onNewRun }: { onNewRun: () => void }) {
             <small>尝试调整搜索关键词或过滤条件</small>
           </div>
         ) : (
+          <>
           <div className="tableWrap">
             <table>
               <thead>
@@ -233,6 +243,26 @@ export function Runs({ onNewRun }: { onNewRun: () => void }) {
               </tbody>
             </table>
           </div>
+          {totalPages > 1 && (
+            <div className="pagination">
+              <button
+                className="button"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                <ChevronLeft size={14} /> 上一页
+              </button>
+              <span className="paginationInfo">{page} / {totalPages}</span>
+              <button
+                className="button"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              >
+                下一页 <ChevronRight size={14} />
+              </button>
+            </div>
+          )}
+          </>
         )}
       </section>
     </div>

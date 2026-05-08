@@ -65,7 +65,7 @@ export function Dashboard({ onNewRun }: { onNewRun: () => void }) {
     setLoading(true);
     setError('');
     fetchRuns(rememberedWorkdir())
-      .then(setRuns)
+      .then((res) => setRuns(res.items))
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
@@ -111,7 +111,7 @@ export function Dashboard({ onNewRun }: { onNewRun: () => void }) {
             setError('');
             setLoading(true);
             fetchRuns(rememberedWorkdir())
-              .then(setRuns)
+              .then((res) => setRuns(res.items))
               .catch((err: Error) => setError(err.message))
               .finally(() => setLoading(false));
           }}>重试</button>

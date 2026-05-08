@@ -49,7 +49,9 @@ export function MarkdownViewer({ content, className }: MarkdownViewerProps) {
             );
           },
         }}
-      />
+      >
+        {safe}
+      </ReactMarkdown>
     </div>
   );
 }

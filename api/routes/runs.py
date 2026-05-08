@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from engine.config import find_project_root
-from engine.models import HumanDecision
+from engine.models import HumanDecision, InvalidStatusTransition, validate_run_transition
 from engine.orchestrator import find_run_reports, load_report
 from engine.production_guard import is_production_mode
 
@@ -105,7 +105,7 @@ class HumanDecisionRequest(BaseModel):
     target_stage: Optional[str] = None
 
 
-async def _db_list_runs(workdir: Optional[str], project_id: Optional[str], page: int, size: int) -> Optional[List[Dict[str, Any]]]:
+async def _db_list_runs(workdir: Optional[str], project_id: Optional[str], page: int, size: int, status: Optional[str] = None) -> Optional[Dict[str, Any]]:
     db = try_persistence()
     if db is None:
         return None
@@ -125,14 +125,16 @@ async def _db_list_runs(workdir: Optional[str], project_id: Optional[str], page:
             project_root = str(find_project_root(workdir))
 
         repo = PipelineRunRepo()
-        rows = await repo.list_paginated(conn, page=page, size=size)
+        total = await repo.count(conn, status=status)
+        rows = await repo.list_paginated(conn, page=page, size=size, status=status)
         if project_root:
             results = []
             for r in rows:
                 if r.get("project_root") == project_root:
                     results.append(run_row_to_summary(r))
-            return results
-        return [run_row_to_summary(r) for r in rows]
+        else:
+            results = [run_row_to_summary(r) for r in rows]
+        return {"items": results, "total": total, "page": page, "size": size}
     except Exception:
         logger.debug("DB list_runs failed, falling back to filesystem", exc_info=True)
         return None
@@ -261,9 +263,10 @@ if router:
         project_id: Optional[str] = Query(default=None),
         page: int = Query(default=1, ge=1),
         size: int = Query(default=20, ge=1, le=100),
+        status: Optional[str] = Query(default=None),
         user: Dict[str, Any] = _get_auth(),
     ):
-        db_results = await _db_list_runs(workdir, project_id, page, size)
+        db_results = await _db_list_runs(workdir, project_id, page, size, status)
         if db_results is not None:
             return db_results
 
@@ -272,6 +275,8 @@ if router:
         reports = []
         for path in find_run_reports(Path(project_root)):
             report = load_report(path)
+            if status and report.status != status:
+                continue
             reports.append(
                 {
                     "run_id": report.run_id,
@@ -282,7 +287,7 @@ if router:
                     "completed_at": report.completed_at,
                 }
             )
-        return reports
+        return {"items": reports, "total": len(reports), "page": page, "size": size}
 
     @router.get("/runs/{run_id}")
     async def get_run(run_id: str, workdir: Optional[str] = Query(default=None), project_id: Optional[str] = Query(default=None), user: Dict[str, Any] = _get_auth()):
@@ -442,8 +447,10 @@ if router:
         report_file = output_dir / "report.json"
         if report_file.exists():
             report = load_report(report_file)
-            if report.status in {"completed", "failed", "cancelled"}:
-                raise HTTPException(status_code=400, detail=f"run status is {report.status}, cannot cancel")
+            try:
+                validate_run_transition(report.status, "cancelled")
+            except InvalidStatusTransition as exc:
+                raise HTTPException(status_code=409, detail=str(exc))
 
         rq_job_id = None
         try:
@@ -483,8 +490,10 @@ if router:
             raise HTTPException(status_code=404, detail="run not found")
 
         report = load_report(report_file)
-        if report.status != "failed":
-            raise HTTPException(status_code=400, detail=f"run status is {report.status}, can only retry failed runs")
+        try:
+            validate_run_transition(report.status, "running")
+        except InvalidStatusTransition:
+            raise HTTPException(status_code=409, detail=f"run status is {report.status}, cannot retry")
 
         new_run_id = f"retry-{uuid.uuid4().hex[:12]}"
         new_output_dir = expected_output_dir(new_run_id, resolved_workdir)
@@ -516,10 +525,34 @@ if router:
             "output_dir": str(out),
         }
 
+    @router.post("/runs/{run_id}/archive")
+    async def archive_run(
+        run_id: str,
+        workdir: str = Query(default="."),
+        project_id: Optional[str] = Query(default=None),
+        user: Dict[str, Any] = _get_auth(),
+    ):
+        resolved_workdir = await _resolve_workdir(project_id, workdir)
+        project_root = project_for_run(run_id, resolved_workdir)
+        output_dir = project_root / ".ai" / "team-output" / run_id
+
+        report_file = output_dir / "report.json"
+        if not report_file.exists():
+            raise HTTPException(status_code=404, detail="run not found")
+
+        report = load_report(report_file)
+        try:
+            validate_run_transition(report.status, "archived")
+        except InvalidStatusTransition as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+        _update_run_status(run_id, resolved_workdir, "archived")
+        return {"run_id": run_id, "status": "archived"}
+
 
 def _update_run_status(run_id: str, workdir: str, status: str) -> None:
     try:
-        from engine.models import RunReport, utc_now
+        from engine.models import RunReport, StatusTimelineEntry, utc_now
         from persistence import save_report_sync
 
         project_root = find_project_root(workdir)
@@ -527,6 +560,7 @@ def _update_run_status(run_id: str, workdir: str, status: str) -> None:
         report_file = output_dir / "report.json"
         if report_file.exists():
             report = load_report(report_file)
+            report.status_timeline.append(StatusTimelineEntry(status=status))
             report.status = status
             report.completed_at = utc_now()
             report.write(output_dir / "report.json")
@@ -540,6 +574,7 @@ def _update_run_status(run_id: str, workdir: str, status: str) -> None:
                 output_dir=str(output_dir),
                 started_at=utc_now(),
                 completed_at=utc_now(),
+                status_timeline=[StatusTimelineEntry(status=status)],
             )
             save_report_sync(report, {})
     except Exception:

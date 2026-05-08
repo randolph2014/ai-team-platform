@@ -5,6 +5,7 @@ import type {
   Pipeline,
   PipelineTemplate,
   RunListItem,
+  RunListResponse,
   RunReport,
   RuntimeCatalogResponse,
   SettingsResponse,
@@ -117,11 +118,21 @@ export function runQuery(workdir: string): string {
 
 // --- Runs ---
 
-export async function fetchRuns(workdir?: string): Promise<RunListItem[]> {
+export async function fetchRuns(workdir?: string, params?: { page?: number; size?: number; status?: string }): Promise<RunListResponse> {
   const wd = workdir || rememberedWorkdir();
-  const response = await apiFetch(`/runs${runQuery(wd)}`);
+  const searchParams = new URLSearchParams();
+  if (wd) searchParams.set('workdir', wd);
+  if (params?.page) searchParams.set('page', String(params.page));
+  if (params?.size) searchParams.set('size', String(params.size));
+  if (params?.status) searchParams.set('status', params.status);
+  const qs = searchParams.toString();
+  const response = await apiFetch(`/runs${qs ? `?${qs}` : ''}`);
   if (!response.ok) throw new Error(`获取运行列表失败: ${response.status}`);
-  return response.json();
+  const data = await response.json();
+  if (Array.isArray(data)) {
+    return { items: data, total: data.length, page: 1, size: data.length };
+  }
+  return data;
 }
 
 export async function fetchRun(runId: string, workdir?: string): Promise<RunReport> {

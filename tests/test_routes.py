@@ -707,7 +707,8 @@ class TestRunsRoutes(BaseRoutesTest):
         response = self.client.get("/api/runs", params={"workdir": str(self.project_root)})
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertIsInstance(data, list)
+        self.assertIn("items", data)
+        self.assertIsInstance(data["items"], list)
 
     def test_get_run_not_found_returns_404(self) -> None:
         """GET /api/runs/{run_id} 不存在的运行返回 404"""
@@ -1087,7 +1088,7 @@ class TestCancelRetryRoutes(BaseRoutesTest):
         data = response.json()
         self.assertEqual(data["status"], "cancelled")
 
-    def test_cancel_completed_run_returns_400(self) -> None:
+    def test_cancel_completed_run_returns_409(self) -> None:
         from engine.models import RunReport
 
         run_id = "cancel-completed-run"
@@ -1108,7 +1109,7 @@ class TestCancelRetryRoutes(BaseRoutesTest):
             params={"workdir": str(self.project_root)},
         )
 
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 409)
         self.assertIn("completed", response.json()["detail"])
 
     def test_cancel_nonexistent_run_returns_404(self) -> None:
@@ -1147,7 +1148,7 @@ class TestCancelRetryRoutes(BaseRoutesTest):
         self.assertEqual(data["status"], "queued")
         self.assertTrue(data["run_id"].startswith("retry-"))
 
-    def test_retry_completed_run_returns_400(self) -> None:
+    def test_retry_completed_run_returns_409(self) -> None:
         from engine.models import RunReport
 
         run_id = "retry-completed-run"
@@ -1168,7 +1169,7 @@ class TestCancelRetryRoutes(BaseRoutesTest):
             params={"workdir": str(self.project_root)},
         )
 
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 409)
         self.assertIn("completed", response.json()["detail"])
 
     def test_retry_nonexistent_run_returns_404(self) -> None:
@@ -1484,7 +1485,10 @@ class TestRunsPagination(BaseRoutesTest):
             params={"workdir": str(self.project_root), "page": 1, "size": 5},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIsInstance(response.json(), list)
+        data = response.json()
+        self.assertIn("items", data)
+        self.assertEqual(data["page"], 1)
+        self.assertEqual(data["size"], 5)
 
 
 class TestRunsFallbackToFilesystem(BaseRoutesTest):
@@ -1539,7 +1543,8 @@ class TestRunsFallbackToFilesystem(BaseRoutesTest):
         response = self.client.get("/api/runs", params={"workdir": str(self.project_root)})
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        run_ids = [r["run_id"] for r in data]
+        items = data.get("items", data) if isinstance(data, dict) else data
+        run_ids = [r["run_id"] for r in items]
         self.assertIn("list-fs-run", run_ids)
 
 

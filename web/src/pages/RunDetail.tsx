@@ -1,9 +1,9 @@
-import { Eye, FileDiff, FileText, FolderGit2, GitBranchPlus, Wifi, WifiOff, X } from 'lucide-react';
+import { Archive, CheckCircle, Clock, Eye, FileDiff, FileText, FolderGit2, GitBranchPlus, RefreshCw, Wifi, WifiOff, X, XCircle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { ArtifactViewer } from '../components/ArtifactViewer';
 import { PipelineTimeline } from '../components/PipelineTimeline';
 import { StatusBadge } from '../components/StatusBadge';
-import { fetchRun, fetchRunDiff, rememberedWorkdir, rememberRunWorkdir, runQuery, runWebSocketUrl } from '../lib/api';
+import { apiFetch, fetchRun, fetchRunDiff, rememberedWorkdir, rememberRunWorkdir, runQuery, runWebSocketUrl } from '../lib/api';
 import type { RunEvent, RunReport } from '../lib/types';
 
 function artifactColor(name: string): string {
@@ -182,6 +182,22 @@ export function RunDetail({ runId }: { runId: string }) {
 
   if (!run) return null;
 
+  async function handleRunAction(action: 'cancel' | 'retry' | 'archive') {
+    const wd = workdir || run!.project_root;
+    const qs = wd ? `?workdir=${encodeURIComponent(wd)}` : '';
+    const res = await apiFetch(`/runs/${runId}/${action}${qs}`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: '操作失败' }));
+      throw new Error(err.detail || `操作失败: ${res.status}`);
+    }
+    const updated = await fetchRun(runId, wd);
+    setRun(updated);
+  }
+
+  const canCancel = ['running', 'pending', 'waiting'].includes(run.status);
+  const canRetry = run.status === 'failed';
+  const canArchive = ['completed', 'failed', 'cancelled'].includes(run.status);
+
   return (
     <div className="page">
       <section className="runHeader">
@@ -205,6 +221,72 @@ export function RunDetail({ runId }: { runId: string }) {
         <p>{run.requirement}</p>
         {loadError ? <p className="inlineError">无法加载真实运行记录：{loadError}</p> : null}
       </section>
+
+      {(canCancel || canRetry || canArchive) && (
+        <section className="panel runActionsPanel">
+          <div className="runActionsButtons">
+            {canCancel && (
+              <button className="button" onClick={() => handleRunAction('cancel')}>
+                <XCircle size={14} /> 取消
+              </button>
+            )}
+            {canRetry && (
+              <button className="button" onClick={() => handleRunAction('retry')}>
+                <RefreshCw size={14} /> 重试
+              </button>
+            )}
+            {canArchive && (
+              <button className="button" onClick={() => handleRunAction('archive')}>
+                <Archive size={14} /> 归档
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
+      {run.error_detail && (run.error_detail.error_type || run.error_detail.error_message || run.error_detail.traceback) && (
+        <section className="panel errorDetailPanel">
+          <h2><XCircle size={16} /> 错误详情</h2>
+          {run.error_detail.error_type && (
+            <div className="errorDetailRow">
+              <span className="errorDetailLabel">类型</span>
+              <span className="errorDetailValue mono">{run.error_detail.error_type}</span>
+            </div>
+          )}
+          {run.error_detail.error_message && (
+            <div className="errorDetailRow">
+              <span className="errorDetailLabel">信息</span>
+              <span className="errorDetailValue">{run.error_detail.error_message}</span>
+            </div>
+          )}
+          {run.error_detail.traceback && (
+            <details>
+              <summary>调用栈</summary>
+              <pre className="errorTraceback">{run.error_detail.traceback}</pre>
+            </details>
+          )}
+        </section>
+      )}
+
+      {run.status_timeline && run.status_timeline.length > 0 && (
+        <section className="panel statusTimelinePanel">
+          <h2><Clock size={16} /> 状态时间线</h2>
+          <div className="statusTimeline">
+            {run.status_timeline.map((entry, idx) => (
+              <div key={idx} className="statusTimelineEntry">
+                <span className="statusTimelineDot" />
+                <div className="statusTimelineContent">
+                  <StatusBadge status={entry.status} />
+                  <span className="statusTimelineTime">
+                    {new Date(entry.timestamp).toLocaleString('zh-CN')}
+                  </span>
+                  {entry.reason && <span className="statusTimelineReason">{entry.reason}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {changedFiles.length > 0 && (
         <section className="panel fileChangesPanel">

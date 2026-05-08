@@ -7,10 +7,32 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-RunStatus = Literal["pending", "running", "completed", "failed", "cancelled", "waiting"]
+RunStatus = Literal["pending", "running", "completed", "failed", "cancelled", "waiting", "archived"]
 StageStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled", "waiting"]
 AgentStatus = Literal["pending", "running", "completed", "failed", "timeout", "cancelled"]
 GateStatus = Literal["pending", "running", "passed", "failed", "skipped", "warning"]
+
+RUN_TRANSITIONS: Dict[str, set] = {
+    "pending": {"running", "cancelled"},
+    "running": {"completed", "failed", "cancelled", "waiting"},
+    "waiting": {"running", "cancelled"},
+    "failed": {"running", "archived"},
+    "completed": {"archived"},
+    "cancelled": {"archived"},
+    "archived": set(),
+}
+
+
+class InvalidStatusTransition(ValueError):
+    pass
+
+
+def validate_run_transition(current: str, target: str) -> None:
+    allowed = RUN_TRANSITIONS.get(current, set())
+    if target not in allowed:
+        raise InvalidStatusTransition(
+            f"invalid status transition: {current} → {target}"
+        )
 
 
 def utc_now() -> str:
@@ -192,6 +214,18 @@ class StageRun(BaseModel):
     error_message: Optional[str] = None
 
 
+class StatusTimelineEntry(BaseModel):
+    status: str
+    timestamp: str = Field(default_factory=utc_now)
+    reason: Optional[str] = None
+
+
+class StructuredError(BaseModel):
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
+    traceback: Optional[str] = None
+
+
 class RunReport(BaseModel):
     run_id: str
     status: RunStatus = "pending"
@@ -214,6 +248,8 @@ class RunReport(BaseModel):
     artifacts: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     error_message: Optional[str] = None
+    error_detail: Optional[StructuredError] = None
+    status_timeline: List[StatusTimelineEntry] = Field(default_factory=list)
 
     def write(self, path: Path) -> None:
         import json
