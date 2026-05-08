@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from engine.models import RequirementUnit
-from engine.requirement_splitter import estimate_prompt_size, parse_requirement_units, should_split
+from engine.requirement_splitter import estimate_prompt_size, parse_requirement_units, select_splitter_agent, should_split
 
 
 class RequirementSplitterTests(unittest.TestCase):
@@ -25,6 +25,21 @@ class RequirementSplitterTests(unittest.TestCase):
         self.assertFalse(should_split({"runner": {"auto_split_requirements": False, "context_threshold_chars": 10}}, 20))
         self.assertFalse(should_split({"runner": {"auto_split_requirements": True, "context_threshold_chars": 10}}, 9))
         self.assertTrue(should_split({"runner": {"auto_split_requirements": True, "context_threshold_chars": 10}}, 10))
+
+    def test_select_splitter_agent_prefers_planner(self) -> None:
+        config = {
+            "agents": [
+                {"name": "planner", "runtime_id": "auto", "role": "planner"},
+                {"name": "solution-architect", "runtime_id": "legacy", "role": "architect"},
+            ]
+        }
+
+        self.assertEqual(select_splitter_agent(config).name, "planner")
+
+    def test_select_splitter_agent_supports_legacy_solution_architect(self) -> None:
+        config = {"agents": [{"name": "solution-architect", "runtime_id": "legacy", "role": "architect"}]}
+
+        self.assertEqual(select_splitter_agent(config).name, "solution-architect")
 
     def test_parse_requirement_units_validates_required_fields(self) -> None:
         """拆分结果必须是带 units 的 JSON，并校验每个单元必需字段"""

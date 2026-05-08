@@ -23,6 +23,35 @@ USER_CONFIG_FILE = PLATFORM_ROOT / ".user-config.yaml"
 SKILL_ROOT = Path.home() / ".agents" / "skills" / "ai-team"
 
 
+SIMPLIFIED_DEFAULT_AGENTS: List[Dict[str, Any]] = [
+    {"name": "planner", "runtime_id": "auto", "role": "planner", "prompt": "agents/planner.md"},
+    {"name": "challenger", "runtime_id": "auto", "role": "challenger", "prompt": "agents/challenger.md"},
+    {"name": "coder", "runtime_id": "auto", "role": "coder", "prompt": "agents/coder.md"},
+    {"name": "reviewer", "runtime_id": "auto", "role": "reviewer", "prompt": "agents/reviewer.md"},
+]
+
+LEGACY_DEFAULT_AGENT_NAMES = {
+    "requirements-analyst",
+    "solution-architect",
+    "devils-advocate",
+    "planner",
+    "tech-lead",
+    "qa-automation",
+    "code-reviewer",
+    "retrospect",
+}
+
+LEGACY_AGENT_NAME_MAP = {
+    "requirements-analyst": "planner",
+    "solution-architect": "planner",
+    "devils-advocate": "challenger",
+    "tech-lead": "coder",
+    "qa-automation": "reviewer",
+    "code-reviewer": "reviewer",
+    "retrospect": "planner",
+}
+
+
 def _try_load_db_config() -> Optional[Dict[str, Any]]:
     """尝试从数据库读取配置，DB 不可用时返回 None。"""
     try:
@@ -57,16 +86,7 @@ def _try_load_db_config() -> Optional[Dict[str, Any]]:
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "runtimes": {"auto": {"name": "Auto", "cli": "auto"}},
-    "agents": [
-        {"name": "requirements-analyst", "runtime_id": "auto", "role": "analyst", "prompt": "agents/requirements-analyst.md"},
-        {"name": "solution-architect", "runtime_id": "auto", "role": "architect", "prompt": "agents/solution-architect.md"},
-        {"name": "devils-advocate", "runtime_id": "auto", "role": "reviewer", "prompt": "agents/devils-advocate.md"},
-        {"name": "planner", "runtime_id": "auto", "role": "planner", "prompt": "agents/planner.md"},
-        {"name": "tech-lead", "runtime_id": "auto", "role": "lead", "prompt": "agents/tech-lead.md"},
-        {"name": "qa-automation", "runtime_id": "auto", "role": "tester", "prompt": "agents/qa-automation.md"},
-        {"name": "code-reviewer", "runtime_id": "auto", "role": "reviewer", "prompt": "agents/code-reviewer.md"},
-        {"name": "retrospect", "runtime_id": "auto", "role": "summarizer", "prompt": "agents/retrospect.md"},
-    ],
+    "agents": [dict(agent) for agent in SIMPLIFIED_DEFAULT_AGENTS],
     "pipeline": [
         {
             "id": "context_scan",
@@ -80,11 +100,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "id": "requirement_analysis",
             "name": "需求分析",
             "parallel": True,
-            "agents": ["requirements-analyst", "devils-advocate"],
+            "agents": ["planner", "challenger"],
             "input": ["requirement", "codebase-context.md", "codebase-context.json"],
             "output": {
-                "requirements-analyst": "requirement-analysis.md",
-                "devils-advocate": "requirement-gap-analysis.md",
+                "planner": "requirement-analysis.md",
+                "challenger": "requirement-gap-analysis.md",
             },
             "required_artifacts": ["requirement-analysis.md", "requirement-gap-analysis.md"],
         },
@@ -92,7 +112,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "id": "requirement_synthesis",
             "name": "需求综合定稿",
             "parallel": False,
-            "agents": ["requirements-analyst"],
+            "agents": ["planner"],
             "input": [
                 "requirement",
                 "codebase-context.md",
@@ -101,7 +121,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
                 "requirement-gap-analysis.md",
                 "human-decision-requirement*.json",
             ],
-            "output": {"requirements-analyst": "requirement-final.md"},
+            "output": {"planner": "requirement-final.md"},
             "json_artifacts": ["requirement-final.json"],
             "required_artifacts": ["requirement-final.md", "requirement-final.json"],
         },
@@ -148,7 +168,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "id": "develop",
             "name": "开发实施",
             "parallel": False,
-            "agents": ["tech-lead"],
+            "agents": ["coder"],
             "input": [
                 "requirement-final.md",
                 "requirement-final.json",
@@ -160,7 +180,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
                 "human-decision-task-plan.json",
                 "human-decision-acceptance*.json",
             ],
-            "output": {"tech-lead": "implementation-report.md"},
+            "output": {"coder": "implementation-report.md"},
             "json_artifacts": ["implementation-report.json"],
             "required_artifacts": ["implementation-report.md", "implementation-report.json"],
         },
@@ -168,7 +188,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "id": "qa",
             "name": "自动测试",
             "parallel": False,
-            "agents": ["qa-automation"],
+            "agents": ["reviewer"],
             "input": [
                 "requirement-final.md",
                 "requirement-final.json",
@@ -179,7 +199,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
                 "implementation-report.json",
                 "git-diff",
             ],
-            "output": {"qa-automation": "test-report.md"},
+            "output": {"reviewer": "test-report.md"},
             "json_artifacts": ["test-report.json"],
             "required_artifacts": ["test-report.md", "test-report.json"],
             "loopback_to": "develop",
@@ -190,7 +210,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "id": "review",
             "name": "代码审查与风险识别",
             "parallel": False,
-            "agents": ["code-reviewer"],
+            "agents": ["reviewer"],
             "input": [
                 "requirement-final.md",
                 "requirement-final.json",
@@ -203,7 +223,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
                 "test-report.json",
                 "git-diff",
             ],
-            "output": {"code-reviewer": "review-report.md"},
+            "output": {"reviewer": "review-report.md"},
             "json_artifacts": ["review-report.json"],
             "required_artifacts": ["review-report.md", "review-report.json"],
             "loopback_to": "develop",
@@ -238,7 +258,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "id": "retrospect",
             "name": "结果复盘",
             "parallel": False,
-            "agents": ["retrospect"],
+            "agents": ["planner"],
             "input": [
                 "requirement-final.md",
                 "requirement-final.json",
@@ -254,7 +274,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
                 "human-decision-acceptance.json",
                 "git-diff",
             ],
-            "output": {"retrospect": "retrospect-report.md"},
+            "output": {"planner": "retrospect-report.md"},
             "json_artifacts": ["retrospect-report.json"],
             "required_artifacts": ["retrospect-report.md", "retrospect-report.json"],
         },
@@ -355,6 +375,7 @@ def load_config(project_root: Path, explicit_config: Optional[str] = None) -> Lo
     db_config = _try_load_db_config()
     if db_config and isinstance(db_config, dict):
         _deep_merge(base_config, db_config)
+        collapse_legacy_default_agents(base_config)
         config_source = "customized"
         config_path = "db:default"
 
@@ -381,6 +402,59 @@ def _deep_merge(base: Dict[str, Any], overrides: Dict[str, Any]) -> None:
             _deep_merge(base[key], value)
         else:
             base[key] = value
+
+
+def collapse_legacy_default_agents(config: Dict[str, Any]) -> None:
+    """Collapse the historical default 8-agent team into the current 4 roles."""
+    agents = config.get("agents")
+    if not isinstance(agents, list):
+        return
+    agent_items = [item for item in agents if isinstance(item, dict)]
+    agent_names = {str(item.get("name")) for item in agent_items if item.get("name")}
+    if agent_names != LEGACY_DEFAULT_AGENT_NAMES:
+        return
+
+    by_name = {str(item.get("name")): item for item in agent_items}
+
+    def runtime_id(*names: str) -> str:
+        for name in names:
+            value = by_name.get(name, {}).get("runtime_id")
+            if value:
+                return str(value)
+        return "auto"
+
+    config["agents"] = [
+        {**SIMPLIFIED_DEFAULT_AGENTS[0], "runtime_id": runtime_id("planner", "requirements-analyst", "solution-architect")},
+        {**SIMPLIFIED_DEFAULT_AGENTS[1], "runtime_id": runtime_id("devils-advocate")},
+        {**SIMPLIFIED_DEFAULT_AGENTS[2], "runtime_id": runtime_id("tech-lead")},
+        {**SIMPLIFIED_DEFAULT_AGENTS[3], "runtime_id": runtime_id("code-reviewer", "qa-automation")},
+    ]
+    _rewrite_legacy_agent_refs(config)
+
+
+def _rewrite_legacy_agent_refs(config: Dict[str, Any]) -> None:
+    pipeline = config.get("pipeline")
+    stages = pipeline.get("stages") if isinstance(pipeline, dict) else pipeline
+    if not isinstance(stages, list):
+        return
+
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        raw_agents = stage.get("agents")
+        if isinstance(raw_agents, list):
+            next_agents: List[str] = []
+            for name in raw_agents:
+                mapped = LEGACY_AGENT_NAME_MAP.get(str(name), str(name))
+                if mapped not in next_agents:
+                    next_agents.append(mapped)
+            stage["agents"] = next_agents
+        output = stage.get("output")
+        if isinstance(output, dict):
+            next_output: Dict[str, Any] = {}
+            for name, value in output.items():
+                next_output[LEGACY_AGENT_NAME_MAP.get(str(name), str(name))] = value
+            stage["output"] = next_output
 
 
 def normalize_config(config: Dict[str, Any], project_root: Optional[Path] = None) -> Dict[str, Any]:

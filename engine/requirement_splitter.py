@@ -14,6 +14,15 @@ from .models import RequirementUnit
 from .runtimes import runtime_config
 
 
+def select_splitter_agent(config: Dict[str, Any]):
+    agents = agent_map(config)
+    for name in ("planner", "solution-architect"):
+        agent = agents.get(name)
+        if agent:
+            return agent
+    raise ConfigError("auto_split_requirements requires a planner agent (or legacy solution-architect agent)")
+
+
 def estimate_prompt_size(requirement: str, artifacts: Iterable[Path]) -> int:
     size = len(requirement or "")
     for artifact in artifacts:
@@ -56,10 +65,7 @@ def split_requirement(
     output_dir: Optional[Path] = None,
     event_bus: Optional[EventBus] = None,
 ) -> List[RequirementUnit]:
-    agents = agent_map(config)
-    agent = agents.get("solution-architect")
-    if not agent:
-        raise ConfigError("auto_split_requirements requires a solution-architect agent")
+    agent = select_splitter_agent(config)
     runtime = runtime_config(config, agent.runtime_id)
 
     if output_dir:

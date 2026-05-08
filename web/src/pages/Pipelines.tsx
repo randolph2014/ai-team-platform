@@ -11,7 +11,7 @@ stages:
     type: context_scan
   - id: requirement_synthesis
     name: 需求综合定稿
-    agents: [requirements-analyst]
+    agents: [planner]
   - id: requirement_confirm
     name: 需求人工确认
     type: human_review
@@ -23,13 +23,13 @@ stages:
     type: human_review
   - id: develop
     name: 开发实施
-    agents: [tech-lead]
+    agents: [coder]
   - id: qa
     name: 自动测试
-    agents: [qa-automation]
+    agents: [reviewer]
   - id: review
     name: 代码审查与风险识别
-    agents: [code-reviewer]
+    agents: [reviewer]
   - id: acceptance_confirm
     name: 最终人工验收
     type: human_review

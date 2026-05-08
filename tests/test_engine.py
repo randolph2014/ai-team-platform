@@ -30,8 +30,8 @@ class EngineTests(unittest.TestCase):
             root = Path(tmp)
             loaded = load_config(root)
             agents = agent_map(loaded.config)
-            prompt = resolve_prompt_path(root, loaded.path, agents["tech-lead"])
-            self.assertIn("templates/agents/tech-lead.md", str(prompt))
+            prompt = resolve_prompt_path(root, loaded.path, agents["coder"])
+            self.assertIn("templates/agents/coder.md", str(prompt))
 
     def test_context_scanner_excludes_sensitive_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

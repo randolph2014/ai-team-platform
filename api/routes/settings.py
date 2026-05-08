@@ -11,6 +11,7 @@ from engine.config import (
     _deep_merge,
     _read_yaml,
     agent_map,
+    collapse_legacy_default_agents,
     find_project_root,
     load_config,
     normalize_config,
@@ -252,6 +253,8 @@ async def _do_update(body: SettingsUpdate, workdir: str, *, replace_runtimes: bo
                 existing[key] = _merge_preserving_masks(existing.get(key), value)
             else:
                 existing[key] = value
+
+    collapse_legacy_default_agents(existing)
 
     try:
         existing = normalize_config(existing, project_root)

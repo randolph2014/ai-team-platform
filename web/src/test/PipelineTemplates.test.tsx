@@ -23,7 +23,7 @@ vi.mock('../lib/api', () => ({
         version: '1.0',
         stages: [
           { id: 'context_scan', name: '代码库扫描', type: 'context_scan' },
-          { id: 'develop', name: '开发实施', agents: ['tech-lead'] },
+          { id: 'develop', name: '开发实施', agents: ['coder'] },
         ],
       },
     },

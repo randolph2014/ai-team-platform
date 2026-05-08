@@ -12,6 +12,7 @@ from engine.config import (
     LoadedConfig,
     _read_yaml,
     agent_map,
+    collapse_legacy_default_agents,
     executable_exists,
     expand_env,
     find_project_root,
@@ -30,46 +31,46 @@ class TestPromptContracts(unittest.TestCase):
     def test_default_prompts_reference_required_artifact_contracts(self) -> None:
         prompt_dir = Path("templates/agents")
         expected = {
-            "requirements-analyst.md": ["requirement-final.json", "status", "summary", "acceptance_coverage"],
             "planner.md": [
+                "requirement-analysis.md",
+                "requirement-final.json",
                 "task-plan.json",
                 "solution-plan.json",
-                "solution-plan.json 必须包含",
-                "json_artifacts",
-                "第一个",
-                "第二个",
+                "retrospect-report.json",
+                "acceptance_criteria_refs",
                 "status",
                 "summary",
                 "evidence",
                 "alternatives_considered",
                 "configuration_strategy",
                 "verification_strategy",
-                "task-plan.json.file_boundaries",
+                "file_boundaries",
             ],
-            "tech-lead.md": ["implementation-report.json", "git diff", "只修改"],
-            "qa-automation.md": ["test-report.json", "acceptance_coverage"],
-            "code-reviewer.md": ["review-report.json", "verdict", "findings", "风险", "Request Changes"],
-            "retrospect.md": ["retrospect-report.json", "remaining_issues", "交付摘要"],
-            "solution-architect.md": ["需求拆分", "只输出 JSON", "不负责方案定稿"],
+            "challenger.md": ["requirement-gap-analysis.md", "P0", "open_questions", "过度设计"],
+            "coder.md": ["implementation-report.json", "git diff", "file_boundaries", "只修改"],
+            "reviewer.md": ["test-report.json", "review-report.json", "verdict", "blocking_findings", "Request Changes"],
         }
         for filename, needles in expected.items():
             content = (prompt_dir / filename).read_text(encoding="utf-8")
             for needle in needles:
                 self.assertIn(needle, content, f"{filename} missing {needle}")
 
-        tech_lead_content = (prompt_dir / "tech-lead.md").read_text(encoding="utf-8")
+        coder_content = (prompt_dir / "coder.md").read_text(encoding="utf-8")
         forbidden = ["按下方「代码输出格式」", "每个修改文件的完整代码"]
         for needle in forbidden:
-            self.assertNotIn(needle, tech_lead_content, f"tech-lead.md should not contain legacy output guidance: {needle}")
-        self.assertIn("task-plan.json.file_boundaries", tech_lead_content)
-        self.assertIn("solution-plan.json", tech_lead_content)
-        self.assertNotIn("solution-plan.md", tech_lead_content)
+            self.assertNotIn(needle, coder_content, f"coder.md should not contain legacy output guidance: {needle}")
+        self.assertIn("task-plan.json", coder_content)
+        self.assertIn("solution-plan.json", coder_content)
+        self.assertNotIn("solution-plan.md", coder_content)
 
         prompt_forbidden = {
-            "qa-automation.md": ["solution-plan.md"],
-            "code-reviewer.md": ["solution-plan.md"],
-            "retrospect.md": ["solution-plan.md", "risk-report.md", "doc-output.md", "final-summary"],
-            "solution-architect.md": ["brainstorm.md", "gap-analysis.md", "solution-draft.md"],
+            "reviewer.md": ["solution-plan.md"],
+            "planner.md": [
+                "risk-report.md",
+                "doc-output.md",
+                "final-summary",
+                "solution-draft.md",
+            ],
         }
         for filename, needles in prompt_forbidden.items():
             content = (prompt_dir / filename).read_text(encoding="utf-8")
@@ -84,11 +85,11 @@ class TestProjectPromptOverride(unittest.TestCase):
             root = Path(tmp)
             (root / ".ai").mkdir()
             (root / ".ai" / "agents").mkdir()
-            (root / ".ai" / "agents" / "tech-lead.md").write_text("Project-level prompt", encoding="utf-8")
+            (root / ".ai" / "agents" / "coder.md").write_text("Project-level prompt", encoding="utf-8")
             loaded = load_config(root)
             agents = agent_map(loaded.config)
-            prompt_path = resolve_prompt_path(root, loaded.path, agents["tech-lead"])
-            self.assertEqual(prompt_path, (root / ".ai" / "agents" / "tech-lead.md").resolve(strict=False))
+            prompt_path = resolve_prompt_path(root, loaded.path, agents["coder"])
+            self.assertEqual(prompt_path, (root / ".ai" / "agents" / "coder.md").resolve(strict=False))
 
     def test_read_prompt_returns_content(self) -> None:
         """read_prompt 返回文件内容"""
@@ -96,10 +97,10 @@ class TestProjectPromptOverride(unittest.TestCase):
             root = Path(tmp)
             (root / ".ai").mkdir()
             (root / ".ai" / "agents").mkdir()
-            (root / ".ai" / "agents" / "tech-lead.md").write_text("Hello from project", encoding="utf-8")
+            (root / ".ai" / "agents" / "coder.md").write_text("Hello from project", encoding="utf-8")
             loaded = load_config(root)
             agents = agent_map(loaded.config)
-            content = read_prompt(root, loaded.path, agents["tech-lead"])
+            content = read_prompt(root, loaded.path, agents["coder"])
             self.assertEqual(content, "Hello from project")
 
     def test_template_prompt_writes_to_project_override(self) -> None:
@@ -110,9 +111,9 @@ class TestProjectPromptOverride(unittest.TestCase):
             loaded = load_config(root)
             agents = agent_map(loaded.config)
 
-            write_path = resolve_prompt_write_path(root, loaded.path or str(DEFAULT_TEAM_FILE), agents["tech-lead"])
+            write_path = resolve_prompt_write_path(root, loaded.path or str(DEFAULT_TEAM_FILE), agents["coder"])
 
-            self.assertEqual(write_path, (root / ".ai" / "agents" / "tech-lead.md").resolve(strict=False))
+            self.assertEqual(write_path, (root / ".ai" / "agents" / "coder.md").resolve(strict=False))
 
     def test_prompt_write_path_rejects_project_escape(self) -> None:
         """prompt 写路径不能通过绝对路径或 .. 逃逸项目目录"""
@@ -464,17 +465,71 @@ class TestDefaultAgentCollaborationWorkflow(unittest.TestCase):
         self.assertNotIn("risk_analysis", stage_ids)
         self.assertNotIn("doc", stage_ids)
 
-    def test_default_agents_remove_post_development_risk_and_doc_roles(self) -> None:
+    def test_default_agents_are_simplified_to_four_core_roles(self) -> None:
         from engine.config import load_config
 
         loaded = load_config(Path.cwd())
-        agent_names = {agent["name"] for agent in loaded.config["agents"]}
+        agent_names = [agent["name"] for agent in loaded.config["agents"]]
 
-        self.assertNotIn("risk-analyst", agent_names)
-        self.assertNotIn("doc-writer", agent_names)
-        self.assertNotIn("brainstormer", agent_names)
-        self.assertIn("code-reviewer", agent_names)
-        self.assertIn("planner", agent_names)
+        self.assertEqual(agent_names, ["planner", "challenger", "coder", "reviewer"])
+        for removed in [
+            "requirements-analyst",
+            "solution-architect",
+            "devils-advocate",
+            "tech-lead",
+            "qa-automation",
+            "code-reviewer",
+            "retrospect",
+            "risk-analyst",
+            "doc-writer",
+            "brainstormer",
+        ]:
+            self.assertNotIn(removed, agent_names)
+
+    def test_legacy_default_agents_are_collapsed_with_pipeline_refs(self) -> None:
+        config = {
+            "agents": [
+                {"name": "requirements-analyst", "runtime_id": "req", "prompt": "agents/requirements-analyst.md"},
+                {"name": "solution-architect", "runtime_id": "arch", "prompt": "agents/solution-architect.md"},
+                {"name": "devils-advocate", "runtime_id": "challenge", "prompt": "agents/devils-advocate.md"},
+                {"name": "planner", "runtime_id": "plan", "prompt": "agents/planner.md"},
+                {"name": "tech-lead", "runtime_id": "code", "prompt": "agents/tech-lead.md"},
+                {"name": "qa-automation", "runtime_id": "qa", "prompt": "agents/qa-automation.md"},
+                {"name": "code-reviewer", "runtime_id": "review", "prompt": "agents/code-reviewer.md"},
+                {"name": "retrospect", "runtime_id": "retro", "prompt": "agents/retrospect.md"},
+            ],
+            "pipeline": {
+                "stages": [
+                    {
+                        "id": "requirement_analysis",
+                        "agents": ["requirements-analyst", "devils-advocate"],
+                        "output": {
+                            "requirements-analyst": "requirement-analysis.md",
+                            "devils-advocate": "requirement-gap-analysis.md",
+                        },
+                    },
+                    {"id": "develop", "agents": ["tech-lead"], "output": {"tech-lead": "implementation-report.md"}},
+                    {"id": "qa", "agents": ["qa-automation"], "output": {"qa-automation": "test-report.md"}},
+                    {"id": "review", "agents": ["code-reviewer"], "output": {"code-reviewer": "review-report.md"}},
+                    {"id": "retrospect", "agents": ["retrospect"], "output": {"retrospect": "retrospect-report.md"}},
+                ]
+            },
+        }
+
+        collapse_legacy_default_agents(config)
+
+        self.assertEqual([agent["name"] for agent in config["agents"]], ["planner", "challenger", "coder", "reviewer"])
+        self.assertEqual(config["agents"][0]["runtime_id"], "plan")
+        self.assertEqual(config["agents"][1]["runtime_id"], "challenge")
+        self.assertEqual(config["agents"][2]["runtime_id"], "code")
+        self.assertEqual(config["agents"][3]["runtime_id"], "review")
+        stages = {stage["id"]: stage for stage in config["pipeline"]["stages"]}
+        self.assertEqual(stages["requirement_analysis"]["agents"], ["planner", "challenger"])
+        self.assertEqual(stages["requirement_analysis"]["output"], {"planner": "requirement-analysis.md", "challenger": "requirement-gap-analysis.md"})
+        self.assertEqual(stages["develop"]["agents"], ["coder"])
+        self.assertEqual(stages["qa"]["agents"], ["reviewer"])
+        self.assertEqual(stages["review"]["agents"], ["reviewer"])
+        self.assertEqual(stages["retrospect"]["agents"], ["planner"])
 
     def test_default_pipeline_declares_json_artifact_contracts(self) -> None:
         from engine.config import load_config
