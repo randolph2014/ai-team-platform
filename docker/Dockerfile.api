@@ -7,7 +7,6 @@ RUN apt-get update \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/* \
-    # Agent CLI 工具版本固定 (2026-04-28)
     && npm install -g @anthropic-ai/claude-code@2.1.121 @openai/codex@0.125.0 opencode
 
 COPY pyproject.toml README.md MANIFEST.in ./
@@ -18,6 +17,11 @@ COPY persistence ./persistence
 COPY templates ./templates
 COPY adapters ./adapters
 
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e . \
+    && groupadd --gid 1000 appuser \
+    && useradd --uid 1000 --gid appuser --shell /bin/sh --create-home appuser \
+    && chown -R appuser:appuser /app
+
+USER appuser
 
 EXPOSE 8000
