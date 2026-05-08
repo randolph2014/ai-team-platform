@@ -3,12 +3,14 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-
 from engine.quality_gates import (
+    QualityGateError,
     has_blocking_failure,
+    inject_default_gates,
     max_retry_count_for_failures,
     render_gate_feedback,
     run_quality_gate,
+    validate_gates_config,
 )
 from engine.models import QualityGateRun
 
@@ -121,6 +123,114 @@ class TestQualityGateMaxRetries(unittest.TestCase):
         self.assertIn("pylint", feedback)
         self.assertIn("syntax error", feedback)
         self.assertIn("第 1 次重试", feedback)
+
+
+class TestValidateGatesConfig(unittest.TestCase):
+    def test_empty_gates_in_production_raises(self) -> None:
+        with self.assertRaises(QualityGateError) as ctx:
+            validate_gates_config([], production=True)
+        self.assertIn("empty", str(ctx.exception))
+
+    def test_empty_gates_in_dev_ok(self) -> None:
+        validate_gates_config([], production=False)
+
+    def test_required_gate_with_or_true_raises(self) -> None:
+        gates = [{"name": "lint", "type": "command", "command": "eslint . || true", "required": True}]
+        with self.assertRaises(QualityGateError) as ctx:
+            validate_gates_config(gates)
+        self.assertIn("|| true", str(ctx.exception))
+        self.assertIn("lint", str(ctx.exception))
+
+    def test_required_gate_with_or_true_no_space_raises(self) -> None:
+        gates = [{"name": "check", "type": "command", "command": "cmd ||true", "required": True}]
+        with self.assertRaises(QualityGateError):
+            validate_gates_config(gates)
+
+    def test_optional_gate_with_or_true_ok(self) -> None:
+        gates = [{"name": "coverage", "type": "command", "command": "cover || true", "required": False}]
+        validate_gates_config(gates)
+
+    def test_required_gate_without_or_true_ok(self) -> None:
+        gates = [{"name": "lint", "type": "command", "command": "eslint .", "required": True}]
+        validate_gates_config(gates)
+
+    def test_missing_command_gate_ok(self) -> None:
+        gates = [{"name": "bad", "type": "command", "required": True}]
+        validate_gates_config(gates)
+
+    def test_multiple_gates_one_with_or_true_raises(self) -> None:
+        gates = [
+            {"name": "good", "type": "command", "command": "echo ok", "required": True},
+            {"name": "bad", "type": "command", "command": "test || true", "required": True},
+        ]
+        with self.assertRaises(QualityGateError):
+            validate_gates_config(gates)
+
+
+class TestInjectDefaultGates(unittest.TestCase):
+    def test_existing_gates_returned_unchanged(self) -> None:
+        existing = [{"name": "custom", "command": "echo ok"}]
+        result = inject_default_gates(Path("/tmp"), existing)
+        self.assertEqual(result, existing)
+
+    def test_python_project_gets_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").touch()
+            result = inject_default_gates(root, [])
+            self.assertGreater(len(result), 0)
+            names = [g["name"] for g in result]
+            self.assertIn("python-syntax", names)
+            self.assertIn("pytest", names)
+
+    def test_node_project_gets_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "package.json").write_text("{}", encoding="utf-8")
+            result = inject_default_gates(root, [])
+            self.assertGreater(len(result), 0)
+            names = [g["name"] for g in result]
+            self.assertIn("typescript-check", names)
+            self.assertIn("test", names)
+
+    def test_go_project_gets_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text("module test\n", encoding="utf-8")
+            result = inject_default_gates(root, [])
+            self.assertGreater(len(result), 0)
+            names = [g["name"] for g in result]
+            self.assertIn("go-vet", names)
+            self.assertIn("go-test", names)
+
+    def test_java_project_gets_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pom.xml").touch()
+            result = inject_default_gates(root, [])
+            self.assertGreater(len(result), 0)
+            names = [g["name"] for g in result]
+            self.assertIn("maven-compile", names)
+            self.assertIn("maven-test", names)
+
+    def test_unknown_language_returns_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = inject_default_gates(Path(tmp), [])
+            self.assertEqual(result, [])
+
+
+class TestRunGateRequiredFailureLogging(unittest.TestCase):
+    def test_required_gate_failure_logs_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertLogs("engine.quality_gates", level="ERROR") as cm:
+                result = run_quality_gate(
+                    {"name": "must-pass", "type": "command", "command": "exit 1", "required": True},
+                    Path(tmp),
+                    "run-log-1",
+                )
+            self.assertEqual(result.status, "failed")
+            self.assertTrue(any("must-pass" in msg for msg in cm.output))
+            self.assertTrue(any("Required gate FAILED" in msg for msg in cm.output))
 
 
 if __name__ == "__main__":

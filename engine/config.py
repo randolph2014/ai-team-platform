@@ -12,6 +12,7 @@ except ImportError:  # pragma: no cover - dependency is declared for production.
     yaml = None
 
 from .models import AgentDefinition, LoadedConfig
+from .quality_gates import inject_default_gates, validate_gates_config
 from .runtimes import sanitize_runtime_config
 
 
@@ -335,7 +336,9 @@ def load_config(project_root: Path, explicit_config: Optional[str] = None) -> Lo
             config = _read_yaml(path)
             if "providers" in config or any(isinstance(agent, dict) and "provider" in agent for agent in config.get("agents", [])):
                 warnings.append("DEPRECATED: providers/agent.provider 已迁移为 runtimes/agent.runtime_id，请保存配置以写回新结构。")
-            return LoadedConfig(config=normalize_config(config, project_root), source="project", path=str(path), warnings=warnings)
+            normalized = normalize_config(config, project_root)
+            _post_process_gates(project_root, normalized)
+            return LoadedConfig(config=normalized, source="project", path=str(path), warnings=warnings)
 
     # 始终使用平台模板作为基础配置
     base_config: Dict[str, Any] = {}
@@ -358,7 +361,17 @@ def load_config(project_root: Path, explicit_config: Optional[str] = None) -> Lo
     if "providers" in base_config or any(isinstance(agent, dict) and "provider" in agent for agent in base_config.get("agents", [])):
         warnings.append("DEPRECATED: providers/agent.provider 已迁移为 runtimes/agent.runtime_id，请保存配置以写回新结构。")
 
-    return LoadedConfig(config=normalize_config(base_config, project_root), source=config_source, path=config_path, warnings=warnings)
+    normalized = normalize_config(base_config, project_root)
+    _post_process_gates(project_root, normalized)
+    return LoadedConfig(config=normalized, source=config_source, path=config_path, warnings=warnings)
+
+
+def _post_process_gates(project_root: Path, config: Dict[str, Any]) -> None:
+    gates = config.get("quality_gates", [])
+    gates = inject_default_gates(project_root, gates)
+    config["quality_gates"] = gates
+    production = config.get("runner", {}).get("production_mode", False)
+    validate_gates_config(gates, production=production)
 
 
 def _deep_merge(base: Dict[str, Any], overrides: Dict[str, Any]) -> None:

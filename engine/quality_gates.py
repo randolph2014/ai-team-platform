@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import operator
 import re
 import subprocess
@@ -7,11 +8,14 @@ import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import yaml
+
 from .events import EventBus
 from .logging_config import log_gate_result
 from .metrics import record_gate_result as record_gate_metric
 from .models import QualityGateRun, utc_now
 
+logger = logging.getLogger(__name__)
 
 OPS = {
     ">=": operator.ge,
@@ -21,9 +25,62 @@ OPS = {
     "==": operator.eq,
 }
 
+_PIPE_ESCAPE_PATTERN = re.compile(r"\|\|\s*true")
+
+_LANG_MARKERS = {
+    "python": ["pyproject.toml", "setup.py", "setup.cfg"],
+    "node": ["package.json"],
+    "go": ["go.mod"],
+    "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
+}
+
+_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates" / "quality-gates"
+
 
 class QualityGateError(RuntimeError):
     pass
+
+
+def validate_gates_config(gates: List[Dict], production: bool = False) -> None:
+    if production and not gates:
+        raise QualityGateError("quality_gates is empty; at least one gate is required in production")
+    for gate in gates:
+        required = bool(gate.get("required", True))
+        command = gate.get("command", "")
+        if required and command and _PIPE_ESCAPE_PATTERN.search(command):
+            name = gate.get("name") or gate.get("command") or "unknown"
+            raise QualityGateError(
+                f"Required gate '{name}' contains '|| true' which would mask failures; "
+                "remove '|| true' from the command"
+            )
+
+
+def _detect_language(project_root: Path) -> Optional[str]:
+    for lang, markers in _LANG_MARKERS.items():
+        for marker in markers:
+            if (project_root / marker).exists():
+                return lang
+    return None
+
+
+def inject_default_gates(project_root: Path, existing_gates: List[Dict]) -> List[Dict]:
+    if existing_gates:
+        return existing_gates
+    lang = _detect_language(project_root)
+    if not lang:
+        return existing_gates
+    template_path = _TEMPLATES_DIR / f"{lang}.yaml"
+    if not template_path.exists():
+        return existing_gates
+    try:
+        data = yaml.safe_load(template_path.read_text(encoding="utf-8")) or {}
+        defaults = data.get("quality_gates", [])
+        if defaults:
+            logger.info("Injected %d default quality gates for %s project", len(defaults), lang)
+        return defaults
+    except Exception:
+        logger.warning("Failed to load default quality gates template for %s", lang)
+        return existing_gates
 
 
 def _run_command(command: str, cwd: Path, timeout: Optional[int]) -> Tuple[int, str]:
@@ -104,6 +161,11 @@ def run_quality_gate(gate: Dict, cwd: Path, run_id: str, bus: Optional[EventBus]
     result.duration_seconds = round(time.monotonic() - start, 3)
     record_gate_metric(name, result.status)
     log_gate_result(run_id, name, result.status, result.exit_code)
+    if required and result.status == "failed":
+        logger.error(
+            "Required gate FAILED: name=%s exit_code=%s duration=%.3fs",
+            name, result.exit_code, result.duration_seconds,
+        )
     if bus:
         bus.emit(
             "gate:result",

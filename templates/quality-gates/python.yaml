@@ -3,7 +3,7 @@
 quality_gates:
   - name: python-syntax
     type: command
-    command: "python3 -m py_compile $(git diff --name-only --diff-filter=ACM HEAD~1..HEAD 2>/dev/null | grep '\\.py$' | head -20) 2>&1 || true"
+    command: "python3 -m py_compile $(git diff --name-only --diff-filter=ACM HEAD~1..HEAD 2>/dev/null | grep '\\.py$' | head -20) 2>&1"
     required: true
     timeout_seconds: 30
 

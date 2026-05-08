@@ -3,7 +3,7 @@
 quality_gates:
   - name: typescript-check
     type: command
-    command: "npx tsc --noEmit 2>&1 || true"
+    command: "npx tsc --noEmit 2>&1"
     required: true
     timeout_seconds: 120
 
