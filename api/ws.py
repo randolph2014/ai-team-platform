@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import os
-from queue import Empty
 from typing import Optional
 
 from .db import run_db_id, try_persistence
@@ -186,32 +185,13 @@ if router:
                 except Exception:
                     return
 
-        from .runtime import event_store
-
-        mem_history = list(event_store.history(run_id))
-        for event in mem_history:
-            try:
-                await websocket.send_json(event.model_dump(mode="json"))
-            except Exception:
-                return
-
         redis_task = asyncio.create_task(_try_redis_subscribe(run_id, websocket))
-
-        queue = event_store.subscribe(run_id)
         disconnect_task = asyncio.create_task(_wait_for_disconnect(websocket))
         try:
-            while not disconnect_task.done():
-                try:
-                    event = await asyncio.to_thread(queue.get, True, 0.25)
-                except Empty:
-                    continue
-                await websocket.send_json(event.model_dump(mode="json"))
-        except WebSocketDisconnect:
-            pass
-        except Exception:
+            await disconnect_task
+        except (WebSocketDisconnect, Exception):
             pass
         finally:
-            event_store.unsubscribe(run_id, queue)
             disconnect_task.cancel()
             redis_task.cancel()
             try:

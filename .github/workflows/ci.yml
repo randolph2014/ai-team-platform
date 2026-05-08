@@ -92,7 +92,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           source .venv/bin/activate
-          pytest tests/ -v --tb=short --cov=engine --cov=api --cov=persistence --cov-report=term-missing --cov-fail-under=50
+          pytest tests/ -v --tb=short --cov=engine --cov=api --cov=persistence --cov-report=term-missing --cov-fail-under=70
 
   test-frontend:
     name: Frontend Build

@@ -974,7 +974,10 @@ class Orchestrator:
         (output_dir / "test-report.md").write_text(summary_text, encoding="utf-8")
         (output_dir / "review-report.md").write_text(summary_text, encoding="utf-8")
 
-        evidence = [{"source": "requirement-units", "finding": item} for item in unit_payloads]
+        evidence = [
+            {"source": "requirement-units", "finding": json.dumps(item, ensure_ascii=False)}
+            for item in unit_payloads
+        ]
         (output_dir / "implementation-report.json").write_text(
             json.dumps(
                 {
@@ -1001,7 +1004,6 @@ class Orchestrator:
                     "results": [],
                     "acceptance_coverage": [],
                     "evidence": evidence,
-                    "units": unit_payloads,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -1014,10 +1016,10 @@ class Orchestrator:
                     "status": "completed",
                     "summary": "multi-unit review reports completed",
                     "verdict": "Approve",
+                    "blocking_findings": [],
                     "findings": [],
                     "evidence": evidence,
                     "risks": [],
-                    "units": unit_payloads,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -1680,6 +1682,16 @@ class Orchestrator:
                         return "; ".join(errors)
                 except Exception:
                     pass
+        if stage_id == "requirement_confirm":
+            req_path = artifact_dir / "requirement-final.json"
+            if req_path.exists():
+                try:
+                    payload = json.loads(req_path.read_text(encoding="utf-8"))
+                    errors, _ = validate_artifact(payload, "requirement-final.json")
+                    if errors:
+                        return f"requirement-final.json schema invalid: {'; '.join(errors[:5])}"
+                except Exception:
+                    pass
         if stage_id == "develop":
             plan_path = artifact_dir / "task-plan.json"
             if plan_path.exists():
@@ -1688,6 +1700,36 @@ class Orchestrator:
                     errors, _ = validate_artifact(payload, "task-plan.json")
                     if errors:
                         return f"task-plan.json schema invalid: {'; '.join(errors[:5])}"
+                except Exception:
+                    pass
+        if stage_id == "review":
+            test_path = artifact_dir / "test-report.json"
+            if test_path.exists():
+                try:
+                    payload = json.loads(test_path.read_text(encoding="utf-8"))
+                    errors, _ = validate_artifact(payload, "test-report.json")
+                    if errors:
+                        return f"test-report.json schema invalid: {'; '.join(errors[:5])}"
+                except Exception:
+                    pass
+        if stage_id == "acceptance_confirm":
+            review_path = artifact_dir / "review-report.json"
+            if review_path.exists():
+                try:
+                    payload = json.loads(review_path.read_text(encoding="utf-8"))
+                    errors, _ = validate_artifact(payload, "review-report.json")
+                    if errors:
+                        return f"review-report.json schema invalid: {'; '.join(errors[:5])}"
+                except Exception:
+                    pass
+        if stage_id == "retrospect":
+            release_path = artifact_dir / "release-readiness.json"
+            if release_path.exists():
+                try:
+                    payload = json.loads(release_path.read_text(encoding="utf-8"))
+                    errors, _ = validate_artifact(payload, "release-readiness.json")
+                    if errors:
+                        return f"release-readiness.json schema invalid: {'; '.join(errors[:5])}"
                 except Exception:
                     pass
         return None

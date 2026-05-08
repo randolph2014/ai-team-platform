@@ -2,7 +2,6 @@ import DOMPurify from 'dompurify';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import rehypeRaw from 'rehype-raw';
 
 interface MarkdownViewerProps {
   content: string;
@@ -10,16 +9,13 @@ interface MarkdownViewerProps {
 }
 
 export function MarkdownViewer({ content, className }: MarkdownViewerProps) {
-  const safe = DOMPurify.sanitize(content, {
-    ADD_TAGS: ['details', 'summary'],
-    ADD_ATTR: ['target', 'rel'],
-  });
+  const safe = DOMPurify.sanitize(content);
 
   return (
     <div className={`markdown-body ${className ?? ''}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight, rehypeRaw]}
+        rehypePlugins={[rehypeHighlight]}
         components={{
           a({ href, children, ...props }) {
             const isExternal = href && (href.startsWith('http://') || href.startsWith('https://'));

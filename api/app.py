@@ -7,7 +7,6 @@ from typing import List
 
 from fastapi import Body, Depends, HTTPException, Request
 
-from .runtime import event_store
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +93,6 @@ def create_app():
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.state.event_store = event_store
 
     from .auth import auth_enabled, get_current_user, handle_login
 

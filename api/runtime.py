@@ -5,12 +5,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from engine.config import find_project_root
-from engine.events import EventBus, InMemoryEventStore
 from engine.models import HumanDecision
 
 logger = logging.getLogger(__name__)
-
-event_store = InMemoryEventStore()
 
 
 def project_for_run(run_id: str, workdir: Optional[str] = None) -> Path:

@@ -110,15 +110,14 @@ class TestAuthDisabled(_AuthTestBase):
         with patch.dict(os.environ, {"AI_TEAM_API_KEYS": "", "AI_TEAM_JWT_SECRET": ""}, clear=False):
             from api.auth import reset_auth_config
             from api.app import create_app
-            from api.runtime import event_store
             from engine.models import Event
 
             reset_auth_config()
             run_id = "ws-auth-disabled"
-            event_store.publish(Event(type="test_event", run_id=run_id, payload={"ok": True}))
+            test_event = Event(type="test_event", run_id=run_id, payload={"ok": True})
             client = TestClient(create_app())
 
-            with patch("api.ws._load_db_events", new=AsyncMock(return_value=[])), \
+            with patch("api.ws._load_db_events", new=AsyncMock(return_value=[test_event])), \
                  patch("api.ws._load_legacy_db_events", new=AsyncMock(return_value=[])), \
                  patch("api.ws._try_redis_subscribe", new=AsyncMock(return_value=None)):
                 with client.websocket_connect(f"/ws/runs/{run_id}") as ws:
@@ -245,13 +244,12 @@ class TestAuthEnabled(_AuthTestBase):
             self.assertEqual(login_resp.status_code, 200)
             token = login_resp.json()["access_token"]
 
-            from api.runtime import event_store
             from engine.models import Event
 
             run_id = "ws-auth-valid"
-            event_store.publish(Event(type="test_event", run_id=run_id, payload={"ok": True}))
+            test_event = Event(type="test_event", run_id=run_id, payload={"ok": True})
 
-            with patch("api.ws._load_db_events", new=AsyncMock(return_value=[])), \
+            with patch("api.ws._load_db_events", new=AsyncMock(return_value=[test_event])), \
                  patch("api.ws._load_legacy_db_events", new=AsyncMock(return_value=[])), \
                  patch("api.ws._try_redis_subscribe", new=AsyncMock(return_value=None)):
                 with self.client.websocket_connect(f"/ws/runs/{run_id}?token={quote(token)}") as ws:
