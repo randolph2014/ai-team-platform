@@ -2,6 +2,7 @@ import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { createRun, fetchPipelineTemplates, fetchPipelines, rememberRunWorkdir, runQuery } from '../lib/api';
 import type { Pipeline, PipelineTemplate } from '../lib/types';
+import { ProjectSelector } from './ProjectSelector';
 
 interface Props {
   open: boolean;
@@ -35,6 +36,7 @@ function customPipelineChoice(pipeline: Pipeline): PipelineChoice {
 }
 
 export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
+  const [projectId, setProjectId] = useState('');
   const [workdir, setWorkdir] = useState('');
   const [requirement, setRequirement] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -46,6 +48,8 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
   useEffect(() => {
     if (open) {
       setSelectedPipeline('');
+      setProjectId('');
+      setWorkdir('');
       Promise.all([fetchPipelineTemplates(), fetchPipelines()])
         .then(([templates, pipelines]) => {
           const choices = [
@@ -65,7 +69,7 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
 
   function validate(): boolean {
     const errors: Record<string, string> = {};
-    if (!workdir.trim()) errors.workdir = '项目路径不能为空';
+    if (!projectId && !workdir.trim()) errors.workdir = '请选择项目或输入项目路径';
     if (!requirement.trim()) errors.requirement = '需求描述不能为空';
     setValidationErrors(errors);
     return Object.keys(errors).length === 0;
@@ -79,9 +83,14 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
       const payload = await createRun(
         workdir.trim(),
         requirement.trim(),
-        selectedPipeline ? { pipeline_id: selectedPipeline } : undefined,
+        {
+          pipeline_id: selectedPipeline || undefined,
+          project_id: projectId || undefined,
+        },
       );
-      rememberRunWorkdir(payload.run_id, workdir.trim());
+      if (!projectId) {
+        rememberRunWorkdir(payload.run_id, workdir.trim());
+      }
       onRefreshNeeded();
       window.history.pushState({}, '', `/runs/${payload.run_id}${runQuery(workdir.trim())}`);
       window.dispatchEvent(new PopStateEvent('popstate'));
@@ -119,9 +128,15 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
             <option>无可用模板</option>
           </select>
         )}
-        <label htmlFor="new-run-workdir">项目路径</label>
-        <input id="new-run-workdir" value={workdir} onChange={(event) => setWorkdir(event.target.value)} />
-        {validationErrors.workdir && <span className="fieldError">{validationErrors.workdir}</span>}
+        <label htmlFor="new-run-project">项目</label>
+        <ProjectSelector value={projectId} onChange={(id) => { setProjectId(id); if (id) setWorkdir(''); }} error={validationErrors.project} />
+        {!projectId && (
+          <>
+            <label htmlFor="new-run-workdir">项目路径（手动输入）</label>
+            <input id="new-run-workdir" value={workdir} onChange={(event) => setWorkdir(event.target.value)} />
+            {validationErrors.workdir && <span className="fieldError">{validationErrors.workdir}</span>}
+          </>
+        )}
         <label htmlFor="new-run-requirement">需求描述</label>
         <textarea id="new-run-requirement" value={requirement} onChange={(event) => setRequirement(event.target.value)} />
         {validationErrors.requirement && <span className="fieldError">{validationErrors.requirement}</span>}

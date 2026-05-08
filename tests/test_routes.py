@@ -1390,5 +1390,214 @@ class TestRunsFallbackToFilesystem(BaseRoutesTest):
         self.assertIn("list-fs-run", run_ids)
 
 
+class TestProjectRoutes(BaseRoutesTest):
+    """测试 /api/projects CRUD 端点"""
+
+    def test_list_projects_empty(self) -> None:
+        """GET /api/projects 无 DB 时返回空列表"""
+        with patch("api.routes.projects.try_persistence", return_value=None):
+            response = self.client.get("/api/projects")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_create_project_returns_record(self) -> None:
+        """POST /api/projects 创建项目"""
+        from unittest.mock import AsyncMock
+
+        created = {}
+
+        async def fake_create(conn, *, name, root_path):
+            created["name"] = name
+            created["root_path"] = root_path
+            return "fake-id"
+
+        async def fake_get_by_id(conn, id):
+            return {"id": id, "name": created.get("name", ""), "root_path": created.get("root_path", ""), "created_at": "2026-01-01T00:00:00"}
+
+        async def fake_get_by_root_path(conn, root_path):
+            return None
+
+        fake_repo = type("FakeRepo", (), {
+            "create": staticmethod(fake_create),
+            "get_by_id": staticmethod(fake_get_by_id),
+            "get_by_root_path": staticmethod(fake_get_by_root_path),
+        })()
+
+        conn = AsyncMock()
+        get_conn = AsyncMock(return_value=conn)
+        release_conn = AsyncMock()
+        fake_db = (get_conn, release_conn, None, None, None)
+
+        with patch("api.routes.projects.try_persistence", return_value=fake_db), \
+             patch("api.routes.projects._get_project_repo", return_value=fake_repo):
+            response = self.client.post(
+                "/api/projects",
+                json={"name": "Test Project", "root_path": str(self.project_root)},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["name"], "Test Project")
+
+    def test_create_project_duplicate_root_path_returns_409(self) -> None:
+        """POST /api/projects 重复 root_path 返回 409"""
+        from unittest.mock import AsyncMock
+
+        async def fake_create(conn, *, name, root_path):
+            return "fake-id"
+
+        async def fake_get_by_id(conn, id):
+            return {"id": id, "name": "X", "root_path": str(self.project_root), "created_at": "2026-01-01T00:00:00"}
+
+        async def fake_get_by_root_path(conn, root_path):
+            return {"id": "existing", "name": "Existing", "root_path": root_path, "created_at": "2026-01-01T00:00:00"}
+
+        fake_repo = type("FakeRepo", (), {
+            "create": staticmethod(fake_create),
+            "get_by_id": staticmethod(fake_get_by_id),
+            "get_by_root_path": staticmethod(fake_get_by_root_path),
+        })()
+
+        conn = AsyncMock()
+        fake_db = (AsyncMock(return_value=conn), AsyncMock(), None, None, None)
+
+        with patch("api.routes.projects.try_persistence", return_value=fake_db), \
+             patch("api.routes.projects._get_project_repo", return_value=fake_repo):
+            response = self.client.post(
+                "/api/projects",
+                json={"name": "Dup Project", "root_path": str(self.project_root)},
+            )
+
+        self.assertEqual(response.status_code, 409)
+
+    def test_create_project_nonexistent_path_returns_400(self) -> None:
+        """POST /api/projects 不存在的路径返回 400"""
+        response = self.client.post(
+            "/api/projects",
+            json={"name": "Bad", "root_path": "/nonexistent/path/xyz"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_delete_project(self) -> None:
+        """DELETE /api/projects/{id} 删除项目"""
+        from unittest.mock import AsyncMock
+
+        async def fake_delete(conn, id):
+            return id == "proj-to-delete"
+
+        fake_repo = type("FakeRepo", (), {"delete": staticmethod(fake_delete)})()
+
+        conn = AsyncMock()
+        fake_db = (AsyncMock(return_value=conn), AsyncMock(), None, None, None)
+
+        with patch("api.routes.projects.try_persistence", return_value=fake_db), \
+             patch("api.routes.projects._get_project_repo", return_value=fake_repo):
+            response = self.client.delete("/api/projects/proj-to-delete")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "deleted")
+
+    def test_delete_nonexistent_project_returns_404(self) -> None:
+        """DELETE /api/projects/{id} 不存在的返回 404"""
+        from unittest.mock import AsyncMock
+
+        async def fake_delete(conn, id):
+            return False
+
+        fake_repo = type("FakeRepo", (), {"delete": staticmethod(fake_delete)})()
+
+        conn = AsyncMock()
+        fake_db = (AsyncMock(return_value=conn), AsyncMock(), None, None, None)
+
+        with patch("api.routes.projects.try_persistence", return_value=fake_db), \
+             patch("api.routes.projects._get_project_repo", return_value=fake_repo):
+            response = self.client.delete("/api/projects/nonexistent")
+
+        self.assertEqual(response.status_code, 404)
+
+
+class TestProductionWorkdirRejection(BaseRoutesTest):
+    """测试生产模式下 workdir 被拒绝"""
+
+    def test_create_run_rejects_workdir_in_production(self) -> None:
+        """POST /api/runs 生产模式下传 workdir 被拒绝"""
+        with patch("api.routes.runs.is_production_mode", return_value=True):
+            response = self.client.post(
+                "/api/runs",
+                json={
+                    "requirement": "test",
+                    "workdir": str(self.project_root),
+                },
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("project_id", response.json()["detail"])
+
+    def test_create_run_accepts_project_id_in_production(self) -> None:
+        """POST /api/runs 生产模式下传 project_id 被接受"""
+        from unittest.mock import AsyncMock
+
+        async def fake_get_by_id(conn, id):
+            if id == "proj-1":
+                return {"id": "proj-1", "name": "Test", "root_path": str(self.project_root), "created_at": "2026-01-01T00:00:00"}
+            return None
+
+        fake_repo = type("FakeRepo", (), {"get_by_id": staticmethod(fake_get_by_id)})()
+
+        conn = AsyncMock()
+        fake_db = (AsyncMock(return_value=conn), AsyncMock(), None, None, None)
+
+        with patch("api.routes.runs.is_production_mode", return_value=True), \
+             patch("api.routes.runs.try_persistence", return_value=fake_db), \
+             patch("api.routes.runs._get_project_repo", return_value=fake_repo):
+            response = self.client.post(
+                "/api/runs",
+                json={
+                    "requirement": "test",
+                    "project_id": "proj-1",
+                    "run_id": "prod-test-run",
+                    "yes": True,
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["run_id"], "prod-test-run")
+
+
+class TestProjectOwnershipValidation(BaseRoutesTest):
+    """测试 artifact 跨 project 读取校验"""
+
+    def test_artifact_rejects_cross_project_access(self) -> None:
+        """GET /api/runs/{id}/artifacts 跨 project 访问被拒绝"""
+        from unittest.mock import AsyncMock
+
+        async def fake_project_get_by_id(conn, id):
+            if id == "proj-other":
+                return {"id": "proj-other", "name": "Other", "root_path": "/some/other/path", "created_at": "2026-01-01T00:00:00"}
+            return None
+
+        async def fake_run_exists(conn, id):
+            return True
+
+        async def fake_run_get_by_id(conn, id):
+            return {"id": id, "project_root": str(self.project_root)}
+
+        fake_project_repo = type("FakeProjectRepo", (), {"get_by_id": staticmethod(fake_project_get_by_id)})()
+        fake_run_repo_cls = type("FakeRunRepo", (), {
+            "run_exists": staticmethod(fake_run_exists),
+            "get_by_id": staticmethod(fake_run_get_by_id),
+        })
+
+        conn = AsyncMock()
+        fake_db = (AsyncMock(return_value=conn), AsyncMock(), fake_run_repo_cls, None, None)
+
+        with patch("api.routes.artifacts.try_persistence", return_value=fake_db), \
+             patch("api.routes.artifacts._get_project_repo", return_value=fake_project_repo), \
+             patch("api.routes.artifacts.run_db_id", side_effect=lambda x: x):
+            response = self.client.get(
+                "/api/runs/fake-run/artifacts",
+                params={"project_id": "proj-other"},
+            )
+        self.assertEqual(response.status_code, 403)
+
+
 if __name__ == "__main__":
     unittest.main()

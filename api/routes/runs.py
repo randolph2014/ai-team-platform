@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from engine.config import find_project_root
 from engine.models import HumanDecision
 from engine.orchestrator import find_run_reports, load_report
+from engine.production_guard import is_production_mode
 
 from ..db import run_db_id, try_persistence
 from ..runtime import expected_output_dir, project_for_run, start_run_background
@@ -25,14 +26,63 @@ router = APIRouter() if APIRouter else None
 
 
 def _get_auth():
-    """Lazy import of auth dependency to keep module safe when auth is absent."""
     from ..auth import get_current_user
     return Depends(get_current_user)
 
 
+def _get_project_repo():
+    from persistence.repository import ProjectRepo
+    return ProjectRepo()
+
+
+async def _resolve_workdir(project_id: Optional[str], workdir: Optional[str]) -> str:
+    if project_id:
+        db = try_persistence()
+        if db is None:
+            raise HTTPException(status_code=503, detail="database not available")
+        get_connection, release_connection, *_ = db
+        conn = await get_connection()
+        if conn is None:
+            raise HTTPException(status_code=503, detail="database not available")
+        try:
+            repo = _get_project_repo()
+            project = await repo.get_by_id(conn, project_id)
+            if project is None:
+                raise HTTPException(status_code=404, detail="project not found")
+            return project["root_path"]
+        finally:
+            await release_connection(conn)
+
+    if is_production_mode():
+        raise HTTPException(status_code=400, detail="project_id is required in production mode; workdir is not allowed")
+
+    return workdir or "."
+
+
+async def _resolve_workdir_optional(project_id: Optional[str], workdir: Optional[str]) -> Optional[str]:
+    if project_id:
+        db = try_persistence()
+        if db is None:
+            return None
+        get_connection, release_connection, *_ = db
+        conn = await get_connection()
+        if conn is None:
+            return None
+        try:
+            repo = _get_project_repo()
+            project = await repo.get_by_id(conn, project_id)
+            if project is None:
+                return None
+            return project["root_path"]
+        finally:
+            await release_connection(conn)
+    return workdir
+
+
 class CreateRunRequest(BaseModel):
     requirement: str
-    workdir: str
+    workdir: Optional[str] = None
+    project_id: Optional[str] = None
     run_id: Optional[str] = None
     yes: bool = False
     config_path: Optional[str] = None
@@ -50,8 +100,7 @@ class HumanDecisionRequest(BaseModel):
     target_stage: Optional[str] = None
 
 
-async def _db_list_runs(workdir: str, page: int, size: int) -> Optional[List[Dict[str, Any]]]:
-    """从 DB 查询 run 列表，DB 不可用时返回 None。"""
+async def _db_list_runs(workdir: Optional[str], project_id: Optional[str], page: int, size: int) -> Optional[List[Dict[str, Any]]]:
     db = try_persistence()
     if db is None:
         return None
@@ -61,15 +110,24 @@ async def _db_list_runs(workdir: str, page: int, size: int) -> Optional[List[Dic
     if conn is None:
         return None
     try:
-        project_root = str(find_project_root(workdir))
+        project_root = None
+        if project_id:
+            repo_proj = _get_project_repo()
+            project = await repo_proj.get_by_id(conn, project_id)
+            if project:
+                project_root = project["root_path"]
+        elif workdir:
+            project_root = str(find_project_root(workdir))
+
         repo = PipelineRunRepo()
         rows = await repo.list_paginated(conn, page=page, size=size)
-        # 按 project_root 过滤（与文件系统行为一致）
-        results = []
-        for r in rows:
-            if r.get("project_root") == project_root:
-                results.append(run_row_to_summary(r))
-        return results
+        if project_root:
+            results = []
+            for r in rows:
+                if r.get("project_root") == project_root:
+                    results.append(run_row_to_summary(r))
+            return results
+        return [run_row_to_summary(r) for r in rows]
     except Exception:
         logger.debug("DB list_runs failed, falling back to filesystem", exc_info=True)
         return None
@@ -152,8 +210,11 @@ if router:
         pipeline_ref = body.pipeline_id or body.pipeline
         if pipeline_ref and body.config_path:
             raise HTTPException(status_code=400, detail="pipeline_id and config_path cannot be used together")
+
+        resolved_workdir = await _resolve_workdir(body.project_id, body.workdir)
+
         run_id = body.run_id or f"api-{uuid.uuid4().hex[:12]}"
-        if expected_output_dir(run_id, body.workdir).exists():
+        if expected_output_dir(run_id, resolved_workdir).exists():
             raise HTTPException(status_code=409, detail="run id already exists")
 
         config_path = body.config_path
@@ -161,18 +222,18 @@ if router:
             try:
                 from .pipelines import materialize_pipeline_config
 
-                project_root = find_project_root(body.workdir)
+                project_root = find_project_root(resolved_workdir)
                 config_path = str(materialize_pipeline_config(Path(project_root), pipeline_ref, run_id))
             except KeyError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        await _db_create_pending(run_id, body.workdir, body.requirement, pipeline_ref=pipeline_ref, config_path=config_path)
+        await _db_create_pending(run_id, resolved_workdir, body.requirement, pipeline_ref=pipeline_ref, config_path=config_path)
 
         output_dir = start_run_background(
             body.requirement,
-            body.workdir,
+            resolved_workdir,
             run_id=run_id,
             yes=body.yes,
             config_path=config_path,
@@ -182,23 +243,24 @@ if router:
         return {
             "run_id": run_id,
             "status": "running",
-            "project_root": str(project_for_run(run_id, body.workdir)),
+            "project_root": str(project_for_run(run_id, resolved_workdir)),
             "output_dir": str(output_dir),
         }
 
     @router.get("/runs")
     async def list_runs(
         workdir: str = Query(default="."),
+        project_id: Optional[str] = Query(default=None),
         page: int = Query(default=1, ge=1),
         size: int = Query(default=20, ge=1, le=100),
         user: Dict[str, Any] = _get_auth(),
     ):
-        db_results = await _db_list_runs(workdir, page, size)
+        db_results = await _db_list_runs(workdir, project_id, page, size)
         if db_results is not None:
             return db_results
 
-        # Fallback: 文件系统扫描
-        project_root = find_project_root(workdir)
+        resolved_workdir = await _resolve_workdir_optional(project_id, workdir) or "."
+        project_root = find_project_root(resolved_workdir)
         reports = []
         for path in find_run_reports(Path(project_root)):
             report = load_report(path)
@@ -215,24 +277,24 @@ if router:
         return reports
 
     @router.get("/runs/{run_id}")
-    async def get_run(run_id: str, workdir: Optional[str] = Query(default=None), user: Dict[str, Any] = _get_auth()):
+    async def get_run(run_id: str, workdir: Optional[str] = Query(default=None), project_id: Optional[str] = Query(default=None), user: Dict[str, Any] = _get_auth()):
         db_result = await _db_get_run(run_id)
         if db_result is not None:
             return db_result
 
-        # Fallback: 文件系统
-        project_root = project_for_run(run_id, workdir)
+        resolved_workdir = await _resolve_workdir_optional(project_id, workdir)
+        project_root = project_for_run(run_id, resolved_workdir)
         for path in find_run_reports(Path(project_root)):
             if path.parent.name == run_id:
                 return load_report(path).model_dump(mode="json")
         raise HTTPException(status_code=404, detail="run not found")
 
     @router.get("/runs/{run_id}/diff")
-    async def get_run_diff(run_id: str, workdir: Optional[str] = Query(default=None), user: Dict[str, Any] = _get_auth()):
-        """获取当前运行的完整 git diff。"""
+    async def get_run_diff(run_id: str, workdir: Optional[str] = Query(default=None), project_id: Optional[str] = Query(default=None), user: Dict[str, Any] = _get_auth()):
         from engine.worktree import WorktreeManager
 
-        project_root = project_for_run(run_id, workdir)
+        resolved_workdir = await _resolve_workdir_optional(project_id, workdir)
+        project_root = project_for_run(run_id, resolved_workdir)
 
         wm = WorktreeManager(Path(project_root), {})
         wt_path = wm.get_worktree_path(run_id)
@@ -254,17 +316,17 @@ if router:
     async def resume_run(
         run_id: str,
         workdir: str = Query(default="."),
+        project_id: Optional[str] = Query(default=None),
         yes: bool = Query(default=False),
         reject: bool = Query(default=False),
         config_path: Optional[str] = Query(default=None),
         execution_mode: Optional[str] = Query(default=None),
         user: Dict[str, Any] = _get_auth(),
     ):
-        """恢复中断的 pipeline run"""
         from ..runtime import resume_run_background
 
-        # 检查 run 是否存在
-        project_root = project_for_run(run_id, workdir)
+        resolved_workdir = await _resolve_workdir(project_id, workdir)
+        project_root = project_for_run(run_id, resolved_workdir)
         output_dir = project_root / ".ai" / "team-output" / run_id
         if not output_dir.exists():
             raise HTTPException(status_code=404, detail="run not found")
@@ -285,7 +347,7 @@ if router:
         try:
             output_dir = resume_run_background(
                 run_id=run_id,
-                workdir=workdir,
+                workdir=resolved_workdir,
                 yes=yes,
                 reject=reject,
                 config_path=config_path,
@@ -304,6 +366,7 @@ if router:
         run_id: str,
         body: HumanDecisionRequest,
         workdir: str = Query(default="."),
+        project_id: Optional[str] = Query(default=None),
         config_path: Optional[str] = Query(default=None),
         execution_mode: Optional[str] = Query(default=None),
         user: Dict[str, Any] = _get_auth(),
@@ -315,7 +378,8 @@ if router:
         if body.decision == "rejected" and not body.reason.strip():
             raise HTTPException(status_code=400, detail="reject reason is required")
 
-        project_root = project_for_run(run_id, workdir)
+        resolved_workdir = await _resolve_workdir(project_id, workdir)
+        project_root = project_for_run(run_id, resolved_workdir)
         output_dir = project_root / ".ai" / "team-output" / run_id
         if not output_dir.exists():
             raise HTTPException(status_code=404, detail="run not found")
@@ -349,7 +413,7 @@ if router:
         try:
             resumed_output_dir = resume_run_background(
                 run_id=run_id,
-                workdir=workdir,
+                workdir=resolved_workdir,
                 config_path=config_path,
                 execution_mode=execution_mode,
                 human_decision=decision,

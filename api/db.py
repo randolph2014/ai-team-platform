@@ -24,3 +24,11 @@ def try_persistence():
         return get_connection, release_connection, PipelineRunRepo, run_row_to_summary, run_detail_to_response
     except ImportError:
         return None
+
+
+def try_project_repo():
+    try:
+        from persistence.repository import ProjectRepo
+        return ProjectRepo()
+    except ImportError:
+        return None

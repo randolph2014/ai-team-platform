@@ -983,6 +983,54 @@ def run_detail_to_response(detail: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+class ProjectRepo:
+    TABLE = "project"
+
+    async def create(self, conn, *, name: str, root_path: str) -> str:
+        rows = await conn.fetch(
+            f"""
+            INSERT INTO {self.TABLE} (id, name, root_path)
+            VALUES (gen_random_uuid(), $1, $2)
+            RETURNING id
+            """,
+            name,
+            root_path,
+        )
+        return str(rows[0]["id"])
+
+    async def get_by_id(self, conn, id: str) -> Optional[Dict[str, Any]]:
+        row = await conn.fetchrow(f"SELECT * FROM {self.TABLE} WHERE id = $1", id)
+        if row is None:
+            return None
+        r = dict(row)
+        r["id"] = str(r["id"])
+        r["created_at"] = _dt_to_str(r.get("created_at"))
+        return r
+
+    async def get_by_root_path(self, conn, root_path: str) -> Optional[Dict[str, Any]]:
+        row = await conn.fetchrow(f"SELECT * FROM {self.TABLE} WHERE root_path = $1", root_path)
+        if row is None:
+            return None
+        r = dict(row)
+        r["id"] = str(r["id"])
+        r["created_at"] = _dt_to_str(r.get("created_at"))
+        return r
+
+    async def list_all(self, conn) -> List[Dict[str, Any]]:
+        rows = await conn.fetch(f"SELECT * FROM {self.TABLE} ORDER BY created_at DESC")
+        results = []
+        for row in rows:
+            r = dict(row)
+            r["id"] = str(r["id"])
+            r["created_at"] = _dt_to_str(r.get("created_at"))
+            results.append(r)
+        return results
+
+    async def delete(self, conn, id: str) -> bool:
+        result = await conn.execute(f"DELETE FROM {self.TABLE} WHERE id = $1", id)
+        return result.endswith("1")
+
+
 class SettingsRepo:
     """settings 表 CRUD 操作 — 存储平台级配置（runtimes/agents/pipeline 等）。"""
 
