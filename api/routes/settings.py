@@ -19,7 +19,7 @@ from engine.config import (
 )
 
 try:
-    from fastapi import APIRouter, HTTPException, Query
+    from fastapi import APIRouter, Depends, HTTPException, Query
     from pydantic import BaseModel, ConfigDict
 except ImportError:  # pragma: no cover
     APIRouter = None
@@ -27,6 +27,11 @@ except ImportError:  # pragma: no cover
     ConfigDict = dict
 
 router = APIRouter() if APIRouter else None
+
+
+def _get_auth():
+    from ..auth import get_current_user
+    return Depends(get_current_user)
 
 SENSITIVE_KEY_PATTERNS: List[re.Pattern] = [
     re.compile(r"(api[_-]?key|apikey)", re.IGNORECASE),
@@ -258,7 +263,7 @@ async def _do_update(body: SettingsUpdate, workdir: str, *, replace_runtimes: bo
 if router:
 
     @router.get("/settings")
-    async def get_settings(workdir: str = Query(default=".")):
+    async def get_settings(workdir: str = Query(default="."), auth: dict = _get_auth()):
         project_root = find_project_root(workdir)
         loaded = load_config(project_root)
         config = _structured_response(loaded.config)
@@ -271,15 +276,15 @@ if router:
         }
 
     @router.put("/settings")
-    async def update_settings_put(body: SettingsUpdate, workdir: str = Query(default=".")):
+    async def update_settings_put(body: SettingsUpdate, workdir: str = Query(default="."), auth: dict = _get_auth()):
         return await _do_update(body, workdir, replace_runtimes=True)
 
     @router.post("/settings")
-    async def update_settings(body: SettingsUpdate, workdir: str = Query(default=".")):
+    async def update_settings(body: SettingsUpdate, workdir: str = Query(default="."), auth: dict = _get_auth()):
         return await _do_update(body, workdir)
 
     @router.post("/settings/reset")
-    async def reset_settings(workdir: str = Query(default=".")):
+    async def reset_settings(workdir: str = Query(default="."), auth: dict = _get_auth()):
         project_root = find_project_root(workdir)
 
         db_ok = await _db_delete_settings()
@@ -296,7 +301,7 @@ if router:
         }
 
     @router.get("/settings/agents/{agent_name}/prompt")
-    def get_agent_prompt(agent_name: str, workdir: str = Query(default=".")):
+    def get_agent_prompt(agent_name: str, workdir: str = Query(default="."), auth: dict = _get_auth()):
         project_root = find_project_root(workdir)
         loaded = load_config(project_root)
         agents = agent_map(loaded.config)
@@ -317,7 +322,7 @@ if router:
         }
 
     @router.put("/settings/agents/{agent_name}/prompt")
-    def update_agent_prompt(agent_name: str, body: PromptUpdate, workdir: str = Query(default=".")):
+    def update_agent_prompt(agent_name: str, body: PromptUpdate, workdir: str = Query(default="."), auth: dict = _get_auth()):
         project_root = find_project_root(workdir)
         loaded = load_config(project_root)
         agents = agent_map(loaded.config)

@@ -14,11 +14,16 @@ from engine.runtimes import discover_runtime_candidates, runtime_available
 from .settings import _mask_sensitive
 
 try:
-    from fastapi import APIRouter, HTTPException, Query
+    from fastapi import APIRouter, Depends, HTTPException, Query
 except ImportError:  # pragma: no cover
     APIRouter = None
 
 router = APIRouter() if APIRouter else None
+
+
+def _get_auth():
+    from ..auth import get_current_user
+    return Depends(get_current_user)
 
 
 def _load_default_yaml() -> Dict[str, Any]:
@@ -30,7 +35,7 @@ def _load_default_yaml() -> Dict[str, Any]:
 if router:
 
     @router.get("/config/runtimes")
-    def get_runtimes(workdir: str = Query(default=".")):
+    def get_runtimes(workdir: str = Query(default="."), auth: dict = _get_auth()):
         candidates = discover_runtime_candidates()
         candidates_by_id = {candidate["id"]: candidate for candidate in candidates}
         result: Dict[str, Any] = {"runtimes": {}, "candidates": candidates}
@@ -60,7 +65,7 @@ if router:
         return result
 
     @router.get("/config/validate")
-    def validate_config(workdir: str = Query(default=".")):
+    def validate_config(workdir: str = Query(default="."), auth: dict = _get_auth()):
         project_root = find_project_root(workdir)
         errors: List[str] = []
         warnings: List[str] = []

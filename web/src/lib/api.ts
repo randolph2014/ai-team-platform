@@ -35,8 +35,10 @@ export function isLoggedIn(): boolean {
 }
 
 export async function login(apiKey: string): Promise<string> {
-  const response = await fetch(`${API_BASE}/auth/login?api_key=${encodeURIComponent(apiKey)}`, {
+  const response = await fetch(`${API_BASE}/auth/login`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: apiKey }),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({ detail: '登录失败' }));

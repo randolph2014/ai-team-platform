@@ -10,7 +10,7 @@ from engine.config import DEFAULT_CONFIG, TEMPLATES_ROOT, load_config
 from engine.human_gate import HARD_HUMAN_GATES
 
 try:
-    from fastapi import APIRouter, HTTPException, Query
+    from fastapi import APIRouter, Depends, HTTPException, Query
     from pydantic import BaseModel, Field
 except ImportError:  # pragma: no cover
     APIRouter = None
@@ -19,6 +19,11 @@ except ImportError:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 router = APIRouter() if APIRouter else None
+
+
+def _get_auth():
+    from ..auth import get_current_user
+    return Depends(get_current_user)
 
 PIPELINES_DIR = TEMPLATES_ROOT / "pipelines"
 
@@ -380,22 +385,22 @@ def _find_pipeline(pipeline_id: str) -> Optional[Dict[str, Any]]:
 if router:
 
     @router.get("/pipelines")
-    def list_pipelines():
+    def list_pipelines(auth: dict = _get_auth()):
         return _load_pipelines()
 
     @router.get("/pipelines/templates")
-    def list_templates():
+    def list_templates(auth: dict = _get_auth()):
         return BUILTIN_TEMPLATES
 
     @router.get("/pipelines/{pipeline_id}")
-    def get_pipeline(pipeline_id: str):
+    def get_pipeline(pipeline_id: str, auth: dict = _get_auth()):
         pipeline = _find_pipeline(pipeline_id)
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
         return pipeline
 
     @router.post("/pipelines")
-    def create_pipeline(body: PipelineCreate):
+    def create_pipeline(body: PipelineCreate, auth: dict = _get_auth()):
         if _find_pipeline(body.id):
             raise HTTPException(status_code=409, detail="Pipeline with this id already exists")
 
@@ -422,7 +427,7 @@ if router:
         return data
 
     @router.put("/pipelines/{pipeline_id}")
-    def update_pipeline(pipeline_id: str, body: PipelineUpdate):
+    def update_pipeline(pipeline_id: str, body: PipelineUpdate, auth: dict = _get_auth()):
         existing = _find_pipeline(pipeline_id)
         if not existing:
             raise HTTPException(status_code=404, detail="Pipeline not found")
@@ -448,7 +453,7 @@ if router:
         return existing
 
     @router.delete("/pipelines/{pipeline_id}")
-    def delete_pipeline(pipeline_id: str):
+    def delete_pipeline(pipeline_id: str, auth: dict = _get_auth()):
         if not _find_pipeline(pipeline_id):
             raise HTTPException(status_code=404, detail="Pipeline not found")
 

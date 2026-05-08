@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from engine.constants import DEFAULT_JWT_SECRET
+
 # ---------------------------------------------------------------------------
 # Configuration helpers
 # ---------------------------------------------------------------------------
@@ -43,14 +45,18 @@ def _get_api_keys() -> Optional[List[str]]:
 
 
 def _get_jwt_secret() -> str:
-    """Return JWT signing secret.  Falls back to the first API key if not set."""
+    """Return JWT signing secret."""
     global _JWT_SECRET
     if _JWT_SECRET is not None:
         return _JWT_SECRET
     secret = os.environ.get("AI_TEAM_JWT_SECRET", "").strip()
     if not secret:
-        keys = _get_api_keys()
-        secret = keys[0] if keys else "dev-secret-change-me"
+        if auth_enabled():
+            raise RuntimeError(
+                "AI_TEAM_JWT_SECRET must be set when AI_TEAM_API_KEYS is configured. "
+                "The default secret is insecure for production use."
+            )
+        secret = DEFAULT_JWT_SECRET
     _JWT_SECRET = secret
     return _JWT_SECRET
 

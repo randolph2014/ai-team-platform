@@ -20,7 +20,7 @@ import { AgentNode } from '../components/flow/AgentNode';
 import { GateNode } from '../components/flow/GateNode';
 import { LoopbackEdge } from '../components/flow/LoopbackEdge';
 import { StageNode } from '../components/flow/StageNode';
-import { fetchPipelines, fetchPipelineTemplates } from '../lib/api';
+import { fetchPipelines, fetchPipelineTemplates, apiFetch } from '../lib/api';
 import {
   StageSchema,
   type PipelineConfig,
@@ -618,7 +618,7 @@ export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
     try {
       const stages = stagesForSave(config.stages);
       const id = slugForPipeline(config.name);
-      const response = await fetch('/api/pipelines', {
+      const response = await apiFetch('/pipelines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

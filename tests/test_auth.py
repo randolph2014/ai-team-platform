@@ -152,7 +152,7 @@ class TestAuthEnabled(_AuthTestBase):
         """POST /api/auth/login with valid API key returns a JWT token."""
         try:
             self._setup_auth_env()
-            response = self.client.post("/api/auth/login", params={"api_key": "test-key-1"})
+            response = self.client.post("/api/auth/login", json={"api_key": "test-key-1"})
             self.assertEqual(response.status_code, 200)
             data = response.json()
             self.assertIn("access_token", data)
@@ -164,7 +164,7 @@ class TestAuthEnabled(_AuthTestBase):
         """POST /api/auth/login with invalid API key returns 401."""
         try:
             self._setup_auth_env()
-            response = self.client.post("/api/auth/login", params={"api_key": "wrong-key"})
+            response = self.client.post("/api/auth/login", json={"api_key": "wrong-key"})
             self.assertEqual(response.status_code, 401)
         finally:
             self._teardown_auth_env()
@@ -175,7 +175,7 @@ class TestAuthEnabled(_AuthTestBase):
             self._setup_auth_env()
 
             # Login to get JWT
-            login_resp = self.client.post("/api/auth/login", params={"api_key": "test-key-1"})
+            login_resp = self.client.post("/api/auth/login", json={"api_key": "test-key-1"})
             self.assertEqual(login_resp.status_code, 200)
             token = login_resp.json()["access_token"]
 
@@ -250,6 +250,66 @@ class TestAuthHelpers(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             decode_access_token(token)
         self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_jwt_secret_raises_when_keys_set_but_no_secret(self) -> None:
+        """_get_jwt_secret raises RuntimeError when API keys set but JWT secret missing."""
+        os.environ["AI_TEAM_API_KEYS"] = "key1"
+        os.environ.pop("AI_TEAM_JWT_SECRET", None)
+        from api.auth import reset_auth_config, _get_jwt_secret
+        reset_auth_config()
+        with self.assertRaises(RuntimeError):
+            _get_jwt_secret()
+
+
+class TestManagementEndpointsAuth(_AuthTestBase):
+    """Management endpoints return 401 when auth is enabled and no token provided."""
+
+    def _setup_auth_env(self) -> None:
+        from api.auth import reset_auth_config
+        reset_auth_config()
+        os.environ["AI_TEAM_API_KEYS"] = "test-key-1"
+        os.environ["AI_TEAM_JWT_SECRET"] = "test-jwt-secret-for-tests"
+        from api.app import create_app
+        self.app = create_app()
+        self.client = TestClient(self.app)
+
+    def _teardown_auth_env(self) -> None:
+        os.environ.pop("AI_TEAM_API_KEYS", None)
+        os.environ.pop("AI_TEAM_JWT_SECRET", None)
+        from api.auth import reset_auth_config
+        reset_auth_config()
+
+    def test_settings_returns_401_without_token(self) -> None:
+        try:
+            self._setup_auth_env()
+            response = self.client.get("/api/settings")
+            self.assertEqual(response.status_code, 401)
+        finally:
+            self._teardown_auth_env()
+
+    def test_pipelines_returns_401_without_token(self) -> None:
+        try:
+            self._setup_auth_env()
+            response = self.client.get("/api/pipelines")
+            self.assertEqual(response.status_code, 401)
+        finally:
+            self._teardown_auth_env()
+
+    def test_config_returns_401_without_token(self) -> None:
+        try:
+            self._setup_auth_env()
+            response = self.client.get("/api/config/runtimes")
+            self.assertEqual(response.status_code, 401)
+        finally:
+            self._teardown_auth_env()
+
+    def test_costs_returns_401_without_token(self) -> None:
+        try:
+            self._setup_auth_env()
+            response = self.client.get("/api/costs", params={"run_id": "test"})
+            self.assertEqual(response.status_code, 401)
+        finally:
+            self._teardown_auth_env()
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
+from typing import List
 
 from .runtime import event_store
 
@@ -10,13 +12,41 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(app):
-    """应用生命周期：启动时执行数据库迁移，关闭时释放连接池"""
-    try:
-        from persistence import run_migrations
+    from engine.production_guard import ProductionGuard, is_production_mode
 
+    config = None
+    _is_prod = is_production_mode()
+    if _is_prod:
+        try:
+            from pathlib import Path
+            from engine.config import load_config
+            project_root = Path(os.environ.get("AI_TEAM_PROJECT_ROOT", os.getcwd()))
+            loaded_config = load_config(project_root)
+            config = loaded_config.config
+        except Exception:
+            logger.debug("Could not load config for production guard")
+
+    guard = ProductionGuard(config=config)
+    if guard.production:
+        passed, errors, warnings = guard.check_all()
+        for w in warnings:
+            logger.warning("production guard warning: %s", w)
+        if not passed:
+            for e in errors:
+                logger.error("production guard error: %s", e)
+            raise RuntimeError(
+                "Production guard checks failed:\n" + "\n".join(f"  - {e}" for e in errors)
+            )
+
+    from persistence import run_migrations
+
+    if _is_prod:
         await run_migrations()
-    except Exception:
-        logger.exception("Database migration failed")
+    else:
+        try:
+            await run_migrations()
+        except Exception:
+            logger.exception("Database migration failed")
     yield
     try:
         from persistence import close_pool
@@ -24,6 +54,13 @@ async def _lifespan(app):
         await close_pool()
     except Exception:
         logger.exception("Database pool shutdown failed")
+
+
+def _get_cors_origins() -> List[str]:
+    raw = os.environ.get("AI_TEAM_CORS_ORIGINS", "").strip()
+    if not raw:
+        return ["*"]
+    return [o.strip() for o in raw.split(",") if o.strip()]
 
 
 def create_app():
@@ -44,25 +81,27 @@ def create_app():
     from .ws import router as ws_router
 
     app = FastAPI(title="AI Team Platform", version="0.1.0", lifespan=_lifespan)
+
+    cors_origins = _get_cors_origins()
+    allow_credentials = cors_origins != ["*"]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=cors_origins,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )
     app.state.event_store = event_store
 
-    # ---- Auth routes (must be registered before auth-dependent routes) ----
     from .auth import auth_enabled, handle_login
+    from fastapi import Body
 
     @app.get("/api/auth/status")
     def auth_status():
         return {"auth_enabled": auth_enabled()}
 
     @app.post("/api/auth/login")
-    async def login(api_key: str):
-        """Exchange an API key for a JWT access token."""
+    async def login(api_key: str = Body(..., embed=True)):
         return await handle_login(api_key)
 
     # ---- Application routes ----
