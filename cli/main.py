@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from engine.config import PLATFORM_ROOT, ConfigError, find_project_root
+from engine.config import PLATFORM_ROOT, ConfigError, find_project_root, load_config
 from engine.orchestrator import Orchestrator, find_run_reports, load_report
 from engine.worktree import WorktreeManager
 
@@ -39,6 +39,20 @@ def cmd_run(args: argparse.Namespace) -> int:
     if skipped_hard_gates:
         print(f"错误: 禁止跳过强制人工确认节点: {', '.join(sorted(skipped_hard_gates))}", file=sys.stderr)
         return 1
+
+    if args.production:
+        from engine.production_guard import ProductionGuard
+
+        project_root = _project_root(args)
+        loaded_config = load_config(project_root, args.config)
+        guard = ProductionGuard(production=True, config=loaded_config.config)
+        passed, errors, warnings = guard.check_all()
+        for w in warnings:
+            print(f"warning: {w}", file=sys.stderr)
+        if not passed:
+            for e in errors:
+                print(f"error: {e}", file=sys.stderr)
+            return 1
 
     project_root = _project_root(args)
     requirement = _read_requirement(args)
@@ -129,6 +143,24 @@ def cmd_serve(args: argparse.Namespace) -> int:
         import uvicorn
     except ImportError as exc:
         raise SystemExit("uvicorn is not installed. Install with `pip install -e .` or `pip install uvicorn fastapi`.") from exc
+    if args.production:
+        from engine.production_guard import ProductionGuard
+
+        project_root = Path(getattr(args, "project", None) or os.getcwd())
+        try:
+            loaded_config = load_config(project_root, getattr(args, "config", None))
+            config = loaded_config.config
+        except Exception:
+            config = None
+        guard = ProductionGuard(production=True, config=config)
+        passed, errors, warnings = guard.check_all()
+        for w in warnings:
+            print(f"warning: {w}", file=sys.stderr)
+        if not passed:
+            for e in errors:
+                print(f"error: {e}", file=sys.stderr)
+            return 1
+        os.environ["AI_TEAM_PRODUCTION"] = "true"
     app_path = "api.app:create_app"
     uvicorn.run(app_path, factory=True, host=args.host, port=args.port, reload=args.reload)
     return 0
@@ -301,6 +333,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--reload", action="store_true")
+    serve.add_argument("--production", action="store_true", help="enable production guard checks")
     serve.set_defaults(func=cmd_serve)
 
     init = sub.add_parser("init", help="initialize project with quality gates")
