@@ -1,34 +1,36 @@
-# Dependencies
 __pycache__/
 .pytest_cache/
 .coverage
+.coverage.*
+htmlcov/
 *.pyc
 *.pyo
+*.egg
 *.egg-info/
+*.whl
 .venv/
 venv/
 env/
+build/
+dist/
+.mypy_cache/
+.ruff_cache/
 
-# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# OS
 .DS_Store
 Thumbs.db
 
-# Environment
 .env
 .env.local
 .env.*.local
 
-# Database
 *.db
 *.sqlite3
 
-# AI worktree artifacts
 .ai/team.yaml
 .ai/worktrees/
 .ai/runs/
@@ -36,11 +38,9 @@ Thumbs.db
 .user-config.yaml
 .playwright-mcp/
 
-# Node (frontend)
 web/node_modules/
 web/dist/
 web/.next/
 web/tsconfig.tsbuildinfo
 
-# Docker
 docker/data/

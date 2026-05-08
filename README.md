@@ -45,14 +45,25 @@ npm run dev
 验证：
 
 ```bash
-python3 -m unittest discover -s tests -v
-cd web && npm run build
+# Python 测试
+pip install -e ".[dev]"
+pytest
+
+# 前端构建
+cd web && npm ci && npm run build
+```
+
+仓库卫生检查：
+
+```bash
+bash scripts/check_repo_hygiene.sh
 ```
 
 Docker Compose：
 
 ```bash
-docker compose up --build
+docker compose build
+docker compose up
 ```
 
 ## 技术栈
