@@ -49,5 +49,17 @@ jobs:
       - name: Install dependencies
         run: cd web && npm ci
 
+      - name: Typecheck
+        run: cd web && npm run typecheck
+
+      - name: Unit tests
+        run: cd web && npm test
+
+      - name: Install Playwright browser
+        run: cd web && npx playwright install chromium
+
+      - name: Playwright smoke
+        run: cd web && npm run smoke:playwright
+
       - name: Build
         run: cd web && npm run build

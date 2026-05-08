@@ -97,6 +97,24 @@ class TestExecutePipeline(unittest.TestCase):
         self.assertEqual(report.status, "failed")
         self.assertIn("boom", report.error_message)
 
+    @patch("engine.events.RedisEventBus")
+    @patch("engine.orchestrator.Orchestrator")
+    @patch("engine.config.find_project_root", return_value="/tmp/project")
+    def test_execute_pipeline_wires_worker_events_to_redis_bus(self, mock_find_root, MockOrch, MockRedisBus) -> None:
+        from engine.tasks import execute_pipeline
+
+        mock_report = MagicMock()
+        mock_report.output_dir = "/tmp/project/.ai/team-output/run-events"
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = mock_report
+        MockOrch.return_value = mock_instance
+
+        execute_pipeline("req", "/tmp/project", "run-events")
+
+        event_bus = MockRedisBus.call_args.args[0]
+        self.assertIs(MockOrch.call_args.kwargs["event_bus"], event_bus)
+        MockRedisBus.return_value.close.assert_called_once()
+
 
 class TestExecuteResume(unittest.TestCase):
     @patch("engine.orchestrator.Orchestrator")

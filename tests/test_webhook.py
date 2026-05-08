@@ -1,16 +1,3 @@
-"""
-Webhook 模块测试。
-
-测试范围：
-- HMAC-SHA256 签名验证
-- GitHub/GitLab 事件解析
-- event_info 标准化
-- Webhook CRUD API（create, list, get, delete）
-- Webhook trigger 端点
-
-使用 FastAPI TestClient 进行集成测试。
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -28,7 +15,6 @@ else:
 
 
 class TestSignatureVerification(unittest.TestCase):
-    """测试 webhook 签名验证"""
 
     def test_valid_signature(self):
         from engine.webhook import verify_signature
@@ -63,8 +49,30 @@ class TestSignatureVerification(unittest.TestCase):
         self.assertTrue(verify_signature(payload, expected, secret))
 
 
+class TestMaskSecret(unittest.TestCase):
+
+    def test_mask_long_secret(self):
+        from engine.webhook import mask_secret
+        self.assertEqual(mask_secret("abcdefghijklmnop"), "abcd****mnop")
+
+    def test_mask_short_secret(self):
+        from engine.webhook import mask_secret
+        self.assertEqual(mask_secret("short"), "********")
+
+    def test_mask_empty_secret(self):
+        from engine.webhook import mask_secret
+        self.assertEqual(mask_secret(""), "********")
+
+    def test_mask_exactly_8_chars(self):
+        from engine.webhook import mask_secret
+        self.assertEqual(mask_secret("12345678"), "********")
+
+    def test_mask_9_chars(self):
+        from engine.webhook import mask_secret
+        self.assertEqual(mask_secret("123456789"), "1234****6789")
+
+
 class TestGitHubEventParsing(unittest.TestCase):
-    """测试 GitHub webhook 事件解析"""
 
     def test_parse_github_push(self):
         from engine.webhook import parse_event, normalize_trigger_info
@@ -126,7 +134,6 @@ class TestGitHubEventParsing(unittest.TestCase):
 
 
 class TestGitLabEventParsing(unittest.TestCase):
-    """测试 GitLab webhook 事件解析"""
 
     def test_parse_gitlab_push(self):
         from engine.webhook import parse_event, normalize_trigger_info
@@ -182,7 +189,6 @@ class TestGitLabEventParsing(unittest.TestCase):
 
 
 class TestNormalizeTriggerInfo(unittest.TestCase):
-    """测试事件信息标准化"""
 
     def test_normalize_push_ref_with_prefix(self):
         from engine.webhook import normalize_trigger_info
@@ -226,7 +232,6 @@ class TestNormalizeTriggerInfo(unittest.TestCase):
 
 
 class TestWebhookApiRoutes(unittest.TestCase):
-    """测试 Webhook CRUD API 端点"""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -314,9 +319,29 @@ class TestWebhookApiRoutes(unittest.TestCase):
         self.assertEqual(data["status"], "processed")
         self.assertEqual(data["event"], "push")
 
+    def test_rotate_secret_endpoint_requires_auth(self):
+        from api.app import create_app
+
+        with patch.dict("os.environ", {"AI_TEAM_API_KEYS": "test-key"}, clear=False):
+            app = create_app()
+            client = TestClient(app)
+            response = client.post(
+                "/api/webhooks/some-id/rotate-secret",
+                json={"new_secret": "new-secret-value"},
+            )
+            self.assertEqual(response.status_code, 401)
+
+    def test_deliveries_endpoint_requires_auth(self):
+        from api.app import create_app
+
+        with patch.dict("os.environ", {"AI_TEAM_API_KEYS": "test-key"}, clear=False):
+            app = create_app()
+            client = TestClient(app)
+            response = client.get("/api/webhooks/some-id/deliveries")
+            self.assertEqual(response.status_code, 401)
+
 
 class TestWebhookRepo(unittest.TestCase):
-    """测试 WebhookRepo CRUD 操作（mock 数据库）"""
 
     def setUp(self) -> None:
         reset_auth()
@@ -332,6 +357,18 @@ class TestWebhookRepo(unittest.TestCase):
 
     def test_update_enabled(self):
         self._run_async_test(self._test_update_enabled)
+
+    def test_secret_masked_in_get_by_id(self):
+        self._run_async_test(self._test_secret_masked_in_get_by_id)
+
+    def test_secret_masked_in_list_all(self):
+        self._run_async_test(self._test_secret_masked_in_list_all)
+
+    def test_get_by_id_without_mask(self):
+        self._run_async_test(self._test_get_by_id_without_mask)
+
+    def test_rotate_secret(self):
+        self._run_async_test(self._test_rotate_secret)
 
     def _run_async_test(self, coro_func):
         import asyncio
@@ -362,7 +399,7 @@ class TestWebhookRepo(unittest.TestCase):
             return_value={
                 "id": "wh-001",
                 "url": "https://example.com/webhook",
-                "secret": "test-secret",
+                "secret": "test-secret-value-here",
                 "events": '["push"]',
                 "pipeline_id": None,
                 "enabled": True,
@@ -375,7 +412,7 @@ class TestWebhookRepo(unittest.TestCase):
             mock_conn,
             id="wh-001",
             url="https://example.com/webhook",
-            secret="test-secret",
+            secret="test-secret-value-here",
             events=["push"],
             pipeline_id=None,
             enabled=True,
@@ -384,7 +421,8 @@ class TestWebhookRepo(unittest.TestCase):
         record = await repo.get_by_id(mock_conn, "wh-001")
         self.assertIsNotNone(record)
         self.assertEqual(record["url"], "https://example.com/webhook")
-        self.assertEqual(record["secret"], "test-secret")
+        self.assertNotEqual(record["secret"], "test-secret-value-here")
+        self.assertIn("****", record["secret"])
         self.assertEqual(record["events"], ["push"])
 
     async def _test_list_all_webhooks(self):
@@ -399,7 +437,7 @@ class TestWebhookRepo(unittest.TestCase):
                 {
                     "id": "wh-001",
                     "url": "https://example.com/webhook",
-                    "secret": "test-secret",
+                    "secret": "test-secret-value-here",
                     "events": '["push"]',
                     "pipeline_id": None,
                     "enabled": True,
@@ -411,6 +449,7 @@ class TestWebhookRepo(unittest.TestCase):
         records = await repo.list_all(mock_conn)
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["id"], "wh-001")
+        self.assertIn("****", records[0]["secret"])
 
     async def _test_delete_webhook(self):
         from persistence.repository import WebhookRepo
@@ -444,9 +483,185 @@ class TestWebhookRepo(unittest.TestCase):
         result = await repo.update_enabled(mock_conn, "wh-nonexistent", False)
         self.assertFalse(result)
 
+    async def _test_secret_masked_in_get_by_id(self):
+        from persistence.repository import WebhookRepo
+        from unittest.mock import AsyncMock
+
+        repo = WebhookRepo()
+        mock_conn = MagicMock()
+        raw_secret = "a-very-long-secret-value"
+        mock_conn.fetchrow = AsyncMock(
+            return_value={
+                "id": "wh-002",
+                "url": "https://example.com",
+                "secret": raw_secret,
+                "events": '[]',
+                "pipeline_id": None,
+                "enabled": True,
+                "created_at": "2025-01-01T00:00:00+00:00",
+            }
+        )
+
+        record = await repo.get_by_id(mock_conn, "wh-002", mask_secret=True)
+        self.assertNotEqual(record["secret"], raw_secret)
+        self.assertIn("****", record["secret"])
+
+    async def _test_secret_masked_in_list_all(self):
+        from persistence.repository import WebhookRepo
+        from unittest.mock import AsyncMock
+
+        repo = WebhookRepo()
+        raw_secret = "a-very-long-secret-value"
+        mock_conn = MagicMock()
+        mock_conn.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": "wh-003",
+                    "url": "https://example.com",
+                    "secret": raw_secret,
+                    "events": '[]',
+                    "pipeline_id": None,
+                    "enabled": True,
+                    "created_at": "2025-01-01T00:00:00+00:00",
+                }
+            ]
+        )
+
+        records = await repo.list_all(mock_conn, mask_secret=True)
+        self.assertNotEqual(records[0]["secret"], raw_secret)
+        self.assertIn("****", records[0]["secret"])
+
+    async def _test_get_by_id_without_mask(self):
+        from persistence.repository import WebhookRepo
+        from unittest.mock import AsyncMock
+
+        repo = WebhookRepo()
+        raw_secret = "a-very-long-secret-value"
+        mock_conn = MagicMock()
+        mock_conn.fetchrow = AsyncMock(
+            return_value={
+                "id": "wh-004",
+                "url": "https://example.com",
+                "secret": raw_secret,
+                "events": '[]',
+                "pipeline_id": None,
+                "enabled": True,
+                "created_at": "2025-01-01T00:00:00+00:00",
+            }
+        )
+
+        record = await repo.get_by_id(mock_conn, "wh-004", mask_secret=False)
+        self.assertEqual(record["secret"], raw_secret)
+
+    async def _test_rotate_secret(self):
+        from persistence.repository import WebhookRepo
+        from unittest.mock import AsyncMock
+
+        repo = WebhookRepo()
+        mock_conn = MagicMock()
+        mock_conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        result = await repo.rotate_secret(mock_conn, "wh-001", "new-secret-value")
+        self.assertTrue(result)
+
+        mock_conn.execute.return_value = "UPDATE 0"
+        result = await repo.rotate_secret(mock_conn, "wh-nonexistent", "new-secret")
+        self.assertFalse(result)
+
+
+class TestWebhookDeliveryRepo(unittest.TestCase):
+
+    def test_create_delivery(self):
+        self._run_async_test(self._test_create_delivery)
+
+    def test_get_by_webhook(self):
+        self._run_async_test(self._test_get_by_webhook)
+
+    def test_mark_status(self):
+        self._run_async_test(self._test_mark_status)
+
+    def _run_async_test(self, coro_func):
+        import asyncio
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(coro_func())
+        else:
+            import threading
+            event = threading.Event()
+            def runner():
+                asyncio.run(coro_func())
+                event.set()
+            threading.Thread(target=runner, daemon=True).start()
+            event.wait(timeout=10)
+
+    async def _test_create_delivery(self):
+        from persistence.repository import WebhookDeliveryRepo
+        from unittest.mock import AsyncMock
+
+        repo = WebhookDeliveryRepo()
+        mock_conn = MagicMock()
+        mock_conn.fetch = AsyncMock(
+            return_value=[{"id": "del-001"}]
+        )
+
+        delivery_id = await repo.create(
+            mock_conn,
+            webhook_id="wh-001",
+            event_type="push",
+            status="delivered",
+            request_url="https://example.com/hook",
+            request_body={"ref": "refs/heads/main"},
+            response_status=200,
+        )
+        self.assertEqual(delivery_id, "del-001")
+
+    async def _test_get_by_webhook(self):
+        from persistence.repository import WebhookDeliveryRepo
+        from unittest.mock import AsyncMock
+        from datetime import datetime, timezone
+
+        repo = WebhookDeliveryRepo()
+        mock_conn = MagicMock()
+        now = datetime.now(timezone.utc)
+        mock_conn.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": "del-001",
+                    "webhook_id": "wh-001",
+                    "event_type": "push",
+                    "status": "delivered",
+                    "request_url": "https://example.com/hook",
+                    "request_headers": "{}",
+                    "request_body": "{}",
+                    "response_status": 200,
+                    "response_body": None,
+                    "attempts": 1,
+                    "last_attempt_at": now,
+                    "next_retry_at": None,
+                    "error_message": None,
+                    "created_at": now,
+                }
+            ]
+        )
+
+        deliveries = await repo.get_by_webhook(mock_conn, "wh-001")
+        self.assertEqual(len(deliveries), 1)
+        self.assertEqual(deliveries[0]["status"], "delivered")
+
+    async def _test_mark_status(self):
+        from persistence.repository import WebhookDeliveryRepo
+        from unittest.mock import AsyncMock
+
+        repo = WebhookDeliveryRepo()
+        mock_conn = MagicMock()
+        mock_conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        result = await repo.mark_status(mock_conn, "del-001", "failed", response_status=500, error_message="timeout")
+        self.assertTrue(result)
+
 
 def reset_auth():
-    """Reset auth configuration for tests that need to modify env vars."""
     try:
         from api.auth import reset_auth_config
         reset_auth_config()

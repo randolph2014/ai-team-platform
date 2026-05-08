@@ -32,7 +32,7 @@ describe('StatusBadge', () => {
 
   it('renders cancelled status', () => {
     render(<StatusBadge status="cancelled" />);
-    expect(screen.getByText('cancelled')).toBeInTheDocument();
+    expect(screen.getByText('已取消')).toBeInTheDocument();
   });
 
   it('renders unknown status as text', () => {

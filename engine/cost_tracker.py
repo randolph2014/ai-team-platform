@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .config import find_project_root
 from .events import EventBus
 
 logger = logging.getLogger(__name__)
@@ -82,12 +81,7 @@ def _is_db_available() -> bool:
 
 class CostTracker:
     def __init__(self, project_root: Optional[Path] = None, bus: Optional[EventBus] = None) -> None:
-        self._project_root = project_root or find_project_root(".")
         self._bus = bus
-
-    @property
-    def _costs_dir(self) -> Path:
-        return self._project_root / ".ai" / "costs"
 
     def track_usage(
         self,
@@ -106,7 +100,7 @@ class CostTracker:
             except Exception:
                 logger.exception("Failed to track cost in DB for run %s", run_id)
         else:
-            self._file_write(run_id, agent_name, model, prompt_tokens, completion_tokens, cost, stage_id)
+            logger.warning("Database not available, cost tracking skipped for run %s", run_id)
 
         if self._bus:
             self._bus.emit(
@@ -144,31 +138,6 @@ class CostTracker:
         finally:
             await release_connection(conn)
 
-    def _file_write(
-        self,
-        run_id: str,
-        agent_name: str,
-        model: str,
-        prompt_tokens: int,
-        completion_tokens: int,
-        cost: float,
-        stage_id: str,
-    ) -> None:
-        self._costs_dir.mkdir(parents=True, exist_ok=True)
-        record = {
-            "run_id": run_id,
-            "agent_name": agent_name,
-            "model": model,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "estimated_cost": cost,
-            "stage_id": stage_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        filepath = self._costs_dir / f"{run_id}.jsonl"
-        with filepath.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
     def get_run_costs(self, run_id: str) -> dict:
         records: List[dict] = []
         if _is_db_available():
@@ -178,8 +147,6 @@ class CostTracker:
             except Exception:
                 logger.exception("Failed to get run costs from DB for run %s", run_id)
                 records = []
-        else:
-            records = self._file_read_records(run_id)
 
         total_prompt = sum(r.get("prompt_tokens", 0) for r in records)
         total_completion = sum(r.get("completion_tokens", 0) for r in records)
@@ -222,23 +189,7 @@ class CostTracker:
         finally:
             await release_connection(conn)
 
-    def _file_read_records(self, run_id: str) -> List[dict]:
-        filepath = self._costs_dir / f"{run_id}.jsonl"
-        if not filepath.exists():
-            return []
-        records = []
-        with filepath.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        records.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
-        return records
-
-    def get_summary(self, period: str = "daily", project_root: Optional[Path] = None) -> dict:
-        root = project_root or self._project_root
+    def get_summary(self, period: str = "daily") -> dict:
         records: List[dict] = []
 
         if _is_db_available():
@@ -248,8 +199,6 @@ class CostTracker:
             except Exception:
                 logger.exception("Failed to get cost summary from DB")
                 records = []
-        else:
-            records = self._file_summary(root, period)
 
         total_prompt = sum(r.get("prompt_tokens", 0) for r in records)
         total_completion = sum(r.get("completion_tokens", 0) for r in records)
@@ -317,34 +266,91 @@ class CostTracker:
         finally:
             await release_connection(conn)
 
-    def _file_summary(self, root: Path, period: str) -> List[dict]:
-        costs_dir = root / ".ai" / "costs"
-        if not costs_dir.exists():
-            return []
+    def get_aggregate(self, group_by: str = "model", period: str = "daily") -> dict:
+        if not _is_db_available():
+            return {"period": period, "group_by": group_by, "groups": []}
+        try:
+            from persistence.connection import run_sync
+            return run_sync(self._async_get_aggregate(group_by, period))
+        except Exception:
+            logger.exception("Failed to get cost aggregate from DB")
+            return {"period": period, "group_by": group_by, "groups": []}
 
-        now = datetime.now(timezone.utc)
-        if period == "weekly":
-            cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            cutoff = datetime(cutoff.year, cutoff.month, cutoff.day, tzinfo=timezone.utc)
-            cutoff_ts = cutoff.timestamp() - (7 * 86400)
-        elif period == "monthly":
-            cutoff_ts = datetime(now.year, now.month, 1, tzinfo=timezone.utc).timestamp()
-        else:
-            cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            cutoff_ts = datetime(cutoff.year, cutoff.month, cutoff.day, tzinfo=timezone.utc).timestamp()
+    async def _async_get_aggregate(self, group_by: str, period: str) -> dict:
+        from persistence.connection import get_connection, release_connection
+        conn = await get_connection()
+        if conn is None:
+            return {"period": period, "group_by": group_by, "groups": []}
+        try:
+            date_filter = {
+                "daily": "ct.created_at::date = CURRENT_DATE",
+                "weekly": "ct.created_at >= NOW() - INTERVAL '7 days'",
+                "monthly": "date_trunc('month', ct.created_at) = date_trunc('month', NOW())",
+            }.get(period, "ct.created_at::date = CURRENT_DATE")
 
-        records = []
-        for filepath in costs_dir.glob("*.jsonl"):
-            with filepath.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        r = json.loads(line)
-                        ts = datetime.fromisoformat(r.get("timestamp", ""))
-                        if ts.timestamp() >= cutoff_ts:
-                            records.append(r)
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-        return records
+            if group_by == "project":
+                query = (
+                    f"SELECT COALESCE(p.name, pr.project_root) AS key, "
+                    f"SUM(ct.prompt_tokens) AS total_prompt_tokens, "
+                    f"SUM(ct.completion_tokens) AS total_completion_tokens, "
+                    f"SUM(ct.total_tokens) AS total_tokens, "
+                    f"SUM(ct.cost_usd) AS total_cost, "
+                    f"COUNT(*) AS calls "
+                    f"FROM cost_tracking ct "
+                    f"JOIN pipeline_run pr ON ct.run_id = pr.id "
+                    f"LEFT JOIN pipeline p ON pr.pipeline_id = p.id "
+                    f"WHERE {date_filter} "
+                    f"GROUP BY key ORDER BY total_cost DESC"
+                )
+            elif group_by == "run":
+                query = (
+                    f"SELECT CAST(ct.run_id AS TEXT) AS key, "
+                    f"SUM(ct.prompt_tokens) AS total_prompt_tokens, "
+                    f"SUM(ct.completion_tokens) AS total_completion_tokens, "
+                    f"SUM(ct.total_tokens) AS total_tokens, "
+                    f"SUM(ct.cost_usd) AS total_cost, "
+                    f"COUNT(*) AS calls "
+                    f"FROM cost_tracking ct "
+                    f"WHERE {date_filter} "
+                    f"GROUP BY ct.run_id ORDER BY total_cost DESC"
+                )
+            elif group_by == "agent":
+                query = (
+                    f"SELECT ct.agent_name AS key, "
+                    f"SUM(ct.prompt_tokens) AS total_prompt_tokens, "
+                    f"SUM(ct.completion_tokens) AS total_completion_tokens, "
+                    f"SUM(ct.total_tokens) AS total_tokens, "
+                    f"SUM(ct.cost_usd) AS total_cost, "
+                    f"COUNT(*) AS calls "
+                    f"FROM cost_tracking ct "
+                    f"WHERE {date_filter} "
+                    f"GROUP BY ct.agent_name ORDER BY total_cost DESC"
+                )
+            else:
+                query = (
+                    f"SELECT ct.model AS key, "
+                    f"SUM(ct.prompt_tokens) AS total_prompt_tokens, "
+                    f"SUM(ct.completion_tokens) AS total_completion_tokens, "
+                    f"SUM(ct.total_tokens) AS total_tokens, "
+                    f"SUM(ct.cost_usd) AS total_cost, "
+                    f"COUNT(*) AS calls "
+                    f"FROM cost_tracking ct "
+                    f"WHERE {date_filter} "
+                    f"GROUP BY ct.model ORDER BY total_cost DESC"
+                )
+
+            rows = await conn.fetch(query)
+            groups = [
+                {
+                    "key": r["key"],
+                    "total_prompt_tokens": r["total_prompt_tokens"] or 0,
+                    "total_completion_tokens": r["total_completion_tokens"] or 0,
+                    "total_tokens": r["total_tokens"] or 0,
+                    "total_cost": round(float(r["total_cost"] or 0), 8),
+                    "calls": r["calls"] or 0,
+                }
+                for r in rows
+            ]
+            return {"period": period, "group_by": group_by, "groups": groups}
+        finally:
+            await release_connection(conn)

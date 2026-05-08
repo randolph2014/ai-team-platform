@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-from engine.config import find_project_root
 from engine.cost_tracker import CostTracker
 
 try:
@@ -21,16 +20,28 @@ def _get_auth():
 if router:
 
     @router.get("/costs")
-    def get_costs(run_id: str = Query(...), workdir: str = Query(default="."), auth: dict = _get_auth()):
-        project_root = find_project_root(workdir)
-        tracker = CostTracker(project_root)
+    def get_costs(run_id: str = Query(...), auth: dict = _get_auth()):
+        tracker = CostTracker()
         return tracker.get_run_costs(run_id)
 
     @router.get("/costs/summary")
-    def get_cost_summary(period: str = Query(default="daily"), workdir: str = Query(default="."), auth: dict = _get_auth()):
+    def get_cost_summary(period: str = Query(default="daily"), auth: dict = _get_auth()):
         if period not in {"daily", "weekly", "monthly"}:
             raise HTTPException(status_code=400, detail="period must be one of: daily, weekly, monthly")
 
-        project_root = find_project_root(workdir)
-        tracker = CostTracker(project_root)
-        return tracker.get_summary(period, project_root)
+        tracker = CostTracker()
+        return tracker.get_summary(period)
+
+    @router.get("/costs/aggregate")
+    def get_cost_aggregate(
+        group_by: str = Query(default="model"),
+        period: str = Query(default="daily"),
+        auth: dict = _get_auth(),
+    ):
+        if group_by not in {"project", "run", "agent", "model"}:
+            raise HTTPException(status_code=400, detail="group_by must be one of: project, run, agent, model")
+        if period not in {"daily", "weekly", "monthly"}:
+            raise HTTPException(status_code=400, detail="period must be one of: daily, weekly, monthly")
+
+        tracker = CostTracker()
+        return tracker.get_aggregate(group_by, period)

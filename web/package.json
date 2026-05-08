@@ -9,7 +9,8 @@
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "smoke:playwright": "node scripts/playwright-smoke.mjs"
   },
   "dependencies": {
     "@types/dompurify": "^3.0.5",

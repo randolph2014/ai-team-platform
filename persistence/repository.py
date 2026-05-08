@@ -729,7 +729,7 @@ class WebhookRepo:
             enabled,
         )
 
-    async def get_by_id(self, conn, id: str) -> Optional[Dict[str, Any]]:
+    async def get_by_id(self, conn, id: str, mask_secret: bool = True) -> Optional[Dict[str, Any]]:
         row = await conn.fetchrow(f"SELECT * FROM {self.TABLE} WHERE id = $1", id)
         if row is None:
             return None
@@ -743,9 +743,11 @@ class WebhookRepo:
             except Exception:
                 pass
         result["created_at"] = _dt_to_str(result.get("created_at"))
+        if mask_secret and result.get("secret"):
+            result["secret"] = _mask_webhook_secret(result["secret"])
         return result
 
-    async def list_all(self, conn) -> List[Dict[str, Any]]:
+    async def list_all(self, conn, mask_secret: bool = True) -> List[Dict[str, Any]]:
         rows = await conn.fetch(
             f"SELECT * FROM {self.TABLE} ORDER BY created_at DESC"
         )
@@ -761,6 +763,8 @@ class WebhookRepo:
                 except Exception:
                     pass
             r["created_at"] = _dt_to_str(r.get("created_at"))
+            if mask_secret and r.get("secret"):
+                r["secret"] = _mask_webhook_secret(r["secret"])
             results.append(r)
         return results
 
@@ -786,6 +790,8 @@ class WebhookRepo:
                 except Exception:
                     pass
             r["created_at"] = _dt_to_str(r.get("created_at"))
+            if r.get("secret"):
+                r["secret"] = _mask_webhook_secret(r["secret"])
             results.append(r)
         return results
 
@@ -794,6 +800,91 @@ class WebhookRepo:
             f"UPDATE {self.TABLE} SET enabled = $2 WHERE id = $1", id, enabled
         )
         return result.endswith("1")
+
+    async def rotate_secret(self, conn, id: str, new_secret: str) -> bool:
+        result = await conn.execute(
+            f"UPDATE {self.TABLE} SET secret = $2 WHERE id = $1", id, new_secret
+        )
+        return result.endswith("1")
+
+
+class WebhookDeliveryRepo:
+    TABLE = "webhook_delivery"
+
+    async def create(
+        self,
+        conn,
+        *,
+        webhook_id: str,
+        event_type: str,
+        status: str = "pending",
+        request_url: Optional[str] = None,
+        request_headers: Optional[Dict[str, Any]] = None,
+        request_body: Optional[Dict[str, Any]] = None,
+        response_status: Optional[int] = None,
+        response_body: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> str:
+        rows = await conn.fetch(
+            f"""
+            INSERT INTO {self.TABLE} (webhook_id, event_type, status, request_url, request_headers, request_body,
+                                       response_status, response_body, attempts, last_attempt_at, error_message)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, 1, now(), $9)
+            RETURNING id
+            """,
+            webhook_id,
+            event_type,
+            status,
+            request_url,
+            _jsonb(request_headers or {}),
+            _jsonb(request_body or {}),
+            response_status,
+            response_body,
+            error_message,
+        )
+        return str(rows[0]["id"])
+
+    async def get_by_webhook(self, conn, webhook_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+        rows = await conn.fetch(
+            f"SELECT * FROM {self.TABLE} WHERE webhook_id = $1 ORDER BY created_at DESC LIMIT $2",
+            webhook_id,
+            limit,
+        )
+        results = []
+        for row in rows:
+            r = dict(row)
+            r["id"] = str(r["id"])
+            r["webhook_id"] = str(r["webhook_id"])
+            r["created_at"] = _dt_to_str(r.get("created_at"))
+            r["last_attempt_at"] = _dt_to_str(r.get("last_attempt_at"))
+            r["next_retry_at"] = _dt_to_str(r.get("next_retry_at"))
+            results.append(r)
+        return results
+
+    async def mark_status(self, conn, id: str, status: str, response_status: Optional[int] = None, error_message: Optional[str] = None) -> bool:
+        parts = ["status = $2", "attempts = attempts + 1", "last_attempt_at = now()"]
+        params: list = [id, status]
+        idx = 3
+        if response_status is not None:
+            parts.append(f"response_status = ${idx}")
+            params.append(response_status)
+            idx += 1
+        if error_message is not None:
+            parts.append(f"error_message = ${idx}")
+            params.append(error_message)
+            idx += 1
+        result = await conn.execute(
+            f"UPDATE {self.TABLE} SET {', '.join(parts)} WHERE id = $1",
+            *params,
+        )
+        return result.endswith("1")
+
+    async def list_pending_retries(self, conn, *, limit: int = 100) -> List[Dict[str, Any]]:
+        rows = await conn.fetch(
+            f"SELECT * FROM {self.TABLE} WHERE status IN ('failed', 'pending') AND next_retry_at <= now() ORDER BY created_at ASC LIMIT $1",
+            limit,
+        )
+        return [dict(row) for row in rows]
 
 
 class EvalSuiteRepo:
@@ -902,6 +993,12 @@ def _dt_to_str(value: Any) -> Optional[str]:
     if isinstance(value, datetime):
         return value.isoformat()
     return str(value)
+
+
+def _mask_webhook_secret(secret: str) -> str:
+    if not secret or len(secret) <= 8:
+        return "********"
+    return secret[:4] + "****" + secret[-4:]
 
 
 def run_row_to_summary(row: Dict[str, Any]) -> Dict[str, Any]:

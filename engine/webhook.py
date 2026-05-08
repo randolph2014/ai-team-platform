@@ -15,6 +15,12 @@ def verify_signature(payload: bytes, signature: str, secret: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+def mask_secret(secret: str) -> str:
+    if len(secret) <= 8:
+        return "********"
+    return secret[:4] + "****" + secret[-4:]
+
+
 def _matches_events(event_type: str, registered_events: List[str]) -> bool:
     return not registered_events or event_type in registered_events
 
