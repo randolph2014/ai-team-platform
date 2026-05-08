@@ -89,7 +89,7 @@ function AppLayout() {
         </nav>
         <footer>
           <button className="logoutButton" onClick={handleLogout}>
-            <LogOut size={16} /> 退出登录
+            <LogOut size={16} /> <span>退出登录</span>
           </button>
         </footer>
       </aside>
