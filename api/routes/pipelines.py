@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import uuid as _uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -235,14 +236,6 @@ class PipelineUpdate(BaseModel):
     yaml_config: Optional[Dict[str, Any]] = None
 
 
-def _get_db():
-    try:
-        from persistence.db import get_db
-        return get_db()
-    except Exception:
-        return None
-
-
 def _load_pipelines_from_files() -> List[Dict[str, Any]]:
     pipelines = []
     if not PIPELINES_DIR.exists():
@@ -257,24 +250,52 @@ def _load_pipelines_from_files() -> List[Dict[str, Any]]:
     return pipelines
 
 
+def _pipeline_db_id(api_id: str) -> str:
+    return str(_uuid.uuid5(_uuid.NAMESPACE_OID, f"ai-team:pipeline:{api_id}"))
+
+
 def _load_pipelines() -> List[Dict[str, Any]]:
-    db = _get_db()
-    if db is not None:
-        try:
-            cursor = db.execute("SELECT id, name, description, yaml_config FROM pipelines ORDER BY name")
-            rows = cursor.fetchall()
-            return [
-                {
-                    "id": r[0],
-                    "name": r[1],
-                    "description": r[2],
-                    "yaml_config": json.loads(r[3]) if isinstance(r[3], str) else (r[3] or {}),
-                }
-                for r in rows
-            ]
-        except Exception:
-            pass
-    return _load_pipelines_from_files()
+    from persistence.connection import is_available
+    if not is_available():
+        return _load_pipelines_from_files()
+    try:
+        from persistence.connection import run_sync
+        return run_sync(_async_list_pipelines())
+    except Exception:
+        logger.exception("Failed to list pipelines from DB")
+        raise
+
+
+async def _async_list_pipelines() -> List[Dict[str, Any]]:
+    from persistence.connection import get_connection, release_connection
+    from persistence.repository import PipelineRepo
+    conn = await get_connection()
+    if conn is None:
+        return _load_pipelines_from_files()
+    try:
+        repo = PipelineRepo()
+        rows = await repo.list_all(conn)
+        results = []
+        for row in rows:
+            cfg = row.get("config")
+            if isinstance(cfg, str):
+                try:
+                    cfg = json.loads(cfg)
+                except Exception:
+                    cfg = {}
+            elif not isinstance(cfg, dict):
+                cfg = {}
+            api_id = cfg.pop("_api_id", row.get("name", str(row["id"])))
+            display_name = cfg.pop("_display_name", row.get("name", api_id))
+            results.append({
+                "id": api_id,
+                "name": display_name,
+                "description": row.get("description", ""),
+                "yaml_config": cfg,
+            })
+        return results
+    finally:
+        await release_connection(conn)
 
 
 def _builtin_by_id(template_id: str) -> Optional[Dict[str, Any]]:
@@ -400,7 +421,7 @@ if router:
         return pipeline
 
     @router.post("/pipelines")
-    def create_pipeline(body: PipelineCreate, auth: dict = _get_auth()):
+    async def create_pipeline(body: PipelineCreate, auth: dict = _get_auth()):
         if _find_pipeline(body.id):
             raise HTTPException(status_code=409, detail="Pipeline with this id already exists")
 
@@ -411,23 +432,37 @@ if router:
             "yaml_config": _hydrate_yaml_config(body.yaml_config),
         }
 
-        db = _get_db()
-        if db is not None:
-            try:
-                db.execute(
-                    "INSERT INTO pipelines (id, name, description, yaml_config) VALUES (?, ?, ?, ?)",
-                    (data["id"], data["name"], data["description"], json.dumps(data["yaml_config"], ensure_ascii=False)),
-                )
-                db.commit()
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=f"DB error: {exc}")
-        else:
+        from persistence.connection import get_connection, release_connection, is_available
+        if not is_available():
             _save_pipeline_to_file(body.id, data)
+            return data
+
+        conn = await get_connection()
+        if conn is None:
+            raise HTTPException(status_code=503, detail="Database not available")
+        try:
+            from persistence.repository import PipelineRepo
+            repo = PipelineRepo()
+            cfg = dict(data["yaml_config"])
+            cfg["_api_id"] = body.id
+            cfg["_display_name"] = data["name"]
+            await repo.upsert(
+                conn,
+                id=_pipeline_db_id(body.id),
+                name=body.id,
+                description=data["description"],
+                project_path="/",
+                config=cfg,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"DB error: {exc}")
+        finally:
+            await release_connection(conn)
 
         return data
 
     @router.put("/pipelines/{pipeline_id}")
-    def update_pipeline(pipeline_id: str, body: PipelineUpdate, auth: dict = _get_auth()):
+    async def update_pipeline(pipeline_id: str, body: PipelineUpdate, auth: dict = _get_auth()):
         existing = _find_pipeline(pipeline_id)
         if not existing:
             raise HTTPException(status_code=404, detail="Pipeline not found")
@@ -437,35 +472,61 @@ if router:
             if value is not None:
                 existing[key] = _hydrate_yaml_config(value) if key == "yaml_config" else value
 
-        db = _get_db()
-        if db is not None:
-            try:
-                db.execute(
-                    "UPDATE pipelines SET name = ?, description = ?, yaml_config = ? WHERE id = ?",
-                    (existing["name"], existing.get("description", ""), json.dumps(existing.get("yaml_config", {}), ensure_ascii=False), pipeline_id),
-                )
-                db.commit()
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=f"DB error: {exc}")
-        else:
+        from persistence.connection import get_connection, release_connection, is_available
+        if not is_available():
             _save_pipeline_to_file(pipeline_id, existing)
+            return existing
+
+        conn = await get_connection()
+        if conn is None:
+            raise HTTPException(status_code=503, detail="Database not available")
+        try:
+            from persistence.repository import PipelineRepo
+            repo = PipelineRepo()
+            cfg = dict(existing.get("yaml_config", {}))
+            cfg["_api_id"] = pipeline_id
+            cfg["_display_name"] = existing["name"]
+            await repo.upsert(
+                conn,
+                id=_pipeline_db_id(pipeline_id),
+                name=pipeline_id,
+                description=existing.get("description", ""),
+                project_path="/",
+                config=cfg,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"DB error: {exc}")
+        finally:
+            await release_connection(conn)
 
         return existing
 
     @router.delete("/pipelines/{pipeline_id}")
-    def delete_pipeline(pipeline_id: str, auth: dict = _get_auth()):
+    async def delete_pipeline(pipeline_id: str, auth: dict = _get_auth()):
         if not _find_pipeline(pipeline_id):
             raise HTTPException(status_code=404, detail="Pipeline not found")
 
-        db = _get_db()
-        if db is not None:
-            try:
-                db.execute("DELETE FROM pipelines WHERE id = ?", (pipeline_id,))
-                db.commit()
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=f"DB error: {exc}")
-        else:
+        from persistence.connection import get_connection, release_connection, is_available
+        if not is_available():
             if not _delete_pipeline_file(pipeline_id):
                 raise HTTPException(status_code=500, detail="Failed to delete pipeline file")
+            return {"status": "deleted", "id": pipeline_id}
+
+        conn = await get_connection()
+        if conn is None:
+            raise HTTPException(status_code=503, detail="Database not available")
+        try:
+            result = await conn.execute(
+                "DELETE FROM pipeline WHERE id = $1",
+                _pipeline_db_id(pipeline_id),
+            )
+            if not result.endswith("1"):
+                raise HTTPException(status_code=404, detail="Pipeline not found in DB")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"DB error: {exc}")
+        finally:
+            await release_connection(conn)
 
         return {"status": "deleted", "id": pipeline_id}

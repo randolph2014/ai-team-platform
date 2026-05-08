@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import uuid as _uuid_mod
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -9,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from .config import find_project_root
 from .events import EventBus
 
+logger = logging.getLogger(__name__)
 
 MODEL_PRICING: Dict[str, Dict[str, float]] = {
     "claude-opus": {"input": 15.0, "output": 75.0},
@@ -65,19 +68,22 @@ def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> flo
     return round(input_cost + output_cost, 8)
 
 
+def _to_db_run_id(run_id: str) -> str:
+    return str(_uuid_mod.uuid5(_uuid_mod.NAMESPACE_OID, f"ai-team:pipeline_run:{run_id}"))
+
+
+def _is_db_available() -> bool:
+    try:
+        from persistence.connection import is_available
+        return is_available()
+    except ImportError:
+        return False
+
+
 class CostTracker:
     def __init__(self, project_root: Optional[Path] = None, bus: Optional[EventBus] = None) -> None:
         self._project_root = project_root or find_project_root(".")
         self._bus = bus
-        self._db = self._try_get_db()
-
-    @staticmethod
-    def _try_get_db():
-        try:
-            from persistence.db import get_db
-            return get_db()
-        except Exception:
-            return None
 
     @property
     def _costs_dir(self) -> Path:
@@ -93,8 +99,12 @@ class CostTracker:
         stage_id: str = "",
     ) -> None:
         cost = estimate_cost(model, prompt_tokens, completion_tokens)
-        if self._db is not None:
-            self._db_write(run_id, agent_name, model, prompt_tokens, completion_tokens, cost, stage_id)
+        if _is_db_available():
+            try:
+                from persistence.connection import run_sync
+                run_sync(self._async_track(run_id, agent_name, model, prompt_tokens, completion_tokens, cost))
+            except Exception:
+                logger.exception("Failed to track cost in DB for run %s", run_id)
         else:
             self._file_write(run_id, agent_name, model, prompt_tokens, completion_tokens, cost, stage_id)
 
@@ -110,7 +120,7 @@ class CostTracker:
                 stage_id=stage_id,
             )
 
-    def _db_write(
+    async def _async_track(
         self,
         run_id: str,
         agent_name: str,
@@ -118,17 +128,21 @@ class CostTracker:
         prompt_tokens: int,
         completion_tokens: int,
         cost: float,
-        stage_id: str,
     ) -> None:
+        from persistence.connection import get_connection, release_connection
+        conn = await get_connection()
+        if conn is None:
+            return
         try:
-            self._db.execute(
-                "INSERT INTO cost_tracking (run_id, agent_name, model, prompt_tokens, completion_tokens, cost, stage_id, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (run_id, agent_name, model, prompt_tokens, completion_tokens, cost, stage_id, datetime.now(timezone.utc).isoformat()),
+            db_run_id = _to_db_run_id(run_id)
+            await conn.execute(
+                "INSERT INTO cost_tracking (run_id, agent_name, model, prompt_tokens, completion_tokens, total_tokens, cost_usd) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                db_run_id, agent_name, model, prompt_tokens, completion_tokens,
+                prompt_tokens + completion_tokens, cost,
             )
-            self._db.commit()
-        except Exception:
-            self._file_write(run_id, agent_name, model, prompt_tokens, completion_tokens, cost, stage_id)
+        finally:
+            await release_connection(conn)
 
     def _file_write(
         self,
@@ -157,28 +171,13 @@ class CostTracker:
 
     def get_run_costs(self, run_id: str) -> dict:
         records: List[dict] = []
-        if self._db is not None:
+        if _is_db_available():
             try:
-                cursor = self._db.execute(
-                    "SELECT agent_name, model, prompt_tokens, completion_tokens, cost, stage_id, timestamp "
-                    "FROM cost_tracking WHERE run_id = ? ORDER BY timestamp",
-                    (run_id,),
-                )
-                rows = cursor.fetchall()
-                records = [
-                    {
-                        "agent_name": r[0],
-                        "model": r[1],
-                        "prompt_tokens": r[2],
-                        "completion_tokens": r[3],
-                        "estimated_cost": r[4],
-                        "stage_id": r[5],
-                        "timestamp": r[6],
-                    }
-                    for r in rows
-                ]
+                from persistence.connection import run_sync
+                records = run_sync(self._async_get_run_costs(run_id))
             except Exception:
-                records = self._file_read_records(run_id)
+                logger.exception("Failed to get run costs from DB for run %s", run_id)
+                records = []
         else:
             records = self._file_read_records(run_id)
 
@@ -195,6 +194,33 @@ class CostTracker:
             "total_tokens": total_prompt + total_completion,
             "total_cost": round(total_cost, 8),
         }
+
+    async def _async_get_run_costs(self, run_id: str) -> List[dict]:
+        from persistence.connection import get_connection, release_connection
+        conn = await get_connection()
+        if conn is None:
+            return []
+        try:
+            db_run_id = _to_db_run_id(run_id)
+            rows = await conn.fetch(
+                "SELECT agent_name, model, prompt_tokens, completion_tokens, cost_usd, created_at "
+                "FROM cost_tracking WHERE run_id = $1 ORDER BY created_at",
+                db_run_id,
+            )
+            return [
+                {
+                    "agent_name": r["agent_name"],
+                    "model": r["model"],
+                    "prompt_tokens": r["prompt_tokens"],
+                    "completion_tokens": r["completion_tokens"],
+                    "estimated_cost": float(r["cost_usd"]) if r["cost_usd"] is not None else 0.0,
+                    "stage_id": "",
+                    "timestamp": r["created_at"].isoformat() if r["created_at"] else "",
+                }
+                for r in rows
+            ]
+        finally:
+            await release_connection(conn)
 
     def _file_read_records(self, run_id: str) -> List[dict]:
         filepath = self._costs_dir / f"{run_id}.jsonl"
@@ -215,33 +241,13 @@ class CostTracker:
         root = project_root or self._project_root
         records: List[dict] = []
 
-        if self._db is not None:
+        if _is_db_available():
             try:
-                date_filter = {
-                    "daily": "date(timestamp) = date('now')",
-                    "weekly": "date(timestamp) >= date('now', 'weekday 0', '-7 days')",
-                    "monthly": "strftime('%Y-%m', timestamp) = strftime('%Y-%m', 'now')",
-                }.get(period, "date(timestamp) = date('now')")
-                cursor = self._db.execute(
-                    f"SELECT run_id, agent_name, model, prompt_tokens, completion_tokens, cost, stage_id, timestamp "
-                    f"FROM cost_tracking WHERE {date_filter} ORDER BY timestamp"
-                )
-                rows = cursor.fetchall()
-                records = [
-                    {
-                        "run_id": r[0],
-                        "agent_name": r[1],
-                        "model": r[2],
-                        "prompt_tokens": r[3],
-                        "completion_tokens": r[4],
-                        "estimated_cost": r[5],
-                        "stage_id": r[6],
-                        "timestamp": r[7],
-                    }
-                    for r in rows
-                ]
+                from persistence.connection import run_sync
+                records = run_sync(self._async_get_summary(period))
             except Exception:
-                records = self._file_summary(root, period)
+                logger.exception("Failed to get cost summary from DB")
+                records = []
         else:
             records = self._file_summary(root, period)
 
@@ -279,6 +285,37 @@ class CostTracker:
                 for m, d in by_model.items()
             },
         }
+
+    async def _async_get_summary(self, period: str) -> List[dict]:
+        from persistence.connection import get_connection, release_connection
+        conn = await get_connection()
+        if conn is None:
+            return []
+        try:
+            date_filter = {
+                "daily": "created_at::date = CURRENT_DATE",
+                "weekly": "created_at >= NOW() - INTERVAL '7 days'",
+                "monthly": "date_trunc('month', created_at) = date_trunc('month', NOW())",
+            }.get(period, "created_at::date = CURRENT_DATE")
+            rows = await conn.fetch(
+                f"SELECT run_id, agent_name, model, prompt_tokens, completion_tokens, cost_usd, created_at "
+                f"FROM cost_tracking WHERE {date_filter} ORDER BY created_at"
+            )
+            return [
+                {
+                    "run_id": str(r["run_id"]),
+                    "agent_name": r["agent_name"],
+                    "model": r["model"],
+                    "prompt_tokens": r["prompt_tokens"],
+                    "completion_tokens": r["completion_tokens"],
+                    "estimated_cost": float(r["cost_usd"]) if r["cost_usd"] is not None else 0.0,
+                    "stage_id": "",
+                    "timestamp": r["created_at"].isoformat() if r["created_at"] else "",
+                }
+                for r in rows
+            ]
+        finally:
+            await release_connection(conn)
 
     def _file_summary(self, root: Path, period: str) -> List[dict]:
         costs_dir = root / ".ai" / "costs"

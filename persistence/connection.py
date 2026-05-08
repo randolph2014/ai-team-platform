@@ -47,3 +47,15 @@ async def close_pool() -> None:
 def is_available() -> bool:
     """同步检查：数据库连接是否已配置"""
     return _get_database_url() is not None
+
+
+def run_sync(coro):
+    import asyncio
+    import concurrent.futures
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(lambda: asyncio.run(coro)).result(timeout=30)
