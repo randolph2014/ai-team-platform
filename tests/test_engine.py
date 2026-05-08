@@ -99,6 +99,42 @@ worktree:
             self.assertIn("tech-lead-output.md", report.artifacts)
             self.assertTrue((Path(report.output_dir) / "report.json").exists())
 
+    def test_orchestrator_does_not_complete_when_pr_delivery_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", str(root)], capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=root, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=root, capture_output=True, check=True)
+            (root / "README.md").write_text("init\n", encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=root, capture_output=True, check=True)
+            subprocess.run(["git", "branch", "-m", "main"], cwd=root, capture_output=True, check=False)
+
+            (root / "test-config.yaml").write_text(
+                """
+runtimes: {}
+agents: []
+pipeline:
+  - id: develop
+    name: Develop
+    agents: []
+worktree:
+  enabled: true
+  base_branch: main
+  auto_cleanup: false
+ci_cd:
+  create_pr: true
+""",
+                encoding="utf-8",
+            )
+
+            with patch.object(Orchestrator, "_deliver_pr", return_value={"status": "failed", "error": "pr create failed"}):
+                report = Orchestrator(root, config_path=str(root / "test-config.yaml")).run("ship it", yes=True)
+
+            self.assertEqual(report.status, "failed")
+            self.assertEqual(report.error_message, "pr create failed")
+            self.assertEqual(report.pr_info["status"], "failed")
+
     def test_loopback_feedback_injects_output_content(self) -> None:
         """loopback 反馈包含结构化的 per-agent 信息"""
         with tempfile.TemporaryDirectory() as tmp:

@@ -22,6 +22,8 @@ class TestPRDescriptionBuilder(unittest.TestCase):
         self.assertIn("fix bug", body)
         self.assertIn("r1", body)
         self.assertIn("需求", body)
+        self.assertIn("测试结果", body)
+        self.assertIn("未记录质量门禁结果", body)
         self.assertIn("回滚步骤", body)
         self.assertIn("风险评估", body)
 
@@ -120,9 +122,30 @@ class TestGitHubPRProviderCheckCI(unittest.TestCase):
             result = provider.check_ci(1)
             self.assertEqual(result["status"], "passed")
 
+    def test_all_passed_with_github_uppercase_status(self) -> None:
+        provider = GitHubPRProvider()
+        checks_json = '[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]'
+        mock_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=f'{{"statusCheckRollup":{checks_json}}}', stderr=""
+        )
+        with patch.object(provider, "_run_gh", return_value=mock_result):
+            result = provider.check_ci(1)
+            self.assertEqual(result["status"], "passed")
+
     def test_failed_check(self) -> None:
         provider = GitHubPRProvider()
         checks_json = '[{"name":"ci","status":"completed","conclusion":"failure"}]'
+        mock_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=f'{{"statusCheckRollup":{checks_json}}}', stderr=""
+        )
+        with patch.object(provider, "_run_gh", return_value=mock_result):
+            result = provider.check_ci(1)
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("ci", result["failed"])
+
+    def test_failed_check_with_github_uppercase_status(self) -> None:
+        provider = GitHubPRProvider()
+        checks_json = '[{"name":"ci","status":"COMPLETED","conclusion":"STARTUP_FAILURE"}]'
         mock_result = subprocess.CompletedProcess(
             args=[], returncode=0, stdout=f'{{"statusCheckRollup":{checks_json}}}', stderr=""
         )
@@ -343,6 +366,31 @@ class TestOrchestratorDeliverPR(unittest.TestCase):
             mock_wt_mgr.push_branch.assert_called_once()
             mock_pm_instance.create_pr.assert_called_once()
 
+    def test_deliver_pr_stops_when_commit_fails(self) -> None:
+        from engine.orchestrator import Orchestrator
+
+        mock_wt_mgr = MagicMock()
+        mock_wt_mgr.has_changes.return_value = True
+        mock_wt_mgr.commit_all.return_value = False
+
+        mock_report = MagicMock()
+        mock_report.run_id = "r-commit-fail"
+        mock_report.requirement = "req"
+        mock_report.changed_files = ["a.py"]
+        mock_report.diff_stat = "1 file"
+        mock_report.duration_seconds = 1.0
+        mock_report.stages = []
+
+        orch = MagicMock(spec=Orchestrator)
+        orch.config = {"ci_cd": {"create_pr": True}}
+        orch.bus = MagicMock()
+        orch._deliver_pr = Orchestrator._deliver_pr.__get__(orch, Orchestrator)
+
+        result = orch._deliver_pr(mock_wt_mgr, Path("/tmp/wt"), mock_report, Path("/tmp/out"))
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("git commit failed", result["error"])
+        mock_wt_mgr.push_branch.assert_not_called()
+
     def test_deliver_pr_blocked_on_ci_failure(self) -> None:
         from engine.orchestrator import Orchestrator
 
@@ -377,6 +425,35 @@ class TestOrchestratorDeliverPR(unittest.TestCase):
                 result = orch._deliver_pr(mock_wt_mgr, Path("/tmp/wt"), mock_report, Path("/tmp/out"))
                 self.assertEqual(result["status"], "blocked")
                 mock_pm.wait_ci.assert_called_once()
+
+    def test_deliver_pr_blocked_on_unknown_ci(self) -> None:
+        from engine.orchestrator import Orchestrator
+
+        config = {"ci_cd": {"create_pr": True, "wait_for_checks": True}}
+        mock_wt_mgr = MagicMock()
+        mock_wt_mgr.has_changes.return_value = False
+
+        mock_report = MagicMock()
+        mock_report.run_id = "r-ci-unknown"
+        mock_report.requirement = "req"
+        mock_report.changed_files = []
+        mock_report.diff_stat = ""
+        mock_report.duration_seconds = 1.0
+        mock_report.stages = []
+
+        with patch("engine.pr_manager.PRManager") as MockPRManager:
+            mock_pm = MockPRManager.return_value
+            mock_pm.create_pr.return_value = {"status": "created", "number": 6}
+            mock_pm.wait_ci.return_value = {"status": "unknown", "checks": []}
+
+            orch = MagicMock(spec=Orchestrator)
+            orch.config = config
+            orch.bus = MagicMock()
+            orch._deliver_pr = Orchestrator._deliver_pr.__get__(orch, Orchestrator)
+
+            result = orch._deliver_pr(mock_wt_mgr, Path("/tmp/wt"), mock_report, Path("/tmp/out"))
+            self.assertEqual(result["status"], "blocked")
+            mock_pm.wait_ci.assert_called_once()
 
     def test_deliver_pr_push_failure(self) -> None:
         from engine.orchestrator import Orchestrator

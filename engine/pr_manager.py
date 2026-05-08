@@ -60,9 +60,11 @@ class PRDescriptionBuilder:
             lines.extend(["", "### 变更统计", "", "```", diff_stat.strip(), "```"])
 
         test_results = PRDescriptionBuilder._extract_test_results(stages)
+        lines.extend(["", "### 测试结果", ""])
         if test_results:
-            lines.extend(["", "### 测试结果", ""])
             lines.extend(test_results)
+        else:
+            lines.append("- 未记录质量门禁结果")
 
         risks = PRDescriptionBuilder._extract_risks(stages)
         lines.extend(["", "### 风险评估", ""])
@@ -181,11 +183,15 @@ class GitHubPRProvider:
         if not checks:
             return {"status": "no_checks", "checks": []}
 
-        all_completed = all(c.get("status") == "completed" for c in checks)
+        all_completed = all(str(c.get("status", "")).lower() == "completed" for c in checks)
         if not all_completed:
             return {"status": "pending", "checks": checks}
 
-        failed_checks = [c for c in checks if c.get("conclusion") in ("failure", "timed_out", "cancelled")]
+        failed_checks = [
+            c for c in checks
+            if str(c.get("conclusion", "")).lower()
+            in ("failure", "timed_out", "cancelled", "action_required", "startup_failure")
+        ]
         if failed_checks:
             return {"status": "failed", "checks": checks, "failed": [c.get("name") for c in failed_checks]}
 

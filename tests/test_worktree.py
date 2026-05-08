@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from engine.worktree import WorktreeError, WorktreeManager
 
@@ -201,6 +202,21 @@ class TestWorktreeCommit(unittest.TestCase):
                 self.assertTrue(result)
             finally:
                 mgr.cleanup(wt_path)
+
+
+class TestWorktreePush(unittest.TestCase):
+    def test_push_branch_sets_upstream(self) -> None:
+        mgr = WorktreeManager(Path("/tmp/project"))
+        with patch.object(mgr, "_run_git") as mock_run_git:
+            mock_run_git.side_effect = [
+                subprocess.CompletedProcess(args=[], returncode=0, stdout="ai-team/run-010\n", stderr=""),
+                subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+            ]
+
+            result = mgr.push_branch(Path("/tmp/project/.ai/worktrees/run-010"))
+
+        self.assertEqual(result["status"], "pushed")
+        self.assertEqual(mock_run_git.call_args_list[1].args[0], ["push", "--set-upstream", "origin", "ai-team/run-010"])
 
 
 class TestWorktreeOrphans(unittest.TestCase):

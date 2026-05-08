@@ -173,9 +173,9 @@ class WorktreeManager:
         if not branch_name:
             raise WorktreeError("Cannot determine current branch in worktree")
 
-        args = ["push", remote, branch_name]
+        args = ["push", "--set-upstream", remote, branch_name]
         if force:
-            args.append("--force")
+            args.insert(1, "--force")
         result = self._run_git(args, cwd=worktree_path, check=False)
         if result.returncode != 0:
             stderr = result.stderr.strip() or result.stdout.strip()

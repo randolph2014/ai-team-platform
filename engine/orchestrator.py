@@ -303,8 +303,11 @@ class Orchestrator:
                         report.pr_info = delivery_result
                         if delivery_result.get("status") == "blocked":
                             report.status = "blocked"
-                        else:
+                        elif delivery_result.get("status") in {"created", "existing"}:
                             report.status = "completed"
+                        else:
+                            report.status = "failed"
+                            report.error_message = delivery_result.get("error") or "PR delivery failed"
                     elif merge or self.config.get("worktree", {}).get("merge_on_success"):
                         report.merge_result = worktree_manager.merge(worktree_path)
                         report.status = "completed"
@@ -1583,7 +1586,9 @@ class Orchestrator:
         logger = get_logger("orchestrator", run_id=report.run_id)
 
         if worktree_manager.has_changes(worktree_path):
-            worktree_manager.commit_all(worktree_path, f"ai-team: {report.run_id}")
+            committed = worktree_manager.commit_all(worktree_path, f"ai-team: {report.run_id}")
+            if not committed:
+                return {"status": "failed", "error": "git commit failed"}
 
         try:
             worktree_manager.push_branch(worktree_path)
@@ -1611,9 +1616,9 @@ class Orchestrator:
             interval = int(ci_cd_config.get("check_interval", 30))
             ci_result = pr_manager.wait_ci(pr_number, timeout, interval)
             pr_result["ci_status"] = ci_result
-            if ci_result.get("status") == "failed":
+            if ci_result.get("status") in {"failed", "unknown"}:
                 pr_result["status"] = "blocked"
-                logger.warning("CI checks failed for PR #%d", pr_number)
+                logger.warning("CI checks did not pass for PR #%d", pr_number)
                 self.bus.emit("ci_cd:checks_failed", report.run_id, pr_number=pr_number, checks=ci_result.get("failed", []))
             elif ci_result.get("status") == "timeout":
                 pr_result["status"] = "blocked"
