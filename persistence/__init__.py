@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .connection import close_pool, get_connection
-from .migration import run_migrations
+from .migration import get_schema_version, run_migrations
 from .models import (
     AgentRunRecord,
     PipelineRecord,
@@ -44,6 +44,7 @@ __all__ = [
     "EvalResultRepo",
     # Connection & migration
     "run_migrations",
+    "get_schema_version",
     "get_connection",
     "close_pool",
     # Report persistence

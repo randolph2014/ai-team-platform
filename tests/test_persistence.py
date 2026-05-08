@@ -26,7 +26,13 @@ _mock_asyncpg.Pool = MagicMock
 _mock_asyncpg.create_pool = AsyncMock()
 sys.modules.setdefault("asyncpg", _mock_asyncpg)
 
-from persistence.migration import _ensure_tracking_table, _execute_pending, _load_executed_names
+from persistence.migration import (
+    _ensure_tracking_table,
+    _execute_pending,
+    _load_executed_names,
+    _update_schema_version,
+    get_schema_version,
+)
 from persistence.repository import (
     AgentRunRepo,
     PipelineRepo,
@@ -537,7 +543,7 @@ class TestMigration:
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(_ensure_tracking_table(mock_conn))
-            assert mock_conn.execute.called
+            assert mock_conn.execute.call_count == 2
         finally:
             loop.close()
 
@@ -568,15 +574,12 @@ class TestMigration:
 
     def test_execute_pending_with_no_pending_migrations(self, mock_conn: MagicMock) -> None:
         """无待执行迁移时跳过"""
-        from persistence.migration import MIGRATIONS_DIR
-
         mock_conn.fetch = AsyncMock(return_value=[])
         with patch.object(pytest.importorskip("persistence.migration"), "MIGRATIONS_DIR") as mock_dir:
             mock_dir.glob.return_value = []
             loop = asyncio.new_event_loop()
             try:
                 loop.run_until_complete(_execute_pending(mock_conn))
-                # 不应再执行 execute（除了 _ensure_tracking_table 和 _load_executed_names 的 fetch）
             finally:
                 loop.close()
 
@@ -597,6 +600,238 @@ class TestMigration:
         assert "information_schema.columns" in sql
         assert "column_name = 'provider'" in sql
         assert "EXECUTE" in sql
+
+    def test_migration_files_have_unique_prefixes(self) -> None:
+        """migration 文件编号不冲突"""
+        migrations_dir = Path(__file__).resolve().parents[1] / "persistence" / "migrations"
+        prefixes = []
+        for f in sorted(migrations_dir.glob("*.up.sql")):
+            prefix = f.name.split("_")[0]
+            prefixes.append(prefix)
+        assert len(prefixes) == len(set(prefixes)), (
+            f"Duplicate migration prefixes found: {prefixes}"
+        )
+
+    def test_008_stage_runtime_contract_exists(self) -> None:
+        """007_stage_runtime_contract 已重命名为 008"""
+        migrations_dir = Path(__file__).resolve().parents[1] / "persistence" / "migrations"
+        assert (migrations_dir / "008_stage_runtime_contract.up.sql").exists()
+        assert (migrations_dir / "008_stage_runtime_contract.down.sql").exists()
+        assert not (migrations_dir / "007_stage_runtime_contract.up.sql").exists()
+        assert not (migrations_dir / "007_stage_runtime_contract.down.sql").exists()
+
+    def test_execute_pending_empty_db_runs_all_migrations(self, mock_conn: MagicMock) -> None:
+        """空库场景：所有 migration 文件全部执行"""
+        executed_names = []
+        inserted_names = []
+
+        async def mock_execute(sql, *args):
+            if "INSERT INTO migrations" in sql and args:
+                inserted_names.append(args[0])
+
+        async def mock_fetch(sql, *args):
+            if "_migration_history" in sql or "migrations" in sql:
+                return []
+            return []
+
+        mock_conn.execute = AsyncMock(side_effect=mock_execute)
+        mock_conn.fetch = AsyncMock(side_effect=mock_fetch)
+
+        class _FakeTx:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return False
+
+        mock_conn.transaction = MagicMock(return_value=_FakeTx())
+
+        migrations_dir = Path(__file__).resolve().parents[1] / "persistence" / "migrations"
+        real_files = sorted(migrations_dir.glob("*.up.sql"), key=lambda f: f.name)
+
+        with patch.object(
+            pytest.importorskip("persistence.migration"), "MIGRATIONS_DIR", migrations_dir
+        ):
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(_execute_pending(mock_conn))
+            finally:
+                loop.close()
+
+        assert len(inserted_names) == len(real_files)
+        assert inserted_names == [f.name for f in real_files]
+
+    def test_execute_pending_skips_already_executed(self, mock_conn: MagicMock) -> None:
+        """重复启动：已执行的 migration 不再执行"""
+        migrations_dir = Path(__file__).resolve().parents[1] / "persistence" / "migrations"
+        all_files = sorted(migrations_dir.glob("*.up.sql"), key=lambda f: f.name)
+        all_names = [f.name for f in all_files]
+
+        async def mock_fetch(sql, *args):
+            return [{"name": n} for n in all_names]
+
+        mock_conn.execute = AsyncMock(return_value=None)
+        mock_conn.fetch = AsyncMock(side_effect=mock_fetch)
+
+        class _FakeTx:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return False
+
+        mock_conn.transaction = MagicMock(return_value=_FakeTx())
+
+        with patch.object(
+            pytest.importorskip("persistence.migration"), "MIGRATIONS_DIR", migrations_dir
+        ):
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(_execute_pending(mock_conn))
+            finally:
+                loop.close()
+
+        insert_calls = [
+            c for c in mock_conn.execute.call_args_list
+            if c.args and "INSERT INTO migrations" in c.args[0]
+        ]
+        assert len(insert_calls) == 0
+
+    def test_execute_pending_uses_transaction(self, mock_conn: MagicMock) -> None:
+        """每个 migration 在事务中执行"""
+        tx_contexts = []
+
+        class _FakeTx:
+            def __init__(self):
+                self.entered = False
+                self.exited = False
+            async def __aenter__(self):
+                self.entered = True
+                return self
+            async def __aexit__(self, *args):
+                self.exited = True
+                return False
+
+        def make_tx():
+            tx = _FakeTx()
+            tx_contexts.append(tx)
+            return tx
+
+        mock_conn.transaction = MagicMock(side_effect=make_tx)
+        mock_conn.execute = AsyncMock(return_value=None)
+        mock_conn.fetch = AsyncMock(return_value=[])
+
+        test_dir = Path(__file__).resolve().parents[1] / "persistence" / "migrations"
+
+        with patch.object(
+            pytest.importorskip("persistence.migration"), "MIGRATIONS_DIR", test_dir
+        ):
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(_execute_pending(mock_conn))
+            finally:
+                loop.close()
+
+        all_files = sorted(test_dir.glob("*.up.sql"), key=lambda f: f.name)
+        assert len(tx_contexts) == len(all_files)
+        for tx in tx_contexts:
+            assert tx.entered
+            assert tx.exited
+
+    def test_migration_failure_propagates(self, mock_conn: MagicMock) -> None:
+        """migration 失败时异常必须传播，不被吞掉"""
+        mock_conn.execute = AsyncMock(side_effect=RuntimeError("SQL syntax error"))
+        mock_conn.fetch = AsyncMock(return_value=[])
+
+        class _FakeTx:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return False
+
+        mock_conn.transaction = MagicMock(return_value=_FakeTx())
+
+        test_dir = Path(__file__).resolve().parents[1] / "persistence" / "migrations"
+
+        with patch.object(
+            pytest.importorskip("persistence.migration"), "MIGRATIONS_DIR", test_dir
+        ):
+            loop = asyncio.new_event_loop()
+            try:
+                with pytest.raises(RuntimeError, match="SQL syntax error"):
+                    loop.run_until_complete(_execute_pending(mock_conn))
+            finally:
+                loop.close()
+
+    def test_run_migrations_propagates_exception(self) -> None:
+        """run_migrations 不吞异常，调用方负责处理"""
+        from persistence.migration import run_migrations
+
+        mock_conn = MagicMock()
+        mock_conn.execute = AsyncMock(side_effect=ConnectionError("db down"))
+        mock_conn.fetch = AsyncMock(return_value=[])
+
+        class _FakeTx:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return False
+
+        mock_conn.transaction = MagicMock(return_value=_FakeTx())
+        mock_conn.close = AsyncMock()
+
+        with (
+            patch("persistence.connection.get_connection", AsyncMock(return_value=mock_conn)),
+            patch("persistence.connection.release_connection", AsyncMock()),
+            patch.object(
+                pytest.importorskip("persistence.migration"), "MIGRATIONS_DIR",
+                Path(__file__).resolve().parents[1] / "persistence" / "migrations",
+            ),
+        ):
+            loop = asyncio.new_event_loop()
+            try:
+                with pytest.raises(ConnectionError, match="db down"):
+                    loop.run_until_complete(run_migrations())
+            finally:
+                loop.close()
+
+    def test_update_schema_version_sets_max(self, mock_conn: MagicMock) -> None:
+        """_update_schema_version 计算并写入最大版本号"""
+        mock_conn.fetch = AsyncMock(return_value=[
+            {"name": "001_init.up.sql"},
+            {"name": "005_eval.up.sql"},
+            {"name": "008_stage_runtime_contract.up.sql"},
+        ])
+        mock_conn.execute = AsyncMock(return_value=None)
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_update_schema_version(mock_conn))
+        finally:
+            loop.close()
+
+        call_args = mock_conn.execute.call_args
+        assert call_args.args[1] == 8
+
+    def test_get_schema_version_returns_version(self, mock_conn: MagicMock) -> None:
+        """get_schema_version 返回当前版本号"""
+        mock_conn.fetchrow = AsyncMock(return_value={"version": 7})
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(get_schema_version(mock_conn))
+            assert result == 7
+        finally:
+            loop.close()
+
+    def test_get_schema_version_returns_zero_when_empty(self, mock_conn: MagicMock) -> None:
+        """无版本记录时返回 0"""
+        mock_conn.fetchrow = AsyncMock(return_value=None)
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(get_schema_version(mock_conn))
+            assert result == 0
+        finally:
+            loop.close()
 
 
 # ══════════════════════════════════════════════════════════════════════
