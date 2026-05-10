@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set
 
+from .harness import render_harness_summary_markdown, summarize_harness
+
 
 WELL_KNOWN_FILES = {
     "Package.swift": "swift-spm",
@@ -358,6 +360,10 @@ class ContextScanner:
         if checklist_files:
             sections.extend(["", "## Implementation Checklist Files", *[f"- `{item}`" for item in checklist_files]])
 
+        harness_markdown = render_harness_summary_markdown(summarize_harness(self.project_root))
+        if harness_markdown:
+            sections.extend(["", harness_markdown.rstrip()])
+
         for title, file_map in (
             ("Project Instructions", self.instruction_files()),
             ("Dependencies", self.dependency_files()),
@@ -424,5 +430,6 @@ def scan_to_json(project_root: Path, config: Optional[Dict] = None) -> str:
         "project_root": str(project_root),
         "project_types": detect_project_types(project_root),
         "tree": scanner.generate_tree(),
+        "harness": summarize_harness(project_root),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)

@@ -75,6 +75,7 @@ def create_app():
     from .routes.config import router as config_router
     from .routes.costs import router as costs_router
     from .routes.eval import router as eval_router
+    from .routes.harness import router as harness_router
     from .routes.pipelines import router as pipelines_router
     from .routes.projects import router as projects_router
     from .routes.runs import router as runs_router
@@ -129,6 +130,7 @@ def create_app():
     app.include_router(config_router, prefix="/api")
     app.include_router(costs_router, prefix="/api")
     app.include_router(eval_router, prefix="/api")
+    app.include_router(harness_router, prefix="/api")
     app.include_router(pipelines_router, prefix="/api")
     app.include_router(projects_router, prefix="/api")
     app.include_router(settings_router, prefix="/api")

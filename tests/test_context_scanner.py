@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -86,6 +87,71 @@ class TestMaxFileSizeTruncation(unittest.TestCase):
         draft = "## Implementation Checklist\n\n- `src/app.ts`\n- `README.md`\n"
         files = parse_implementation_checklist(draft)
         self.assertEqual(files, ["src/app.ts", "README.md"])
+
+
+class TestContextScannerHarnessSummary(unittest.TestCase):
+    def test_harness_summary_injected_but_ai_tree_stays_excluded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai" / "harness" / "rules").mkdir(parents=True)
+            (root / ".ai" / "harness.yaml").write_text(
+                "schema_version: '1.0'\n"
+                "rules:\n"
+                "  - id: security\n"
+                "    file: .ai/harness/rules/security.md\n",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "harness" / "rules" / "security.md").write_text("rule", encoding="utf-8")
+            (root / "src").mkdir()
+            (root / "src" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+
+            text = ContextScanner(root).scan("")
+
+        self.assertIn("## Harness Summary", text)
+        self.assertIn("Rules: 1", text)
+        tree_section = text.split("## Project Tree", 1)[1].split("```", 2)[1]
+        self.assertNotIn(".ai", tree_section)
+
+    def test_scan_to_json_includes_harness_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai" / "harness" / "skills").mkdir(parents=True)
+            (root / ".ai" / "harness.yaml").write_text(
+                "schema_version: '1.0'\n"
+                "skills:\n"
+                "  - id: safe-refactor\n"
+                "    file: .ai/harness/skills/safe-refactor.md\n"
+                "    allowed_agents: [developer]\n"
+                "    forbidden_capabilities: [bypass_human_gate]\n",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "harness" / "skills" / "safe-refactor.md").write_text("safe", encoding="utf-8")
+
+            data = json.loads(scan_to_json(root))
+
+        self.assertIn("harness", data)
+        self.assertEqual(data["harness"]["skills_count"], 1)
+        self.assertTrue(data["harness"]["manifest_hash"].startswith("sha256:"))
+
+    def test_harness_summary_labels_skills_as_project_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai" / "harness" / "skills").mkdir(parents=True)
+            (root / ".ai" / "harness.yaml").write_text(
+                "schema_version: '1.0'\n"
+                "skills:\n"
+                "  - id: safe-refactor\n"
+                "    file: .ai/harness/skills/safe-refactor.md\n"
+                "    allowed_agents: [developer]\n"
+                "    forbidden_capabilities: [bypass_human_gate]\n",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "harness" / "skills" / "safe-refactor.md").write_text("safe", encoding="utf-8")
+
+            text = ContextScanner(root).scan("")
+
+        self.assertIn("project context", text)
+        self.assertIn("must not override system/developer/platform safety policy", text)
 
 
 if __name__ == "__main__":
