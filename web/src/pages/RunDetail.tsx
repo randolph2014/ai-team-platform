@@ -1,10 +1,12 @@
-import { Archive, CheckCircle, Clock, Eye, FileDiff, FileText, FolderGit2, GitBranchPlus, RefreshCw, Wifi, WifiOff, X, XCircle } from 'lucide-react';
+import { Archive, Clock, Eye, FileDiff, FileText, FolderGit2, GitBranchPlus, RefreshCw, Wifi, WifiOff, X, XCircle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { ArtifactViewer } from '../components/ArtifactViewer';
+import { HarnessReportPanel } from '../components/HarnessReportPanel';
 import { PipelineTimeline } from '../components/PipelineTimeline';
 import { StatusBadge } from '../components/StatusBadge';
-import { apiFetch, fetchRun, fetchRunDiff, rememberedWorkdir, rememberRunWorkdir, runQuery, runWebSocketUrl } from '../lib/api';
-import type { RunEvent, RunReport } from '../lib/types';
+import { apiFetch, fetchRun, fetchRunArtifactText, fetchRunDiff, projectQuery, rememberedWorkdir, rememberRunWorkdir, runWebSocketUrl } from '../lib/api';
+import { parseHarnessReport } from '../lib/harnessSchema';
+import type { HarnessReport, RunEvent, RunReport } from '../lib/types';
 
 function artifactColor(name: string): string {
   if (/\.(md|markdown)$/i.test(name)) return 'var(--blue)';
@@ -25,6 +27,8 @@ function fileIcon(file: string): string {
 
 export function RunDetail({ runId }: { runId: string }) {
   const [run, setRun] = useState<RunReport | null>(null);
+  const [projectId, setProjectId] = useState('');
+  const [harnessReport, setHarnessReport] = useState<HarnessReport | null>(null);
   const [liveLines, setLiveLines] = useState<string[]>([]);
   const [workdir, setWorkdir] = useState('');
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -40,16 +44,19 @@ export function RunDetail({ runId }: { runId: string }) {
 
   useEffect(() => {
     const queryWorkdir = new URLSearchParams(window.location.search).get('workdir') || '';
-    const resolvedWorkdir = queryWorkdir || rememberedWorkdir(runId);
+    const queryProjectId = new URLSearchParams(window.location.search).get('project_id') || '';
+    setProjectId(queryProjectId);
+    const resolvedWorkdir = queryProjectId ? '' : (queryWorkdir || rememberedWorkdir(runId));
     setWorkdir(resolvedWorkdir);
     let ignore = false;
     setLoadError(null);
     setLoading(true);
     setRun(null);
-    fetchRun(runId, resolvedWorkdir)
+    fetchRun(runId, queryProjectId ? { projectId: queryProjectId } : resolvedWorkdir)
       .then((payload) => {
         if (ignore) return;
         setRun(payload);
+        setWorkdir(payload.project_root || resolvedWorkdir);
         rememberRunWorkdir(runId, payload.project_root);
         if (payload.changed_files?.length) setChangedFiles(payload.changed_files);
         if (payload.diff_stat) setDiffStat(payload.diff_stat);
@@ -97,7 +104,7 @@ export function RunDetail({ runId }: { runId: string }) {
           setLiveLines((lines) => [...lines.slice(-120), event.payload.text as string]);
         }
         if (event.type === 'run:completed') {
-          fetchRun(runId, workdir).then((updated) => {
+          fetchRun(runId, projectId ? { projectId } : workdir).then((updated) => {
             if (!disposed) {
               setRun(updated);
               if (updated.changed_files?.length) setChangedFiles(updated.changed_files);
@@ -118,7 +125,7 @@ export function RunDetail({ runId }: { runId: string }) {
       disposed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
     };
-  }, [run ? run.run_id : '', workdir]);
+  }, [run ? run.run_id : '', workdir, projectId]);
 
   useEffect(() => {
     if (terminalRef.current) {
@@ -126,11 +133,28 @@ export function RunDetail({ runId }: { runId: string }) {
     }
   }, [liveLines]);
 
+  useEffect(() => {
+    if (!run || !run.artifacts.some((artifact) => artifact === 'harness-report.json')) {
+      setHarnessReport(null);
+      return;
+    }
+    let ignore = false;
+    fetchRunArtifactText(run.run_id, 'harness-report.json', projectId ? { projectId } : (workdir || run.project_root))
+      .then((content) => {
+        if (ignore) return;
+        setHarnessReport(parseHarnessReport(content));
+      })
+      .catch(() => {
+        if (!ignore) setHarnessReport(null);
+      });
+    return () => { ignore = true; };
+  }, [run ? run.run_id : '', run ? run.artifacts.join('|') : '', projectId, workdir]);
+
   async function handleViewDiff() {
     setDiffLoading(true);
     setViewingDiff(true);
     try {
-      const result = await fetchRunDiff(runId, workdir);
+      const result = await fetchRunDiff(runId, projectId ? { projectId } : workdir);
       setDiffContent(result.diff);
     } catch {
       setDiffContent(diffStat || '暂无 diff 数据');
@@ -170,7 +194,7 @@ export function RunDetail({ runId }: { runId: string }) {
           <button className="button primary" onClick={() => {
             setLoadError(null);
             setLoading(true);
-            fetchRun(runId, workdir)
+            fetchRun(runId, projectId ? { projectId } : workdir)
               .then(setRun)
               .catch((error: Error) => setLoadError(error.message))
               .finally(() => setLoading(false));
@@ -184,13 +208,13 @@ export function RunDetail({ runId }: { runId: string }) {
 
   async function handleRunAction(action: 'cancel' | 'retry' | 'archive') {
     const wd = workdir || run!.project_root;
-    const qs = wd ? `?workdir=${encodeURIComponent(wd)}` : '';
+    const qs = projectId ? projectQuery({ projectId }) : (wd ? `?workdir=${encodeURIComponent(wd)}` : '');
     const res = await apiFetch(`/runs/${runId}/${action}${qs}`, { method: 'POST' });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: '操作失败' }));
       throw new Error(err.detail || `操作失败: ${res.status}`);
     }
-    const updated = await fetchRun(runId, wd);
+    const updated = await fetchRun(runId, projectId ? { projectId } : wd);
     setRun(updated);
   }
 
@@ -221,6 +245,8 @@ export function RunDetail({ runId }: { runId: string }) {
         <p>{run.requirement}</p>
         {loadError ? <p className="inlineError">无法加载真实运行记录：{loadError}</p> : null}
       </section>
+
+      {harnessReport ? <HarnessReportPanel report={harnessReport} /> : null}
 
       {(canCancel || canRetry || canArchive) && (
         <section className="panel runActionsPanel">
@@ -317,8 +343,9 @@ export function RunDetail({ runId }: { runId: string }) {
         <PipelineTimeline
           run={run}
           liveLines={liveLines}
+          projectId={projectId || undefined}
           onStageAction={() => {
-            fetchRun(runId, workdir || run.project_root)
+            fetchRun(runId, projectId ? { projectId } : (workdir || run.project_root))
               .then(setRun)
               .catch(() => undefined);
           }}
@@ -350,6 +377,7 @@ export function RunDetail({ runId }: { runId: string }) {
         <ArtifactViewer
           runId={run.run_id}
           artifactName={viewingArtifact}
+          projectId={projectId || undefined}
           onClose={() => setViewingArtifact(null)}
         />
       )}

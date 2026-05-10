@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronRight, Loader2, Maximize2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { apiFetch, rememberedWorkdir, runQuery } from '../lib/api';
+import { fetchRunArtifactText, rememberedWorkdir } from '../lib/api';
 import { ArtifactViewer } from './ArtifactViewer';
 import { MarkdownViewer } from './MarkdownViewer';
 
@@ -8,13 +8,14 @@ interface ArtifactContentProps {
   runId: string;
   artifactName: string;
   label?: string;
+  projectId?: string;
 }
 
 function isMarkdownFile(filename: string): boolean {
   return /\.(md|markdown|mdx)$/i.test(filename);
 }
 
-export function ArtifactContent({ runId, artifactName, label }: ArtifactContentProps) {
+export function ArtifactContent({ runId, artifactName, label, projectId }: ArtifactContentProps) {
   const [expanded, setExpanded] = useState(false);
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -25,12 +26,8 @@ export function ArtifactContent({ runId, artifactName, label }: ArtifactContentP
     if (!expanded || content !== null) return;
     setLoading(true);
     setError(null);
-    const wd = rememberedWorkdir(runId);
-    apiFetch(`/runs/${runId}/artifacts/${encodeURIComponent(artifactName)}${runQuery(wd)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`加载失败: ${res.status}`);
-        return res.text();
-      })
+    const wd = projectId ? '' : rememberedWorkdir(runId);
+    fetchRunArtifactText(runId, artifactName, { projectId, workdir: wd })
       .then((text) => {
         setContent(text);
       })
@@ -40,7 +37,7 @@ export function ArtifactContent({ runId, artifactName, label }: ArtifactContentP
       .finally(() => {
         setLoading(false);
       });
-  }, [expanded, content, runId, artifactName]);
+  }, [expanded, content, runId, artifactName, projectId]);
 
   const renderInlineContent = () => {
     if (!content) return null;
@@ -89,6 +86,7 @@ export function ArtifactContent({ runId, artifactName, label }: ArtifactContentP
         <ArtifactViewer
           runId={runId}
           artifactName={artifactName}
+          projectId={projectId}
           onClose={() => setShowViewer(false)}
         />
       )}

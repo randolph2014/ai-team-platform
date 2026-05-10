@@ -114,11 +114,12 @@ function ReviewActions({ stage, runId, workdir, onActionDone }: {
   );
 }
 
-function StageCard({ stage, liveLines, runId, workdir, onStageAction }: {
+function StageCard({ stage, liveLines, runId, workdir, projectId, onStageAction }: {
   stage: StageRun;
   liveLines: string[];
   runId: string;
   workdir: string;
+  projectId?: string;
   onStageAction: () => void;
 }) {
   const lines = liveLines;
@@ -228,6 +229,7 @@ function StageCard({ stage, liveLines, runId, workdir, onStageAction }: {
                   key={`${stage.stage_id}-${agent.agent_name}-${agent.output_file}`}
                   runId={runId}
                   artifactName={agent.output_file!}
+                  projectId={projectId}
                   label={agent.output_file!.split('/').pop()}
                 />
               ))}
@@ -272,9 +274,10 @@ function StageCard({ stage, liveLines, runId, workdir, onStageAction }: {
   );
 }
 
-export function PipelineTimeline({ run, liveLines = [], onStageAction }: {
+export function PipelineTimeline({ run, liveLines = [], projectId, onStageAction }: {
   run: RunReport;
   liveLines?: string[];
+  projectId?: string;
   onStageAction: () => void;
 }) {
   const wd = rememberedWorkdir(run.run_id) || run.project_root;
@@ -286,6 +289,7 @@ export function PipelineTimeline({ run, liveLines = [], onStageAction }: {
           liveLines={liveLines}
           runId={run.run_id}
           workdir={wd}
+          projectId={projectId}
           onStageAction={onStageAction}
           key={`${stage.stage_id}-${stage.iteration ?? 1}`}
         />

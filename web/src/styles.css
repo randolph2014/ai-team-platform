@@ -2462,6 +2462,312 @@ tbody tr:hover td { background: var(--bg-hover); }
 .artifactContentMarkdown .markdown-body h2 { font-size: 1.15em; }
 .artifactContentMarkdown .markdown-body h3 { font-size: 1.05em; }
 
+/* Harness */
+.harnessPage h1 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.harnessProjectPanel {
+  display: grid;
+  grid-template-columns: minmax(220px, 420px) minmax(0, 1fr);
+  gap: 12px 16px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+.harnessProjectPanel label {
+  grid-column: 1;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.harnessProjectPanel select {
+  grid-column: 1;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  padding: 7px 10px;
+}
+.harnessManifestLine {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  min-width: 0;
+}
+.harnessTabs {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.harnessTabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 10px 12px;
+  font-weight: 800;
+}
+.harnessTabs button.active {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+.harnessTabGrid {
+  display: grid;
+  grid-template-columns: 310px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.harnessFileList,
+.harnessEditorPanel,
+.harnessTaskBoard {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  padding: 16px;
+}
+.harnessFileListHeader,
+.harnessEditorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.harnessFileItem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 9px 10px;
+  text-align: left;
+}
+.harnessFileItem span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.harnessFileItem:hover,
+.harnessFileItemActive {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+.harnessTextarea,
+.harnessReadOnlyPre,
+.harnessEventForm input,
+.harnessEventForm select,
+.harnessEventForm textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 10px 12px;
+}
+.harnessTextarea {
+  min-height: 360px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  line-height: 1.6;
+}
+.harnessReadOnlyPre {
+  min-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+}
+.harnessPreview {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+.harnessEmptyMini {
+  color: var(--text-muted);
+  padding: 24px 4px;
+}
+.metaTag,
+.statMini {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.metaTagWarning { color: var(--yellow); background: var(--yellow-bg); border-color: #854d0e; }
+.metaTagDanger { color: var(--red); background: var(--red-bg); border-color: #991b1b; }
+.harnessBoardSummary,
+.harnessTaskMeta,
+.harnessReportFiles,
+.harnessReportEvidenceRefs,
+.conflictFiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.harnessBoardSummary { margin-bottom: 14px; }
+.harnessEventForm {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  padding: 14px;
+  margin-bottom: 14px;
+}
+.harnessEventForm label {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.harnessFormGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.harnessTaskList {
+  display: grid;
+  gap: 10px;
+}
+.harnessTaskItem {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  padding: 12px;
+}
+.harnessTaskMain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.harnessTaskItem p {
+  color: var(--text-secondary);
+  margin: 8px 0;
+  line-height: 1.5;
+}
+.conflictSummary {
+  display: grid;
+  gap: 12px;
+}
+
+/* Harness report */
+.harnessReportPanel { margin-bottom: 18px; }
+.harnessReportSummary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.harnessReportSummary span {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  padding: 10px;
+  color: var(--text-secondary);
+}
+.harnessReportSummary strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 18px;
+}
+.harnessReportBlock,
+.harnessReportWarnings {
+  display: grid;
+  gap: 6px;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.harnessReportBlock {
+  border: 1px solid #991b1b;
+  background: var(--red-bg);
+  color: var(--red);
+}
+.harnessReportWarnings {
+  border: 1px solid #854d0e;
+  background: var(--yellow-bg);
+  color: var(--yellow);
+}
+.harnessReportBlock strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.harnessReportChecks {
+  display: grid;
+  gap: 10px;
+}
+.harnessReportCheck {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  padding: 12px;
+}
+.harnessReportCheckFail { border-color: #991b1b; }
+.harnessReportCheckWarning { border-color: #854d0e; }
+.harnessReportCheckPass { border-color: #166534; }
+.harnessReportCheckHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.harnessReportCheckHead > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.harnessReportCheck pre,
+.harnessReportSection pre {
+  overflow: auto;
+  white-space: pre-wrap;
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  padding: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.harnessReportSection {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+.harnessReportSection h3 {
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .harnessTabGrid,
+  .harnessProjectPanel {
+    grid-template-columns: 1fr;
+  }
+  .harnessManifestLine {
+    grid-column: 1;
+  }
+  .harnessReportSummary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* ArtifactContent header (toggle + expand button) */
 .artifactContentHeader {
   display: flex;

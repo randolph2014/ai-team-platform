@@ -232,3 +232,159 @@ export interface Webhook {
   enabled: boolean;
   created_at?: string;
 }
+
+export type HarnessFileKind = 'config' | 'rule' | 'skill' | 'check' | 'baseline' | 'task' | 'unknown';
+
+export interface HarnessFile {
+  path: string;
+  hash?: string;
+  content: string;
+  kind?: HarnessFileKind;
+}
+
+export interface HarnessPermission {
+  can_view?: boolean;
+  can_edit?: boolean;
+  can_run_checks?: boolean;
+}
+
+export interface HarnessSummary {
+  schema_version?: string;
+  manifest_hash?: string;
+  rules_count?: number;
+  skills_count?: number;
+  checks_count?: number;
+  baselines_count?: number;
+  files_count?: number;
+  warnings?: string[];
+  skills_policy?: string;
+  [key: string]: unknown;
+}
+
+export interface HarnessValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings?: string[];
+  manifest_hash?: string;
+  summary?: HarnessSummary;
+}
+
+export interface HarnessBundle {
+  project_id: string;
+  manifest_hash: string;
+  files: HarnessFile[];
+  summary?: HarnessSummary;
+  validation?: HarnessValidationResult;
+  permissions?: HarnessPermission;
+}
+
+export interface HarnessConflictPayload {
+  error: 'manifest_conflict';
+  current_manifest_hash: string;
+  changed_files: string[];
+}
+
+export interface TaskBoardTask {
+  id: string;
+  title: string;
+  state: string;
+  run_id?: string;
+  artifact_dir?: string;
+  decision_ids?: string[];
+  run_ids?: string[];
+  artifact_dirs?: string[];
+  tags?: string[];
+  related_files?: string[];
+  decisions?: Array<Record<string, unknown>>;
+  risks?: Array<Record<string, unknown>>;
+  requirement?: string;
+  summary?: string;
+  state_history?: Array<Record<string, unknown>>;
+  created_at?: string;
+  updated_at?: string;
+  accepted_at?: string | null;
+}
+
+export interface RelatedTask {
+  task_id: string;
+  title: string;
+  state: string;
+  summary?: string;
+  requirement?: string;
+  tags?: string[];
+  related_files?: string[];
+  run_ids?: string[];
+  artifact_dirs?: string[];
+  decision_ids?: string[];
+  decisions?: Array<Record<string, unknown>>;
+  risks?: Array<Record<string, unknown>>;
+  updated_at?: string;
+  match_score?: number;
+  match_reasons?: string[];
+}
+
+export interface TaskBoardResponse {
+  project_id: string;
+  summary: {
+    total: number;
+    by_state?: Record<string, number>;
+  };
+  tasks: TaskBoardTask[];
+  related_tasks?: RelatedTask[];
+}
+
+export interface TaskBoardEventRequest {
+  task_id: string;
+  title?: string;
+  state: string;
+  source_stage: string;
+  run_id: string;
+  artifact_dir: string;
+  decision_ids: string[];
+  event_type?: string;
+  decision?: string;
+  requirement?: string;
+  summary?: string;
+  tags?: string[];
+  related_files?: string[];
+  decisions?: Array<Record<string, unknown>>;
+  risks?: Array<Record<string, unknown>>;
+  message?: string;
+}
+
+export interface HarnessReportCheck {
+  id: string;
+  type: 'pattern' | 'command' | 'baseline' | 'unknown' | string;
+  status: 'pass' | 'warning' | 'fail' | 'skipped' | string;
+  severity: 'info' | 'warning' | 'error' | string;
+  blocking: boolean;
+  duration_ms: number;
+  exit_code: number | null;
+  matched_files: string[];
+  output_excerpt: string;
+  evidence_refs: string[];
+}
+
+export interface HarnessReport {
+  schema_version: string;
+  run_id: string;
+  project_id: string;
+  stage_id: string;
+  harness_config_hash: string;
+  generated_at: string;
+  status: 'pass' | 'warning' | 'fail' | string;
+  blocking: boolean;
+  summary: {
+    total: number;
+    passed: number;
+    warnings: number;
+    failed: number;
+    skipped: number;
+  };
+  checks: HarnessReportCheck[];
+  baseline_results: Array<Record<string, unknown>>;
+  rule_violations: Array<Record<string, unknown>>;
+  warnings: string[];
+  evidence: string[];
+  next_stage_contract: Record<string, unknown>;
+}

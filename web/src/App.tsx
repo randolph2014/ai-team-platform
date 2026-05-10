@@ -1,4 +1,4 @@
-import { Activity, Boxes, CircleDollarSign, History, LogOut, Settings2, Webhook } from 'lucide-react';
+import { Activity, Boxes, CircleDollarSign, History, LogOut, Settings2, ShieldCheck, Webhook } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, Outlet, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { checkAuthStatus, clearToken, isLoggedIn } from './lib/api';
@@ -6,6 +6,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { NewRunModal } from './components/NewRunModal';
 import { Costs } from './pages/Costs';
 import { Dashboard } from './pages/Dashboard';
+import { Harness } from './pages/Harness';
 import { Login } from './pages/Login';
 import { PipelineEditor } from './pages/PipelineEditor';
 import { Pipelines } from './pages/Pipelines';
@@ -58,6 +59,7 @@ function AppLayout() {
   const nav = [
     ['/dashboard', Activity, '仪表盘'],
     ['/runs', History, '执行记录'],
+    ['/harness', ShieldCheck, 'Harness'],
     ['/pipelines', Boxes, 'Pipeline 模板'],
     ['/webhooks', Webhook, 'Webhook'],
     ['/costs', CircleDollarSign, '成本追踪'],
@@ -119,6 +121,7 @@ export function App() {
         <Route path="dashboard" element={<Dashboard onNewRun={() => {}} />} />
         <Route path="runs" element={<Runs onNewRun={() => {}} />} />
         <Route path="runs/:runId" element={<RunDetailRoute />} />
+        <Route path="harness" element={<Harness />} />
         <Route path="pipelines" element={<Pipelines />} />
         <Route path="pipelines/editor" element={<PipelineEditorRoute />} />
         <Route path="pipelines/editor/:pipelineId" element={<PipelineEditorRoute />} />

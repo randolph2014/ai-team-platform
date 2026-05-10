@@ -1,11 +1,12 @@
 import { Download, Maximize2, Minimize2, X, FileText, FileCode, FileJson, Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { apiFetch, rememberedWorkdir, runQuery } from '../lib/api';
+import { apiFetch, fetchRunArtifactText, projectQuery, rememberedWorkdir } from '../lib/api';
 import { MarkdownViewer } from './MarkdownViewer';
 
 interface ArtifactViewerProps {
   runId: string;
   artifactName: string;
+  projectId?: string;
   onClose: () => void;
 }
 
@@ -40,7 +41,7 @@ function tryFormatJson(text: string): string {
   }
 }
 
-export function ArtifactViewer({ runId, artifactName, onClose }: ArtifactViewerProps) {
+export function ArtifactViewer({ runId, artifactName, projectId, onClose }: ArtifactViewerProps) {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,12 +53,8 @@ export function ArtifactViewer({ runId, artifactName, onClose }: ArtifactViewerP
     setError(null);
     setContent(null);
 
-    const wd = rememberedWorkdir(runId);
-    apiFetch(`/runs/${runId}/artifacts/${encodeURIComponent(artifactName)}${runQuery(wd)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`加载失败: ${res.status}`);
-        return res.text();
-      })
+    const wd = projectId ? '' : rememberedWorkdir(runId);
+    fetchRunArtifactText(runId, artifactName, { projectId, workdir: wd })
       .then((text) => {
         if (!disposed) setContent(text);
       })
@@ -69,7 +66,7 @@ export function ArtifactViewer({ runId, artifactName, onClose }: ArtifactViewerP
       });
 
     return () => { disposed = true; };
-  }, [runId, artifactName]);
+  }, [runId, artifactName, projectId]);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -81,7 +78,7 @@ export function ArtifactViewer({ runId, artifactName, onClose }: ArtifactViewerP
 
   const handleDownload = () => {
     const wd = rememberedWorkdir(runId);
-    apiFetch(`/runs/${runId}/artifacts/${encodeURIComponent(artifactName)}${runQuery(wd)}`)
+    apiFetch(`/runs/${runId}/artifacts/${encodeURIComponent(artifactName)}${projectQuery({ projectId, workdir: projectId ? '' : wd })}`)
       .then((res) => res.blob())
       .then((blob) => {
         const a = document.createElement('a');

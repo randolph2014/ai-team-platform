@@ -1,6 +1,10 @@
 import type {
   AgentPromptResponse,
   AppConfig,
+  HarnessBundle,
+  HarnessConflictPayload,
+  HarnessFile,
+  HarnessValidationResult,
   HumanDecision,
   Pipeline,
   PipelineTemplate,
@@ -9,13 +13,35 @@ import type {
   RunReport,
   RuntimeCatalogResponse,
   SettingsResponse,
+  TaskBoardEventRequest,
+  TaskBoardResponse,
   Webhook,
 } from './types';
+import { normalizeHarnessFiles } from './harnessSchema';
 
 const API_BASE = '/api';
 const TOKEN_KEY = 'ai-team.token';
 const RUN_WORKDIR_KEY = 'ai-team.runWorkdirs';
 const LAST_WORKDIR_KEY = 'ai-team.lastWorkdir';
+
+export class ApiError extends Error {
+  status: number;
+  body: unknown;
+
+  constructor(message: string, status: number, body: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+async function responseError(response: Response, fallback: string): Promise<ApiError> {
+  const body = await response.json().catch(() => null);
+  const detail = body && typeof body === 'object' && 'detail' in body ? String((body as { detail?: unknown }).detail) : '';
+  const message = detail || fallback;
+  return new ApiError(message, response.status, body);
+}
 
 // --- Auth ---
 
@@ -116,6 +142,28 @@ export function runQuery(workdir: string): string {
   return workdir ? `?workdir=${encodeURIComponent(workdir)}` : '';
 }
 
+export type ProjectQueryOptions = {
+  projectId?: string;
+  workdir?: string;
+};
+
+export function projectQuery(options?: ProjectQueryOptions): string {
+  const params = new URLSearchParams();
+  if (options?.projectId) {
+    params.set('project_id', options.projectId);
+  } else if (options?.workdir) {
+    params.set('workdir', options.workdir);
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
+function normalizeRunQuery(input?: string | ProjectQueryOptions): ProjectQueryOptions {
+  if (!input) return {};
+  if (typeof input === 'string') return { workdir: input };
+  return input;
+}
+
 // --- Runs ---
 
 export async function fetchRuns(workdir?: string, params?: { page?: number; size?: number; status?: string }): Promise<RunListResponse> {
@@ -135,18 +183,28 @@ export async function fetchRuns(workdir?: string, params?: { page?: number; size
   return data;
 }
 
-export async function fetchRun(runId: string, workdir?: string): Promise<RunReport> {
-  const wd = workdir || rememberedWorkdir(runId);
-  const response = await apiFetch(`/runs/${runId}${runQuery(wd)}`);
+export async function fetchRun(runId: string, query?: string | ProjectQueryOptions): Promise<RunReport> {
+  const normalized = normalizeRunQuery(query);
+  const wd = normalized.projectId ? '' : (normalized.workdir || rememberedWorkdir(runId));
+  const response = await apiFetch(`/runs/${runId}${projectQuery({ projectId: normalized.projectId, workdir: wd })}`);
   if (!response.ok) throw new Error(`获取运行详情失败: ${response.status}`);
   return response.json();
 }
 
-export async function fetchRunDiff(runId: string, workdir?: string): Promise<{ run_id: string; diff: string; source: string }> {
-  const wd = workdir || rememberedWorkdir(runId);
-  const response = await apiFetch(`/runs/${runId}/diff${runQuery(wd)}`);
+export async function fetchRunDiff(runId: string, query?: string | ProjectQueryOptions): Promise<{ run_id: string; diff: string; source: string }> {
+  const normalized = normalizeRunQuery(query);
+  const wd = normalized.projectId ? '' : (normalized.workdir || rememberedWorkdir(runId));
+  const response = await apiFetch(`/runs/${runId}/diff${projectQuery({ projectId: normalized.projectId, workdir: wd })}`);
   if (!response.ok) throw new Error(`获取 diff 失败: ${response.status}`);
   return response.json();
+}
+
+export async function fetchRunArtifactText(runId: string, artifactName: string, query?: string | ProjectQueryOptions): Promise<string> {
+  const normalized = normalizeRunQuery(query);
+  const wd = normalized.projectId ? '' : (normalized.workdir || rememberedWorkdir(runId));
+  const response = await apiFetch(`/runs/${runId}/artifacts/${encodeURIComponent(artifactName)}${projectQuery({ projectId: normalized.projectId, workdir: wd })}`);
+  if (!response.ok) throw new Error(`加载产物失败: ${response.status}`);
+  return response.text();
 }
 
 export function runWebSocketUrl(runId: string): string {
@@ -321,6 +379,74 @@ export async function deletePipeline(id: string): Promise<void> {
 export async function validateConfig(workdir: string): Promise<{ valid: boolean; warnings: string[]; errors: string[] }> {
   const response = await apiFetch(`/config/validate${runQuery(workdir)}`);
   if (!response.ok) throw new Error(`验证配置失败: ${response.status}`);
+  return response.json();
+}
+
+// --- Harness ---
+
+export async function fetchHarness(projectId: string): Promise<HarnessBundle> {
+  const response = await apiFetch(`/projects/${encodeURIComponent(projectId)}/harness`);
+  if (!response.ok) {
+    throw await responseError(response, `获取 Harness 失败: ${response.status}`);
+  }
+  const data = await response.json() as HarnessBundle;
+  return { ...data, files: normalizeHarnessFiles(data.files || []) };
+}
+
+export async function validateHarness(projectId: string, files: HarnessFile[]): Promise<HarnessValidationResult> {
+  const response = await apiFetch(`/projects/${encodeURIComponent(projectId)}/harness/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files }),
+  });
+  if (!response.ok) {
+    const error = await responseError(response, `Harness schema validation failed: ${response.status}`);
+    return { valid: false, errors: [error.message] };
+  }
+  return response.json();
+}
+
+export async function saveHarness(projectId: string, files: HarnessFile[], manifestHash: string): Promise<HarnessBundle> {
+  const response = await apiFetch(`/projects/${encodeURIComponent(projectId)}/harness`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ manifest_hash: manifestHash, files }),
+  });
+  if (response.status === 409) {
+    const conflict = await response.json() as HarnessConflictPayload;
+    throw new ApiError('manifest_conflict', 409, conflict);
+  }
+  if (!response.ok) {
+    throw await responseError(response, `保存 Harness 失败: ${response.status}`);
+  }
+  const data = await response.json() as HarnessBundle;
+  return { ...data, files: normalizeHarnessFiles(data.files || []) };
+}
+
+export async function runHarnessChecks(projectId: string): Promise<Record<string, unknown>> {
+  const response = await apiFetch(`/projects/${encodeURIComponent(projectId)}/harness/checks/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ run_id: `harness-ui-${Date.now()}` }),
+  });
+  if (!response.ok) throw await responseError(response, `运行 Harness checks 失败: ${response.status}`);
+  return response.json();
+}
+
+export async function fetchTaskBoard(projectId: string, query?: string): Promise<TaskBoardResponse> {
+  const qs = query ? `?q=${encodeURIComponent(query)}` : '';
+  const response = await apiFetch(`/projects/${encodeURIComponent(projectId)}/task-board${qs}`);
+  if (!response.ok) throw await responseError(response, `获取 Task Board 失败: ${response.status}`);
+  return response.json();
+}
+
+export async function appendTaskBoardEvent(projectId: string, event: TaskBoardEventRequest): Promise<{ project_id: string; task: Record<string, unknown> }> {
+  const response = await apiFetch(`/projects/${encodeURIComponent(projectId)}/task-board/events`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(event),
+  });
+  if (!response.ok) throw await responseError(response, `写入 Task Board 事件失败: ${response.status}`);
   return response.json();
 }
 
