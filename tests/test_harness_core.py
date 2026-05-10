@@ -294,5 +294,47 @@ class TestHarnessSkillPolicy(HarnessTempProject):
         self.assertIn("human gates", markdown)
 
 
+class TestRepositoryHarnessGovernanceAssets(unittest.TestCase):
+    def test_phase3_governance_assets_declare_executable_command_check(self) -> None:
+        root = Path.cwd()
+
+        bundle = load_harness_bundle(root)
+
+        self.assertEqual(bundle.warnings, [])
+        self.assertEqual(bundle.config.schema_version, "1.0")
+        self.assertGreaterEqual(bundle.summary["rules_count"], 3)
+        self.assertGreaterEqual(bundle.summary["skills_count"], 2)
+        self.assertGreaterEqual(bundle.summary["checks_count"], 1)
+        self.assertGreaterEqual(bundle.summary["baselines_count"], 1)
+        command_checks = [check for check in bundle.config.checks if check.type == "command"]
+        self.assertGreaterEqual(len(command_checks), 1)
+        command_check = command_checks[0]
+        self.assertTrue(command_check.id.startswith("checks."))
+        self.assertTrue(command_check.command)
+        self.assertGreater(command_check.timeout_seconds or 0, 0)
+        self.assertEqual(command_check.severity, "error")
+        self.assertTrue(command_check.blocking)
+        self.assertTrue(command_check.file)
+        self.assertTrue((root / command_check.file).is_file())
+
+        forbidden_capabilities = {
+            capability
+            for skill in bundle.config.skills
+            for capability in skill.forbidden_capabilities
+        }
+        self.assertIn("bypass_human_gate", forbidden_capabilities)
+        self.assertIn("bypass_quality_gate", forbidden_capabilities)
+        self.assertIn("disable_checks", forbidden_capabilities)
+        self.assertIn("modify_baselines", forbidden_capabilities)
+
+        self.assertTrue((root / ".ai" / "harness" / "tasks" / "task-memory-contract.md").is_file())
+        self.assertTrue((root / ".ai" / "harness" / "tasks" / "state-model.md").is_file())
+
+        agents_text = (root / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("Harness Governance Layer", agents_text)
+        self.assertIn("不能绕过 human gate", agents_text)
+        self.assertIn("不能把 DB 作为 Harness 配置真相源", agents_text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -31,6 +31,15 @@
 - `acceptance_coverage`
 - `evidence`
 - `risks`
+- `traceability`
+
+`traceability` 必须逐条绑定需求 / 验收点 / 证据：
+- `requirement_id`
+- `acceptance_id`
+- `status`: `verified` / `failed` / `partial` / `blocked`
+- `evidence_refs`: 真实命令、测试名、报告段落或 Harness check id
+- `files`: 实际修改或验证过的文件
+- `tests`: 实际执行或明确阻塞的测试命令
 
 ## 工作原则
 

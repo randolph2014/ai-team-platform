@@ -53,6 +53,51 @@ def _valid_task_plan():
     }
 
 
+def _valid_traceability():
+    return [
+        {
+            "requirement_id": "REQ-001",
+            "acceptance_id": "AC-001",
+            "status": "verified",
+            "evidence_refs": ["tests/test_auth.py::test_login"],
+            "files": ["src/auth.py"],
+            "tests": ["pytest tests/test_auth.py -q"],
+            "harness_checks": ["checks.contract.skeleton-only"],
+        }
+    ]
+
+
+def _valid_implementation_report():
+    return {
+        "status": "completed",
+        "summary": "实现完成",
+        "changed_files": ["src/auth.py", "tests/test_auth.py"],
+        "tests_run": [
+            {
+                "command": "pytest tests/test_auth.py -q",
+                "exit_code": 0,
+                "duration": 1.2,
+                "result": "passed",
+            }
+        ],
+        "acceptance_coverage": [
+            {
+                "acceptance_id": "AC-001",
+                "status": "passed",
+                "evidence": "tests/test_auth.py::test_login",
+            }
+        ],
+        "evidence": [
+            {
+                "source": "pytest tests/test_auth.py -q",
+                "finding": "1 passed",
+            }
+        ],
+        "risks": [],
+        "traceability": _valid_traceability(),
+    }
+
+
 def _valid_test_report():
     return {
         "status": "completed",
@@ -63,6 +108,20 @@ def _valid_test_report():
         "results": [
             {"test_name": "test_login", "status": "passed", "duration": 0.5}
         ],
+        "acceptance_coverage": [
+            {
+                "acceptance_id": "AC-001",
+                "covered_by": "test_login",
+                "status": "passed",
+            }
+        ],
+        "evidence": [
+            {
+                "source": "pytest tests/",
+                "finding": "test_login passed",
+            }
+        ],
+        "traceability": _valid_traceability(),
     }
 
 
@@ -72,6 +131,15 @@ def _valid_review_report():
         "summary": "审查通过",
         "verdict": "Approve",
         "blocking_findings": [],
+        "findings": [],
+        "evidence": [
+            {
+                "source": "git diff",
+                "finding": "No blocking findings",
+            }
+        ],
+        "risks": [],
+        "traceability": _valid_traceability(),
     }
 
 
@@ -89,6 +157,29 @@ def _valid_review_report_with_changes():
                 "fix_suggestion": "Use parameterized queries",
             }
         ],
+        "findings": [
+            {
+                "severity": "Critical",
+                "file_path": "src/auth.py",
+                "line": 42,
+                "description": "SQL injection risk",
+                "fix_suggestion": "Use parameterized queries",
+            }
+        ],
+        "evidence": [
+            {
+                "source": "git diff",
+                "finding": "src/auth.py builds SQL with string interpolation",
+            }
+        ],
+        "risks": [
+            {
+                "risk": "SQL injection",
+                "impact": "Credential compromise",
+                "mitigation": "Use parameterized queries",
+            }
+        ],
+        "traceability": _valid_traceability(),
     }
 
 
@@ -99,6 +190,7 @@ class TestSchemaLoading(unittest.TestCase):
             "task-plan.json",
             "test-report.json",
             "review-report.json",
+            "implementation-report.json",
             "release-readiness.json",
             "harness-report.json",
         ]:
@@ -294,6 +386,41 @@ class TestRelatedTaskArtifactReasons(unittest.TestCase):
         self.assertEqual(status, "passed", errors)
 
 
+class TestImplementationReportValidation(unittest.TestCase):
+    def test_valid_implementation_report_passes(self):
+        errors, status = validate_artifact(_valid_implementation_report(), "implementation-report.json")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
+    def test_missing_traceability_fails(self):
+        data = _valid_implementation_report()
+        del data["traceability"]
+        errors, status = validate_artifact(data, "implementation-report.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("traceability" in e for e in errors))
+
+    def test_empty_traceability_fails(self):
+        data = _valid_implementation_report()
+        data["traceability"] = []
+        errors, status = validate_artifact(data, "implementation-report.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("traceability" in e and "too short" in e for e in errors))
+
+    def test_missing_acceptance_coverage_fails(self):
+        data = _valid_implementation_report()
+        del data["acceptance_coverage"]
+        errors, status = validate_artifact(data, "implementation-report.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("acceptance_coverage" in e for e in errors))
+
+    def test_missing_evidence_fails(self):
+        data = _valid_implementation_report()
+        del data["evidence"]
+        errors, status = validate_artifact(data, "implementation-report.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("evidence" in e for e in errors))
+
+
 class TestTestReportValidation(unittest.TestCase):
     def test_valid_test_report_passes(self):
         errors, status = validate_artifact(_valid_test_report(), "test-report.json")
@@ -338,6 +465,27 @@ class TestTestReportValidation(unittest.TestCase):
         errors, status = validate_artifact(data, "test-report.json")
         self.assertEqual(status, "failed")
 
+    def test_missing_acceptance_coverage_fails(self):
+        data = _valid_test_report()
+        del data["acceptance_coverage"]
+        errors, status = validate_artifact(data, "test-report.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("acceptance_coverage" in e for e in errors))
+
+    def test_missing_evidence_fails(self):
+        data = _valid_test_report()
+        del data["evidence"]
+        errors, status = validate_artifact(data, "test-report.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("evidence" in e for e in errors))
+
+    def test_missing_traceability_fails(self):
+        data = _valid_test_report()
+        del data["traceability"]
+        errors, status = validate_artifact(data, "test-report.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("traceability" in e for e in errors))
+
 
 class TestReviewReportValidation(unittest.TestCase):
     def test_valid_approve_passes(self):
@@ -375,6 +523,10 @@ class TestReviewReportValidation(unittest.TestCase):
             "summary": "changes needed",
             "verdict": "Request Changes",
             "blocking_findings": [],
+            "findings": [],
+            "evidence": [{"source": "git diff", "finding": "No critical finding"}],
+            "risks": [],
+            "traceability": _valid_traceability(),
         }
         errors, status = validate_artifact(data, "review-report.json")
         self.assertEqual(status, "failed")
@@ -387,6 +539,9 @@ class TestReviewReportValidation(unittest.TestCase):
             "verdict": "Request Changes",
             "blocking_findings": [],
             "findings": [{"severity": "Critical", "file_path": "x.py", "description": "sql injection"}],
+            "evidence": [{"source": "git diff", "finding": "sql injection"}],
+            "risks": [{"risk": "sql injection", "impact": "data exposure"}],
+            "traceability": _valid_traceability(),
         }
         errors, status = validate_artifact(data, "review-report.json")
         self.assertEqual(status, "passed", f"Errors: {errors}")
@@ -396,6 +551,34 @@ class TestReviewReportValidation(unittest.TestCase):
         data["verdict"] = "Maybe"
         errors, status = validate_artifact(data, "review-report.json")
         self.assertEqual(status, "failed")
+
+    def test_missing_findings_fails(self):
+        data = _valid_review_report()
+        del data["findings"]
+        errors, status = validate_artifact(data, "review-report.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("findings" in e for e in errors))
+
+    def test_missing_evidence_fails(self):
+        data = _valid_review_report()
+        del data["evidence"]
+        errors, status = validate_artifact(data, "review-report.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("evidence" in e for e in errors))
+
+    def test_missing_risks_fails(self):
+        data = _valid_review_report()
+        del data["risks"]
+        errors, status = validate_artifact(data, "review-report.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("risks" in e for e in errors))
+
+    def test_missing_traceability_fails(self):
+        data = _valid_review_report()
+        del data["traceability"]
+        errors, status = validate_artifact(data, "review-report.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("traceability" in e for e in errors))
 
 
 class TestReviewLoopbackDetection(unittest.TestCase):

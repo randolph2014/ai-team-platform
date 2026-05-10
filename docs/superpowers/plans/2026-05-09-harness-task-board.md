@@ -13,11 +13,11 @@
 ## Preflight Evidence
 
 - `git status --short --branch` was executed first on 2026-05-10: `## main...origin/main`; untracked `docs/superpowers/plans/2026-05-09-harness-task-board.md` and `docs/superpowers/plans/2026-05-09-harness-ui.md`.
-- Repository-root `AGENTS.md` is not present under `/Users/wurui/IdeaProjects/ai-team-platform`; this plan follows the AGENTS instructions supplied in the session prompt.
+- Repository-root `AGENTS.md` is present under `/Users/wurui/IdeaProjects/ai-team-platform` and now includes ai-team-platform project-level governance constraints.
 - Read `docs/superpowers/specs/2026-05-09-harness-governance-design.md`; Task Board source rows are `H-TASK-001` through `H-TASK-005`.
 - Read `docs/superpowers/reports/2026-05-09-harness-core-final-report.md`; Core rows are verified and Core scope explicitly did not implement Task Board or UI.
 - Read `docs/superpowers/reports/2026-05-09-harness-checks-final-report.md`; Checks rows are verified, command checks reuse `QualityGateRunner`, and no Task Board/UI workflow was implemented.
-- Read `docs/superpowers/reports/2026-05-10-project-governance-configuration-final-report.md`; legacy project `.ai/team.yaml` config source was deprecated and Task Board must not reintroduce project config as truth source.
+- Read `docs/superpowers/reports/2026-05-10-project-governance-configuration-final-report.md`; the legacy project team config source was deprecated and Task Board must not reintroduce project config as truth source.
 - Current code evidence:
   - `engine/context_scanner.py` already injects Core Harness summary, but still excludes `.ai` from tree scanning; Task Board related tasks must be explicitly injected.
   - `api/routes/harness.py` already owns project-scoped Harness endpoints and reusable `project_id -> project_root` resolution helpers.
@@ -47,7 +47,7 @@ Out of scope:
 - Harness Core or Checks implementation
 - Replacing the existing pipeline engine
 - Treating `task-board.json` as the only persistent state
-- Reintroducing `.ai/team.yaml` as a project config source
+- Reintroducing the legacy project team config entry as a project config source
 
 ## Storage And State Design
 

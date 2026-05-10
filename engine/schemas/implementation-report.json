@@ -1,10 +1,19 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "test-report.json",
-  "title": "Test Report Artifact",
-  "description": "结构化 QA 测试报告产物，包含命令、退出码、耗时和汇总",
+  "$id": "implementation-report.json",
+  "title": "Implementation Report Artifact",
+  "description": "结构化实施报告产物，必须绑定验收点、文件、测试和证据链",
   "type": "object",
-  "required": ["status", "summary", "commands", "results", "acceptance_coverage", "evidence", "traceability"],
+  "required": [
+    "status",
+    "summary",
+    "changed_files",
+    "tests_run",
+    "acceptance_coverage",
+    "evidence",
+    "risks",
+    "traceability"
+  ],
   "properties": {
     "status": {
       "type": "string",
@@ -14,28 +23,22 @@
       "type": "string",
       "minLength": 1
     },
-    "commands": {
+    "changed_files": {
       "type": "array",
+      "minItems": 1,
+      "items": {"type": "string"}
+    },
+    "tests_run": {
+      "type": "array",
+      "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["command", "exit_code", "duration"],
+        "required": ["command", "exit_code", "duration", "result"],
         "properties": {
           "command": {"type": "string", "minLength": 1},
           "exit_code": {"type": "integer"},
-          "duration": {"type": "number", "minimum": 0}
-        },
-        "additionalProperties": false
-      }
-    },
-    "results": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["test_name", "status", "duration"],
-        "properties": {
-          "test_name": {"type": "string", "minLength": 1},
-          "status": {"type": "string", "enum": ["passed", "failed", "skipped", "error"]},
           "duration": {"type": "number", "minimum": 0},
+          "result": {"type": "string", "enum": ["passed", "failed", "skipped", "blocked"]},
           "message": {"type": "string"}
         },
         "additionalProperties": false
@@ -46,11 +49,11 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["acceptance_id", "status", "covered_by"],
+        "required": ["acceptance_id", "status", "evidence"],
         "properties": {
           "acceptance_id": {"type": "string", "pattern": "^AC-"},
-          "covered_by": {"type": "string", "minLength": 1},
-          "status": {"type": "string", "enum": ["passed", "failed", "skipped", "blocked"]}
+          "status": {"type": "string", "enum": ["passed", "failed", "partial", "blocked"]},
+          "evidence": {"type": "string", "minLength": 1}
         },
         "additionalProperties": false
       }
@@ -64,6 +67,19 @@
         "properties": {
           "source": {"type": "string", "minLength": 1},
           "finding": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["risk", "impact"],
+        "properties": {
+          "risk": {"type": "string"},
+          "impact": {"type": "string"},
+          "mitigation": {"type": "string"}
         },
         "additionalProperties": false
       }
@@ -100,6 +116,10 @@
         },
         "additionalProperties": false
       }
+    },
+    "units": {
+      "type": "array",
+      "items": {"type": "object"}
     }
   },
   "additionalProperties": false

@@ -297,6 +297,27 @@ class TestHarnessReportContract(HarnessChecksTempProject):
         self.assertEqual(errors, [])
 
 
+class TestRepositoryHarnessExecutableChecks(unittest.TestCase):
+    def test_repository_command_check_writes_structured_result(self) -> None:
+        root = Path.cwd()
+
+        report = run_harness_verification(root, run_id="repo-phase3-command")
+        command_results = [item for item in report["checks"] if item["type"] == "command"]
+        errors, status = validate_artifact(report, "harness-report.json")
+
+        self.assertEqual(status, "passed", errors)
+        self.assertEqual(errors, [])
+        self.assertGreaterEqual(len(command_results), 1)
+        result = command_results[0]
+        for field in ["id", "status", "blocking", "duration_ms", "exit_code", "evidence_refs"]:
+            self.assertIn(field, result)
+        self.assertEqual(result["status"], "pass")
+        self.assertFalse(result["blocking"])
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIsInstance(result["duration_ms"], int)
+        self.assertTrue(any(ref.startswith(f"quality_gate:{result['id']}") for ref in result["evidence_refs"]))
+
+
 class TestHarnessChecksNoSecondRunner(unittest.TestCase):
     def test_harness_checks_does_not_import_subprocess_or_os_system(self) -> None:
         source = (Path(__file__).resolve().parent.parent / "engine" / "harness_checks.py").read_text(encoding="utf-8")

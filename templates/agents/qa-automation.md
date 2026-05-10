@@ -14,7 +14,15 @@
 ## 输出
 输出 `test-report.md` 和 `test-report.json`。请直接输出 Markdown，并在末尾以单个 ` ```json ` 代码块输出 `test-report.json`；runner 会按 pipeline `json_artifacts` 保存该 JSON block。
 
-`test-report.json` 必须包含 `status`、`summary`、`commands`、`results`、`acceptance_coverage`、`evidence`。
+`test-report.json` 必须包含 `status`、`summary`、`commands`、`results`、`acceptance_coverage`、`evidence`、`traceability`。
+
+`traceability` 必须逐条绑定需求 / 验收点 / 测试证据：
+- `requirement_id`
+- `acceptance_id`
+- `status`: `verified` / `failed` / `partial` / `blocked`
+- `evidence_refs`: 真实命令、测试名、报告段落或 Harness check id
+- `files`: 被验证的实现或测试文件
+- `tests`: 实际执行或明确阻塞的测试命令
 
 如有阻断失败，必须包含 `FAILED` 或 `ERROR`，供编排器回流 develop。
 
@@ -43,6 +51,7 @@
 
 ### 6. 需求验收点验证
 对照 `task-plan.json.acceptance_coverage` 逐条验证，每一条都必须给出 PASS/FAIL 和证据。
+每个 PASS/FAIL 必须同步写入 `test-report.json.traceability`，不能只写 Markdown 表格。
 
 | 需求点 | 验收标准 | 状态 | 证据 |
 |--------|----------|------|------|

@@ -15,8 +15,11 @@ Reviewer 同时承担 QA 和代码审查职责。请先阅读 Stage Contract 中
 - `summary`
 - `commands`
 - `results`
+- `acceptance_coverage`
+- `evidence`
+- `traceability`
 
-建议同时包含 `acceptance_coverage` 和 `evidence`。如有阻断失败，Markdown 或 JSON 中必须包含 `FAILED` 或 `ERROR`，供编排器回流 develop。
+如有阻断失败，Markdown 或 JSON 中必须包含 `FAILED` 或 `ERROR`，供编排器回流 develop。
 
 必须覆盖：
 1. 执行的真实命令、退出码、耗时
@@ -25,6 +28,7 @@ Reviewer 同时承担 QA 和代码审查职责。请先阅读 Stage Contract 中
 4. 未覆盖场景与回归风险
 5. `task-plan.json.test_plan` 对照
 6. `task-plan.json.acceptance_coverage` 逐条 PASS / FAIL 结论
+7. `test-report.json.traceability` 逐条绑定需求、验收点、测试命令、文件和证据
 
 ### review
 负责代码审查和风险识别，只做审查，默认不要修改源码。
@@ -36,8 +40,12 @@ Reviewer 同时承担 QA 和代码审查职责。请先阅读 Stage Contract 中
 - `summary`
 - `verdict`: `"Approve"` 或 `"Request Changes"`
 - `blocking_findings`
+- `findings`
+- `evidence`
+- `risks`
+- `traceability`
 
-建议同时包含 `findings`、`evidence` 和 `risks`。如果存在阻塞问题，必须输出 `Request Changes`，并在 `blocking_findings` 中写入可执行修复建议。
+如果存在阻塞问题，必须输出 `Request Changes`，并在 `blocking_findings` 中写入可执行修复建议。
 
 必须检查：
 1. 是否满足 `requirement-final.json` 验收标准
@@ -46,6 +54,7 @@ Reviewer 同时承担 QA 和代码审查职责。请先阅读 Stage Contract 中
 4. 是否存在正确性、安全、权限、事务、并发、异常处理、兼容性或回滚风险
 5. 测试证据是否真实且充分
 6. 是否可以进入人工验收
+7. `review-report.json.traceability` 是否逐条绑定需求、验收点、diff/测试证据、文件和风险结论
 
 ## 工作原则
 - 只基于 `git-diff`、测试输出和阶段 artifact 下结论。

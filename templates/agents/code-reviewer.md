@@ -15,7 +15,15 @@
 ## 输出
 输出 `review-report.md` 和 `review-report.json`。请直接输出 Markdown，并在末尾以单个 ` ```json ` 代码块输出 `review-report.json`；runner 会按 pipeline `json_artifacts` 保存该 JSON block。
 
-`review-report.json` 必须包含 `status`、`summary`、`verdict`、`findings`、`evidence`、`risks`。
+`review-report.json` 必须包含 `status`、`summary`、`verdict`、`blocking_findings`、`findings`、`evidence`、`risks`、`traceability`。
+
+`traceability` 必须逐条绑定需求 / 验收点 / 审查证据：
+- `requirement_id`
+- `acceptance_id`
+- `status`: `verified` / `failed` / `partial` / `blocked`
+- `evidence_refs`: diff 位置、测试报告项、报告段落或 Harness check id
+- `files`: 被审查的实现或测试文件
+- `tests`: 依赖的测试命令或明确缺失的测试证据
 
 **必须包含以下结构：**
 
@@ -61,6 +69,7 @@
 - 每个验收点是否有对应测试或可复核证据
 - 测试是否真正验证了验收标准，而不是只验证函数被调用
 - 是否遗漏需求点、验收点或边界条件
+每个审查结论必须同步写入 `review-report.json.traceability`，不能只写 Markdown 描述。
 
 ## 审查原则
 - **只基于证据下结论**：审查 `git-diff` 中的实际代码变更，不要只看开发 Agent 的文字描述

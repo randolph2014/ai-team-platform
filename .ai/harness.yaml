@@ -1,0 +1,64 @@
+schema_version: "1.0"
+rules:
+  - id: governance.scope.phase-boundary
+    title: Phase Boundary and Evidence
+    file: .ai/harness/rules/phase-boundary.md
+    severity: error
+  - id: governance.source-of-truth
+    title: Harness Source of Truth
+    file: .ai/harness/rules/source-of-truth.md
+    severity: error
+  - id: governance.evidence-and-gates
+    title: Evidence and Gate Integrity
+    file: .ai/harness/rules/evidence-and-gates.md
+    severity: error
+skills:
+  - id: governance.phase-scoped-implementation
+    title: Phase-scoped Implementation
+    file: .ai/harness/skills/phase-scoped-implementation.md
+    allowed_agents:
+      - planner
+      - coder
+      - reviewer
+    forbidden_capabilities:
+      - bypass_human_gate
+      - bypass_quality_gate
+      - disable_checks
+      - modify_baselines
+      - override_platform_policy
+      - use_db_as_harness_source
+      - expand_phase_scope
+  - id: governance.evidence-based-review
+    title: Evidence-based Review
+    file: .ai/harness/skills/evidence-based-review.md
+    allowed_agents:
+      - planner
+      - reviewer
+    forbidden_capabilities:
+      - bypass_human_gate
+      - bypass_quality_gate
+      - hide_failed_checks
+      - lower_baseline_without_approval
+      - mark_unverified_complete
+checks:
+  - id: checks.phase3.quality-gate-policy
+    title: Phase 3 Quality Gate Policy Smoke
+    type: command
+    file: .ai/harness/checks/executable-command-checks.md
+    command: ".venv/bin/python -m pytest tests/test_quality_gates.py::TestQualityGateExecutionPolicy::test_policy_requires_timeout -q"
+    timeout_seconds: 60
+    severity: error
+    blocking: true
+  - id: checks.governance.project-finalization
+    title: Project Governance Finalization Check
+    type: command
+    file: .ai/harness/checks/project-governance-finalization.md
+    command: ".venv/bin/python scripts/verify_project_governance.py"
+    timeout_seconds: 60
+    severity: error
+    blocking: true
+baselines:
+  - id: baseline.policy.raise-only
+    title: Baseline Raise-only Policy
+    file: .ai/harness/baselines/raise-only-policy.md
+    severity: error

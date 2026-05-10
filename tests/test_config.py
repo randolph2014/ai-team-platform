@@ -47,8 +47,45 @@ class TestPromptContracts(unittest.TestCase):
                 "file_boundaries",
             ],
             "challenger.md": ["requirement-gap-analysis.md", "P0", "open_questions", "过度设计"],
-            "coder.md": ["implementation-report.json", "git diff", "file_boundaries", "只修改"],
-            "reviewer.md": ["test-report.json", "review-report.json", "verdict", "blocking_findings", "Request Changes"],
+            "coder.md": [
+                "implementation-report.json",
+                "git diff",
+                "file_boundaries",
+                "只修改",
+                "acceptance_coverage",
+                "evidence",
+                "traceability",
+            ],
+            "tech-lead.md": [
+                "implementation-report.json",
+                "file_boundaries",
+                "acceptance_coverage",
+                "evidence",
+                "traceability",
+            ],
+            "qa-automation.md": [
+                "test-report.json",
+                "acceptance_coverage",
+                "evidence",
+                "traceability",
+            ],
+            "code-reviewer.md": [
+                "review-report.json",
+                "findings",
+                "evidence",
+                "risks",
+                "traceability",
+            ],
+            "reviewer.md": [
+                "test-report.json",
+                "review-report.json",
+                "verdict",
+                "blocking_findings",
+                "Request Changes",
+                "acceptance_coverage",
+                "evidence",
+                "traceability",
+            ],
         }
         for filename, needles in expected.items():
             content = (prompt_dir / filename).read_text(encoding="utf-8")

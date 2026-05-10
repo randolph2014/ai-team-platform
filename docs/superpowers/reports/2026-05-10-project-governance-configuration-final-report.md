@@ -2,7 +2,7 @@
 
 验收日期：2026-05-10
 
-验收对象：Project Governance Configuration cleanup，范围限定为废弃历史项目级 `.ai/team.yaml` 配置入口，不包含 Checks 子迭代完成结论。
+验收对象：Project Governance Configuration cleanup，范围限定为废弃历史项目级 team 配置入口，不包含 Checks 子迭代完成结论。
 
 ## 结论
 
@@ -10,7 +10,7 @@
 
 本次验收发现 2 个 cleanup 缺口，并已做最小修复：
 
-1. `POST /api/runs/{id}/human-decision` 会恢复运行，但继承 `report.config_path` 后未拒绝历史 `.ai/team.yaml`。已补同构校验，并增加红灯到绿灯测试。
+1. `POST /api/runs/{id}/human-decision` 会恢复运行，但继承 `report.config_path` 后未拒绝历史项目级 team 配置入口。已补同构校验，并增加红灯到绿灯测试。
 2. `docs/spec_1.0.md`、`docs/spec_1.1.md`、`docs/superpowers/superpower-analysis.md` 仍有旧措辞会让 `team.yaml` 被误解为项目配置事实源。已改为平台模板、DB Settings、物化 pipeline config 或 Harness governance assets。
 
 ## Git Status
@@ -28,22 +28,22 @@ git status --short --branch
 
 | ID | 验收点 | 证据 | 状态 |
 |---|---|---|---|
-| GOV-001 | 历史项目级 team 配置入口不再被默认加载 | `engine/config.py:388-429` 默认路径只读取 `templates/team.yaml` 或 DB Settings；直接脚本输出 `default_source= platform`、`default_path= .../templates/team.yaml`，即使 `.ai/team.yaml` 存在也未作为 `project` source；`tests/test_config.py:292-302` 覆盖默认忽略 | PASS |
+| GOV-001 | 历史项目级 team 配置入口不再被默认加载 | `engine/config.py:388-429` 默认路径只读取 `templates/team.yaml` 或 DB Settings；直接脚本输出 `default_source= platform`、`default_path= .../templates/team.yaml`，即使历史入口文件存在也未作为 `project` source；`tests/test_config.py:292-302` 覆盖默认忽略 | PASS |
 | GOV-002 | 显式传入历史项目配置文件被拒绝 | `engine/config.py:344-362` 识别并拒绝 deprecated path；`engine/config.py:391-403` 在读取显式配置前先拒绝；直接脚本输出 `explicit_absolute_rejected= True`、`explicit_relative_rejected= True`；`tests/test_config.py:304-313` 覆盖 | PASS |
 | GOV-003 | CLI 不再暴露生成历史项目配置文件的 init 命令 | `cli/main.py:212-264` 仅注册 `run/status/resume/cleanup/serve/install-skill`；直接脚本输出 `subcommands= cleanup,install-skill,resume,run,serve,status` 和 `init_rejected= True`；`tests/test_config.py:283-288` 覆盖 | PASS |
 | GOV-004 | API 不接受历史项目配置文件作为 run config | create run: `api/routes/runs.py:239-244`；resume run: `api/routes/runs.py:373-378`；human-decision 恢复路径：`api/routes/runs.py:428-433`；route 测试：`tests/test_routes.py:698-711`、`tests/test_routes.py:765-787`、`tests/test_routes.py:885-930` | PASS |
-| GOV-005 | 默认模板不再声明项目文件可覆盖平台配置 | `templates/team.yaml:4-5` 声明自定义入口为 Settings/DB 或 `.ai/pipeline-configs/*.yaml`，历史入口已废弃；`templates/team.yaml:317-318` 声明质量门禁通过 Settings/DB、内置模板或物化配置管理；文档扫描无 `.ai/team.yaml` 字面量命中 | PASS |
+| GOV-005 | 默认模板不再声明项目文件可覆盖平台配置 | `templates/team.yaml:4-5` 声明自定义入口为 Settings/DB 或 `.ai/pipeline-configs/*.yaml`，历史入口已废弃；`templates/team.yaml:317-318` 声明质量门禁通过 Settings/DB、内置模板或物化配置管理；文档扫描无历史入口字面量命中 | PASS |
 | GOV-006 | 治理设计明确 AGENTS、Settings、prompt override、pipeline config、Harness assets 边界 | `docs/superpowers/specs/2026-05-10-project-governance-configuration-design.md:75-82` 明确废弃入口处理；`docs/superpowers/specs/2026-05-10-project-governance-configuration-design.md:121-127` 定义 GOV-001..GOV-007 验收项 | PASS |
 | GOV-007 | 每个治理子迭代必须有 traceability rows 和 fresh verification evidence | 本报告提供独立 matrix、修复记录、测试和扫描证据，报告路径即 `docs/superpowers/reports/2026-05-10-project-governance-configuration-final-report.md` | PASS |
 
 ## 关键证明
 
-### `.ai/team.yaml` 不再默认加载
+### 历史项目级 team 配置入口不再默认加载
 
 代码证据：
 
 - `load_config()` 无显式配置时初始化为平台模板路径，并只读取 `DEFAULT_TEAM_FILE` 或 `DEFAULT_CONFIG`。
-- DB Settings 是唯一默认自定义来源；没有读取 `project_root/.ai/team.yaml` 的分支。
+- DB Settings 是唯一默认自定义来源；没有读取项目根历史 team 配置入口的分支。
 
 脚本证据：
 
@@ -53,7 +53,7 @@ default_path= /Users/wurui/IdeaProjects/ai-team-platform/templates/team.yaml
 default_ignored_legacy_exists= True
 ```
 
-### 显式 `.ai/team.yaml` 被拒绝
+### 显式历史项目级 team 配置入口被拒绝
 
 脚本证据：
 
@@ -83,7 +83,7 @@ init_rejected= True
 tests/test_config.py::TestCliParser::test_deprecated_project_config_init_command_is_not_exposed PASSED
 ```
 
-### API create/resume 不接受 `.ai/team.yaml`
+### API create/resume 不接受历史项目级 team 配置入口
 
 测试证据：
 
@@ -102,7 +102,7 @@ AssertionError: 200 != 400
 
 修复后同一用例通过，证明缺口已关闭。
 
-### 文档和模板不再把 `.ai/team.yaml` 作为事实源
+### 文档和模板不再把历史项目级 team 配置入口作为事实源
 
 文档证据：
 
@@ -115,7 +115,7 @@ AssertionError: 200 != 400
 扫描证据：
 
 ```text
-rg -n "\.ai/team\.yaml" <验收对象文件列表>
+rg -n "<legacy-project-team-entry-pattern>" <验收对象文件列表>
 # 无输出，exit 1
 ```
 

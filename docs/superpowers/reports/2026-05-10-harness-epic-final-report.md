@@ -52,7 +52,7 @@ git status --short --branch --untracked-files=all
 | Task Board makes history available to future requirements | PASS | Related tasks are matched by text, tags, files, and decisions; context scan injects related tasks into Markdown and JSON outputs; requirement/planning artifacts must adopt or reject related tasks with reasons when related tasks exist. |
 | UI manages Harness assets without exposing arbitrary file paths | PASS | `/harness` page manages Rules / Skills / Checks / Baselines / Task Board; generated editable paths are restricted to `.ai/harness.yaml` or `.ai/harness/**`; save uses `manifest_hash` and stale conflicts return 409. |
 | Permission-aware UI does not expose forbidden actions | PASS | UI hides edit entry points when `can_edit=false`, hides Run Checks when `can_run_checks=false`, hides Harness content when `can_view=false`, and shows no-access state for 403. |
-| Deprecated project governance config does not remain a competing source | PASS | Historical `.ai/team.yaml` project config is ignored by default, explicit use is rejected, `init` is not exposed, and run/resume/human-decision paths reject the deprecated config. |
+| Deprecated project governance config does not remain a competing source | PASS | Historical project team config is ignored by default, explicit use is rejected, `init` is not exposed, and run/resume/human-decision paths reject the deprecated config. |
 
 ## Fresh Verification
 
