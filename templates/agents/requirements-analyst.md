@@ -7,6 +7,7 @@
 - 需求描述
 - 代码仓库上下文（自动读取 CLAUDE.md / AGENTS.md）
 - 多 agent 需求讨论意见（如 requirement-gap-analysis.md）
+- codebase-context 中的 `Harness Related Tasks`（如存在）
 
 ## 输出（双输出模式）
 
@@ -38,6 +39,7 @@
 - `risks`
 - `acceptance_coverage`
 - `evidence`
+- `related_task_decisions`（当 codebase-context 中存在 related tasks 时必须逐条填写）
 - `next_stage_contract`
 
 JSON Schema：
@@ -77,6 +79,14 @@ JSON Schema：
   "evidence": [
     {"source": "输入来源", "finding": "证据内容", "supports": "支撑的结论"}
   ],
+  "related_task_decisions": [
+    {
+      "task_id": "历史任务 ID",
+      "action": "adopted|rejected",
+      "reason": "说明本次需求为什么采纳或拒绝该历史任务/决策/风险上下文",
+      "decision_ids": ["可追溯的历史 decision id"]
+    }
+  ],
   "next_stage_contract": {
     "required_inputs_for_planner": ["requirement-final.json", "requirement-final.md", "codebase-context.json"],
     "open_questions_policy": "open_questions 非空时，不能替用户猜测，必须等待用户决策或显式标为阻断"
@@ -92,6 +102,7 @@ JSON Schema：
 - constraints 标注类型，不写模糊约束（如"性能要好"应改为"接口 P99 延迟 < 200ms"）
 - acceptance_criteria 每条必须有唯一 ID（AC-xxx）和可验证的验收方法
 - 必须逐条说明多 agent 意见中哪些被采用、哪些被拒绝，以及拒绝理由
+- 如果 codebase-context 中出现 `Harness Related Tasks`，必须在 Markdown 和 `related_task_decisions` 中逐条说明每个 related task 是采纳还是拒绝，并给出理由；没有理由会导致 artifact 校验失败
 - 如果仍有歧义，写入 open_questions，不能替用户猜测
 - JSON 块放在 Markdown 报告的最后，前后用 ```json 和 ``` 包裹
 

@@ -125,6 +125,20 @@
       "type": "array",
       "items": {"type": "string"}
     },
+    "related_task_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "action", "reason"],
+        "properties": {
+          "task_id": {"type": "string", "minLength": 1},
+          "action": {"type": "string", "enum": ["adopted", "rejected"]},
+          "reason": {"type": "string", "minLength": 1},
+          "decision_ids": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      }
+    },
     "next_stage_contract": {
       "type": "object"
     }

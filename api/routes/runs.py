@@ -495,12 +495,14 @@ if router:
             result = cancel_rq_job(rq_job_id)
             if result.get("cancelled"):
                 _update_run_status(run_id, resolved_workdir, "cancelled")
+                _record_cancel_task_event(project_root, output_dir)
                 await _audit("cancel_run", user, run_id, {"rq_cancelled": True})
                 return {"run_id": run_id, "status": "cancelled", "rq_cancel": result}
             return {"run_id": run_id, "status": "cancel_failed", "rq_cancel": result}
 
         if output_dir.exists():
             _update_run_status(run_id, resolved_workdir, "cancelled")
+            _record_cancel_task_event(project_root, output_dir)
             await _audit("cancel_run", user, run_id)
             return {"run_id": run_id, "status": "cancelled"}
 
@@ -612,3 +614,18 @@ def _update_run_status(run_id: str, workdir: str, status: str) -> None:
             save_report_sync(report, {})
     except Exception:
         logger.warning("Failed to update run %s status to %s", run_id, status)
+
+
+def _record_cancel_task_event(project_root: Path, output_dir: Path) -> None:
+    try:
+        from engine.task_board import record_run_task_event_from_report_file
+
+        record_run_task_event_from_report_file(
+            project_root,
+            output_dir,
+            state="cancelled",
+            source_stage="cancel",
+            message="Run cancelled through API",
+        )
+    except Exception:
+        logger.warning("Failed to record task board cancellation for %s", output_dir, exc_info=True)

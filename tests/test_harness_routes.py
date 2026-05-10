@@ -356,5 +356,100 @@ class TestHarnessManifestApi(HarnessRoutesTest):
         self.assertEqual(response.status_code, 400)
 
 
+class TestTaskBoardProjectApi(HarnessRoutesTest):
+    def test_get_task_board_uses_project_id_and_related_query(self) -> None:
+        from engine.task_board import TaskEvent, record_task_event
+
+        record_task_event(
+            self.project_root,
+            TaskEvent(
+                task_id="T-checkout",
+                title="Accepted checkout",
+                state="accepted",
+                source_stage="acceptance_confirm",
+                decision="approved",
+                run_id="run-checkout",
+                artifact_dir=str(self.project_root / ".ai" / "team-output" / "run-checkout"),
+                decision_ids=["human:run-checkout:acceptance_confirm:1"],
+                requirement="Implement checkout payment",
+                tags=["checkout"],
+            ),
+        )
+        fake_db, fake_repo = self.fake_db()
+
+        with patch("api.routes.harness.try_persistence", return_value=fake_db), \
+             patch("api.routes.harness._get_project_repo", return_value=fake_repo):
+            response = self.client.get("/api/projects/proj-1/task-board", params={"q": "checkout payment"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["project_id"], "proj-1")
+        self.assertEqual(body["tasks"][0]["id"], "T-checkout")
+        self.assertEqual(body["related_tasks"][0]["task_id"], "T-checkout")
+
+    def test_task_board_rejects_workdir_api_inputs(self) -> None:
+        fake_db, fake_repo = self.fake_db()
+
+        with patch("api.routes.harness.try_persistence", return_value=fake_db), \
+             patch("api.routes.harness._get_project_repo", return_value=fake_repo):
+            get_response = self.client.get("/api/projects/proj-1/task-board", params={"workdir": str(self.project_root)})
+            post_response = self.client.post(
+                "/api/projects/proj-1/task-board/events",
+                json={"workdir": str(self.project_root)},
+            )
+
+        self.assertEqual(get_response.status_code, 400)
+        self.assertEqual(post_response.status_code, 400)
+
+    def test_post_task_board_event_guards_accepted_state(self) -> None:
+        fake_db, fake_repo = self.fake_db()
+
+        with patch("api.routes.harness.try_persistence", return_value=fake_db), \
+             patch("api.routes.harness._get_project_repo", return_value=fake_repo):
+            bad = self.client.post(
+                "/api/projects/proj-1/task-board/events",
+                json={
+                    "task_id": "T-bad",
+                    "title": "Bad accepted",
+                    "state": "accepted",
+                    "source_stage": "qa",
+                    "run_id": "run-bad",
+                    "artifact_dir": str(self.project_root / ".ai" / "team-output" / "run-bad"),
+                    "decision_ids": ["run:run-bad:qa:accepted"],
+                },
+            )
+            accepted = self.client.post(
+                "/api/projects/proj-1/task-board/events",
+                json={
+                    "task_id": "T-accepted",
+                    "title": "Accepted cannot be posted",
+                    "state": "accepted",
+                    "source_stage": "acceptance_confirm",
+                    "decision": "approved",
+                    "run_id": "run-accepted",
+                    "artifact_dir": str(self.project_root / ".ai" / "team-output" / "run-accepted"),
+                    "decision_ids": ["human:run-accepted:acceptance_confirm:1"],
+                },
+            )
+            good = self.client.post(
+                "/api/projects/proj-1/task-board/events",
+                json={
+                    "task_id": "T-good",
+                    "title": "Good planned",
+                    "state": "planned",
+                    "source_stage": "planning",
+                    "run_id": "run-good",
+                    "artifact_dir": str(self.project_root / ".ai" / "team-output" / "run-good"),
+                    "decision_ids": ["artifact:run-good:task-plan:task-1"],
+                },
+            )
+
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(accepted.status_code, 400)
+        self.assertIn("final pipeline acceptance", accepted.json()["detail"])
+        self.assertEqual(good.status_code, 200)
+        self.assertEqual(good.json()["task"]["id"], "T-good")
+
+
 if __name__ == "__main__":
     unittest.main()

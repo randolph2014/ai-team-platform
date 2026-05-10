@@ -44,6 +44,7 @@ from .models import AgentDefinition, AgentRun, HumanDecision, RequirementUnit, R
 from .requirement_splitter import estimate_prompt_size, should_split, split_requirement
 from .runtimes import _cli_config_model, backfill_runtime_models, resolve_auto_cli, runtime_config
 from .stage_context import build_stage_context
+from .task_board import record_run_task_event
 from .truncate_utils import truncate_with_fallback
 from .quality_gates import (
     has_blocking_failure,
@@ -329,6 +330,8 @@ class Orchestrator:
             record_run(report.status)
             logger.info("pipeline run completed status=%s duration=%.1fs", report.status, report.duration_seconds)
             self.bus.emit("run:completed", report.run_id, status=report.status, summary={"duration": report.duration_seconds})
+            if report.status == "completed" and self._has_approved_acceptance(report):
+                self._record_task_board_event(report, output_dir, "accepted", "acceptance_confirm")
             self._write_report(report, output_dir)
             generate_release_readiness(report, output_dir)
             if report.status == "completed":
@@ -490,9 +493,21 @@ class Orchestrator:
                 return "waiting"
 
             if stage_run.status not in {"completed", "skipped"}:
+                if stage_id == "qa":
+                    self._record_task_board_event(report, artifact_dir, "qa_failed", "qa", stage_run.error_message or "QA stage failed")
+                elif stage_id == "review":
+                    self._record_task_board_event(
+                        report,
+                        artifact_dir,
+                        "review_changes_requested",
+                        "review",
+                        stage_run.error_message or "Review stage failed",
+                    )
                 raise OrchestratorError(stage_run.error_message or f"Stage failed: {stage_id}")
 
             if stage_run.human_decision and stage_run.human_decision.decision == "rejected":
+                if stage_id == "acceptance_confirm":
+                    self._record_task_board_event(report, artifact_dir, "rejected", "acceptance_confirm", stage_run.human_decision.reason)
                 target = stage_run.human_decision.target_stage
                 if not target:
                     raise OrchestratorError(f"Human reject target not found: {target}")
@@ -577,6 +592,16 @@ class Orchestrator:
                     to_stage=target,
                     iteration=count + 1,
                 )
+                if stage_id == "qa":
+                    self._record_task_board_event(report, artifact_dir, "qa_failed", "qa", f"QA loopback to {target}")
+                elif stage_id == "review":
+                    self._record_task_board_event(
+                        report,
+                        artifact_dir,
+                        "review_changes_requested",
+                        "review",
+                        f"Review loopback to {target}",
+                    )
                 log_loopback(report.run_id, stage_id, target, count)
                 target_index = stage_index_by_id[target]
                 target_stage_ids = {s.get("id") for s in stages[target_index:]}
@@ -616,6 +641,13 @@ class Orchestrator:
                         from_stage=stage_id,
                         to_stage=target,
                         iteration=count + 1,
+                    )
+                    self._record_task_board_event(
+                        report,
+                        artifact_dir,
+                        "review_changes_requested",
+                        "review",
+                        f"Review requested changes: {review_info['summary']}",
                     )
                     log_loopback(report.run_id, stage_id, target, count)
                     target_index = stage_index_by_id[target]
@@ -1056,6 +1088,29 @@ class Orchestrator:
             if decision.stage_id == stage_id and decision.decision == "rejected"
         )
 
+    def _has_approved_acceptance(self, report: RunReport) -> bool:
+        return any(
+            decision.stage_id == "acceptance_confirm" and decision.decision == "approved"
+            for decision in report.human_decisions
+        )
+
+    def _record_task_board_event(
+        self,
+        report: RunReport,
+        artifact_dir: Path,
+        state: str,
+        source_stage: str,
+        message: str = "",
+    ) -> None:
+        record_run_task_event(
+            self.project_root,
+            report,
+            artifact_dir,
+            state=state,  # type: ignore[arg-type]
+            source_stage=source_stage,
+            message=message,
+        )
+
     def _load_human_decisions_from_checkpoint(self, checkpoint: Dict[str, Any], report: RunReport) -> List[HumanDecision]:
         decisions: List[HumanDecision] = []
         raw_items = checkpoint.get("human_decisions", [])
@@ -1134,9 +1189,9 @@ class Orchestrator:
         output_json = output_dir / str(stage.get("output_json")) if stage.get("output_json") else None
         scan_root = worktree_path or self.project_root
         try:
-            scan_codebase(scan_root, None, output_file, self.config.get("context_scanner"))
+            scan_codebase(scan_root, None, output_file, self.config.get("context_scanner"), requirement_text=report.requirement)
             if output_json:
-                output_json.write_text(scan_to_json(scan_root, self.config.get("context_scanner")), encoding="utf-8")
+                output_json.write_text(scan_to_json(scan_root, self.config.get("context_scanner"), requirement_text=report.requirement), encoding="utf-8")
             validations = validate_required_artifacts(stage, output_dir)
             stage_run.artifact_validations.extend(validations)
             if has_artifact_validation_failure(validations):

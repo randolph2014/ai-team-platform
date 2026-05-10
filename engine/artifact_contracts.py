@@ -162,7 +162,49 @@ def validate_review_verdict_consistency(data: Dict[str, Any]) -> List[str]:
     return errors
 
 
-def validate_artifact(data: Dict[str, Any], artifact_name: str) -> Tuple[List[str], str]:
+def validate_related_task_decisions(data: Dict[str, Any], related_tasks: List[Dict[str, Any]]) -> List[str]:
+    if not related_tasks:
+        return []
+    related_ids = [str(item.get("task_id") or "").strip() for item in related_tasks if str(item.get("task_id") or "").strip()]
+    if not related_ids:
+        return []
+    decisions = data.get("related_task_decisions")
+    if not isinstance(decisions, list):
+        return ["related_task_decisions is required when codebase-context.json contains harness.related_tasks"]
+    by_task = {str(item.get("task_id") or "").strip(): item for item in decisions if isinstance(item, dict)}
+    errors: List[str] = []
+    for task_id in related_ids:
+        item = by_task.get(task_id)
+        if item is None:
+            errors.append(f"related_task_decisions missing adopt/reject reason for task {task_id}")
+            continue
+        action = item.get("action")
+        reason = str(item.get("reason") or "").strip()
+        if action not in {"adopted", "rejected"}:
+            errors.append(f"related_task_decisions[{task_id}].action must be adopted or rejected")
+        if not reason:
+            errors.append(f"related_task_decisions[{task_id}].reason is required")
+    return errors
+
+
+def _related_tasks_from_context(output_dir: Path) -> List[Dict[str, Any]]:
+    context_path = output_dir / "codebase-context.json"
+    if not context_path.exists():
+        return []
+    try:
+        payload = json.loads(context_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    harness = payload.get("harness") or {}
+    if not isinstance(harness, dict):
+        return []
+    related = harness.get("related_tasks") or []
+    return [item for item in related if isinstance(item, dict)] if isinstance(related, list) else []
+
+
+def validate_artifact(data: Dict[str, Any], artifact_name: str, related_tasks: Optional[List[Dict[str, Any]]] = None) -> Tuple[List[str], str]:
     errors: List[str] = []
 
     schema_errors = validate_artifact_schema(data, artifact_name)
@@ -170,6 +212,9 @@ def validate_artifact(data: Dict[str, Any], artifact_name: str) -> Tuple[List[st
 
     if Path(artifact_name).name == "task-plan.json":
         errors.extend(validate_task_plan_acceptance_refs(data))
+
+    if Path(artifact_name).name in {"requirement-final.json", "task-plan.json"}:
+        errors.extend(validate_related_task_decisions(data, related_tasks or []))
 
     if Path(artifact_name).name == "review-report.json":
         errors.extend(validate_review_verdict_consistency(data))
@@ -180,6 +225,7 @@ def validate_artifact(data: Dict[str, Any], artifact_name: str) -> Tuple[List[st
 
 def validate_required_artifacts(stage: Dict[str, Any], output_dir: Path) -> List[ArtifactValidationRun]:
     results: List[ArtifactValidationRun] = []
+    related_tasks = _related_tasks_from_context(output_dir)
     for artifact in stage.get("required_artifacts") or []:
         path = output_dir / str(artifact)
         if not path.exists():
@@ -194,7 +240,7 @@ def validate_required_artifacts(stage: Dict[str, Any], output_dir: Path) -> List
             if not isinstance(payload, dict):
                 results.append(ArtifactValidationRun(artifact=str(artifact), status="failed", message="json artifact must be an object"))
                 continue
-            errors, status = validate_artifact(payload, str(artifact))
+            errors, status = validate_artifact(payload, str(artifact), related_tasks=related_tasks)
             if errors:
                 results.append(ArtifactValidationRun(artifact=str(artifact), status="failed", message="; ".join(errors[:5])))
             else:

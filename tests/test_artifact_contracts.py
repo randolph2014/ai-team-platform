@@ -249,6 +249,51 @@ class TestTaskPlanValidation(unittest.TestCase):
         self.assertEqual(status, "failed")
 
 
+class TestRelatedTaskArtifactReasons(unittest.TestCase):
+    def test_requirement_requires_related_task_adopt_or_reject_reason_when_context_has_related_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            (output_dir / "codebase-context.json").write_text(
+                json.dumps({"harness": {"related_tasks": [{"task_id": "T-checkout"}]}}),
+                encoding="utf-8",
+            )
+            (output_dir / "requirement-final.json").write_text(
+                json.dumps(_valid_requirement(), ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            results = validate_required_artifacts({"required_artifacts": ["requirement-final.json"]}, output_dir)
+
+        self.assertEqual(results[0].status, "failed")
+        self.assertIn("related_task_decisions", results[0].message)
+
+    def test_task_plan_accepts_related_task_decisions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            task_plan = _valid_task_plan()
+            task_plan["related_task_decisions"] = [
+                {
+                    "task_id": "T-checkout",
+                    "action": "adopted",
+                    "reason": "沿用已验收支付幂等设计",
+                    "decision_ids": ["D-checkout"],
+                }
+            ]
+            (output_dir / "codebase-context.json").write_text(
+                json.dumps({"harness": {"related_tasks": [{"task_id": "T-checkout"}]}}),
+                encoding="utf-8",
+            )
+            (output_dir / "task-plan.json").write_text(json.dumps(task_plan, ensure_ascii=False), encoding="utf-8")
+
+            results = validate_required_artifacts({"required_artifacts": ["task-plan.json"]}, output_dir)
+
+        self.assertEqual(results[0].status, "passed", results[0].message)
+
+    def test_no_related_tasks_keeps_related_decisions_optional(self) -> None:
+        errors, status = validate_artifact(_valid_requirement(), "requirement-final.json")
+        self.assertEqual(status, "passed", errors)
+
+
 class TestTestReportValidation(unittest.TestCase):
     def test_valid_test_report_passes(self):
         errors, status = validate_artifact(_valid_test_report(), "test-report.json")

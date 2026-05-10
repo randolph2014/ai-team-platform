@@ -2409,3 +2409,98 @@ worktree:
 
             self.assertIn("[git-diff truncated, original chars:", prompt)
             self.assertIn("limit: 200", prompt)
+
+
+class TestHarnessTaskBoardLifecycle(unittest.TestCase):
+    def _write_minimal_config(self, root: Path) -> Path:
+        config = root / "team.yaml"
+        config.write_text(
+            """
+runtimes:
+  Mock:
+    cli: mock
+    response: "ok"
+agents:
+  - name: planner
+    runtime_id: Mock
+    prompt: agents/planner.md
+pipeline: []
+worktree:
+  enabled: false
+""",
+            encoding="utf-8",
+        )
+        (root / "agents").mkdir()
+        (root / "agents" / "planner.md").write_text("Plan.", encoding="utf-8")
+        return config
+
+    def test_task_board_only_accepts_final_human_approval(self) -> None:
+        from engine.models import RunReport
+        from engine.task_board import load_tasks
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_minimal_config(root)
+            artifact_dir = root / ".ai" / "team-output" / "run-accepted"
+            artifact_dir.mkdir(parents=True)
+            (artifact_dir / "requirement-final.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Accepted task board work",
+                        "goals": [{"id": "G-1", "description": "Task board"}],
+                        "non_goals": [],
+                        "scope": {"included": ["task board"], "excluded": []},
+                        "acceptance_criteria": [
+                            {"id": "AC-001", "description": "records accepted", "verification_method": "pytest"}
+                        ],
+                        "risks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report = RunReport(
+                run_id="run-accepted",
+                status="completed",
+                requirement="Implement task board",
+                project_root=str(root),
+                output_dir=str(artifact_dir),
+                config_source="customized",
+                human_decisions=[HumanDecision(stage_id="acceptance_confirm", decision="approved", reason="ok")],
+            )
+            orchestrator = Orchestrator(root, config_path=str(config))
+
+            orchestrator._record_task_board_event(report, artifact_dir, "accepted", "acceptance_confirm")
+            task = load_tasks(root)[0]
+
+        self.assertEqual(task.state, "accepted")
+        self.assertIn("human:run-accepted:acceptance_confirm:1", task.decision_ids)
+
+    def test_task_board_records_non_accepted_lifecycle_events(self) -> None:
+        from engine.models import RunReport
+        from engine.task_board import load_tasks
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_minimal_config(root)
+            artifact_dir = root / ".ai" / "team-output" / "run-failed"
+            artifact_dir.mkdir(parents=True)
+            report = RunReport(
+                run_id="run-failed",
+                status="paused",
+                requirement="Implement task board",
+                project_root=str(root),
+                output_dir=str(artifact_dir),
+                config_source="customized",
+                human_decisions=[HumanDecision(stage_id="acceptance_confirm", decision="rejected", reason="not enough")],
+            )
+            orchestrator = Orchestrator(root, config_path=str(config))
+
+            orchestrator._record_task_board_event(report, artifact_dir, "qa_failed", "qa")
+            orchestrator._record_task_board_event(report, artifact_dir, "review_changes_requested", "review")
+            orchestrator._record_task_board_event(report, artifact_dir, "rejected", "acceptance_confirm")
+            task = load_tasks(root)[0]
+
+        self.assertEqual(task.state, "rejected")
+        self.assertNotEqual(task.state, "accepted")
+        self.assertEqual([item["state"] for item in task.state_history], ["qa_failed", "review_changes_requested", "rejected"])

@@ -26,6 +26,7 @@ Planner 是默认团队的方案主脑，负责需求理解、需求定稿、任
 - `scope`
 - `acceptance_criteria`
 - `risks`
+- `related_task_decisions`（当 codebase-context 中存在 `Harness Related Tasks` 时必须逐条说明采纳或拒绝理由）
 
 示例结构：
 ```json
@@ -43,6 +44,14 @@ Planner 是默认团队的方案主脑，负责需求理解、需求定稿、任
   "open_questions": [],
   "acceptance_coverage": [{"acceptance_id": "AC-001", "covered_by": "G-1", "status": "covered"}],
   "evidence": [{"source": "codebase-context.json", "finding": "证据", "supports": "结论"}],
+  "related_task_decisions": [
+    {
+      "task_id": "历史任务 ID",
+      "action": "adopted|rejected",
+      "reason": "说明本次需求为什么采纳或拒绝该历史任务/决策/风险上下文",
+      "decision_ids": ["可追溯的历史 decision id"]
+    }
+  ],
   "next_stage_contract": {
     "required_inputs_for_planner": ["requirement-final.json", "requirement-final.md", "codebase-context.json"]
   }
@@ -72,10 +81,12 @@ Planner 是默认团队的方案主脑，负责需求理解、需求定稿、任
 - `summary`
 - `tasks`
 - `execution_order`
+- `related_task_decisions`（当 codebase-context 或 requirement-final.json 中存在 related task 时必须逐条说明采纳或拒绝理由）
 
 每个 task 必须包含 `acceptance_criteria_refs`，并且每个引用都必须是 `AC-xxx` 格式。不要使用旧字段 `acceptance_criteria` 代替 `acceptance_criteria_refs`。
 
 任务计划必须包含清晰的 `file_boundaries`、`test_plan`、`rollback_considerations`、`acceptance_coverage`、`evidence` 和 `risk_items`，供 Coder 严格按边界实施。
+如果上下文包含 `Harness Related Tasks`，规划阶段必须把每个 related task 的采纳或拒绝理由写入 Markdown，并同步写入 `task-plan.json.related_task_decisions`；不能只引用任务 ID 而不说明理由。
 
 ### retrospect
 输出 `retrospect-report.md` 和 `retrospect-report.json`。请直接输出 Markdown，并在末尾输出一个 ` ```json ` 代码块生成 `retrospect-report.json`。

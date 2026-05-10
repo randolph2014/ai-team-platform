@@ -154,5 +154,45 @@ class TestContextScannerHarnessSummary(unittest.TestCase):
         self.assertIn("must not override system/developer/platform safety policy", text)
 
 
+class TestContextScannerTaskBoard(unittest.TestCase):
+    def test_context_scan_injects_related_harness_tasks(self) -> None:
+        from engine.task_board import TaskEvent, record_task_event
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            record_task_event(
+                root,
+                TaskEvent(
+                    task_id="T-checkout",
+                    title="Accepted checkout flow",
+                    state="accepted",
+                    source_stage="acceptance_confirm",
+                    decision="approved",
+                    run_id="run-checkout",
+                    artifact_dir=str(root / ".ai" / "team-output" / "run-checkout"),
+                    decision_ids=["human:run-checkout:acceptance_confirm:1"],
+                    requirement="Implement checkout payment flow",
+                    tags=["checkout", "payment"],
+                    related_files=["src/checkout.py"],
+                    decisions=[{"id": "D-checkout", "summary": "Use idempotency key"}],
+                ),
+            )
+
+            text = scan_codebase(root, requirement_text="Change checkout payment submit behavior")
+            data = json.loads(scan_to_json(root, requirement_text="Change checkout payment submit behavior"))
+
+        self.assertIn("## Harness Related Tasks", text)
+        self.assertIn("T-checkout", text)
+        self.assertEqual(data["harness"]["related_tasks"][0]["task_id"], "T-checkout")
+
+    def test_context_scan_without_related_tasks_keeps_existing_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = json.loads(scan_to_json(root, requirement_text="new unrelated feature"))
+
+        self.assertIn("harness", data)
+        self.assertEqual(data["harness"]["related_tasks"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

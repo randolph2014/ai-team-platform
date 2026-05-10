@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set
 
 from .harness import render_harness_summary_markdown, summarize_harness
+from .task_board import related_tasks_for_context, render_related_tasks_markdown
 
 
 WELL_KNOWN_FILES = {
@@ -333,7 +334,7 @@ class ContextScanner:
                     break
         return selected[: self.max_context_files]
 
-    def scan(self, solution_draft: str = "") -> str:
+    def scan(self, solution_draft: str = "", requirement_text: str = "") -> str:
         project_types = detect_project_types(self.project_root)
         checklist_files = parse_implementation_checklist(solution_draft)
         selected_files = self.select_relevant_files(checklist_files)
@@ -363,6 +364,10 @@ class ContextScanner:
         harness_markdown = render_harness_summary_markdown(summarize_harness(self.project_root))
         if harness_markdown:
             sections.extend(["", harness_markdown.rstrip()])
+        related_tasks = related_tasks_for_context(self.project_root, requirement_text)
+        related_markdown = render_related_tasks_markdown(related_tasks)
+        if related_markdown:
+            sections.extend(["", related_markdown.rstrip()])
 
         for title, file_map in (
             ("Project Instructions", self.instruction_files()),
@@ -413,23 +418,26 @@ def scan_codebase(
     solution_draft_path: Optional[Path] = None,
     output_path: Optional[Path] = None,
     config: Optional[Dict] = None,
+    requirement_text: str = "",
 ) -> str:
     solution_draft = ""
     if solution_draft_path and Path(solution_draft_path).exists():
         solution_draft = Path(solution_draft_path).read_text(encoding="utf-8", errors="replace")
-    text = ContextScanner(Path(project_root), config=config).scan(solution_draft)
+    text = ContextScanner(Path(project_root), config=config).scan(solution_draft, requirement_text=requirement_text)
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_text(text, encoding="utf-8")
     return text
 
 
-def scan_to_json(project_root: Path, config: Optional[Dict] = None) -> str:
+def scan_to_json(project_root: Path, config: Optional[Dict] = None, requirement_text: str = "") -> str:
     scanner = ContextScanner(project_root, config=config)
+    harness_summary = summarize_harness(project_root)
+    harness_summary["related_tasks"] = related_tasks_for_context(project_root, requirement_text)
     payload = {
         "project_root": str(project_root),
         "project_types": detect_project_types(project_root),
         "tree": scanner.generate_tree(),
-        "harness": summarize_harness(project_root),
+        "harness": harness_summary,
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)

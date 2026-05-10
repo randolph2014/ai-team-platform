@@ -14,15 +14,18 @@ from engine.harness import (
 )
 from engine.harness_checks import run_harness_verification
 from engine.production_guard import is_production_mode
+from engine.task_board import TaskBoardError, TaskEvent, TaskStateError, build_snapshot, find_related_tasks, record_task_event
 
 from ..db import try_persistence
 
 try:
     from fastapi import APIRouter, Depends, HTTPException, Request
     from fastapi.responses import JSONResponse
+    from pydantic import ValidationError
 except ImportError:  # pragma: no cover
     APIRouter = None
     Request = object
+    ValidationError = Exception
 
 
 router = APIRouter() if APIRouter else None
@@ -172,6 +175,39 @@ if router:
             return report
         except HarnessError as exc:
             raise _harness_400(exc) from exc
+
+    @router.get("/projects/{project_id}/task-board")
+    async def get_task_board(project_id: str, request: Request, q: Optional[str] = None, user: Dict[str, Any] = _get_auth()):
+        _reject_workdir(request)
+        project_root = await _resolve_project_root(project_id, user)
+        try:
+            snapshot = build_snapshot(project_root, write=False)
+            related = find_related_tasks(project_root, q or "") if q else []
+            return {
+                "project_id": project_id,
+                "summary": snapshot["summary"],
+                "tasks": snapshot["tasks"],
+                "related_tasks": related,
+            }
+        except TaskBoardError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/projects/{project_id}/task-board/events")
+    async def post_task_board_event(project_id: str, request: Request, user: Dict[str, Any] = _get_auth()):
+        body = await _request_json(request)
+        _reject_workdir(request, body)
+        project_root = await _resolve_project_root(project_id, user)
+        try:
+            event = TaskEvent.model_validate(body)
+            if event.state == "accepted":
+                raise TaskStateError("accepted task state is written only by final pipeline acceptance")
+            task = record_task_event(project_root, event)
+            return {
+                "project_id": project_id,
+                "task": task.model_dump(mode="json"),
+            }
+        except (ValidationError, TaskStateError, TaskBoardError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.put("/projects/{project_id}/harness")
     async def update_harness(project_id: str, request: Request, user: Dict[str, Any] = _get_auth()):

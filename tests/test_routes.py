@@ -1140,6 +1140,7 @@ class TestRunsRoutes(BaseRoutesTest):
 class TestCancelRetryRoutes(BaseRoutesTest):
     def test_cancel_queued_run(self) -> None:
         from engine.models import RunReport
+        from engine.task_board import load_tasks, task_id_for_run
 
         run_id = "cancel-test-run"
         output_dir = self.project_root / ".ai" / "team-output" / run_id
@@ -1166,6 +1167,11 @@ class TestCancelRetryRoutes(BaseRoutesTest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["status"], "cancelled")
+        task = next(task for task in load_tasks(self.project_root) if task.id == task_id_for_run(run_id))
+        self.assertEqual(task.state, "cancelled")
+        self.assertEqual(task.run_id, run_id)
+        self.assertIn(output_dir.resolve(), [Path(path).resolve() for path in task.artifact_dirs])
+        self.assertIn(f"run:{run_id}:cancel:cancelled", task.decision_ids)
 
     def test_cancel_completed_run_returns_409(self) -> None:
         from engine.models import RunReport
@@ -1197,6 +1203,47 @@ class TestCancelRetryRoutes(BaseRoutesTest):
             params={"workdir": str(self.project_root)},
         )
         self.assertEqual(response.status_code, 404)
+
+    def test_cancel_run_does_not_overwrite_accepted_task_state(self) -> None:
+        from engine.models import RunReport
+        from engine.task_board import TaskEvent, load_tasks, record_task_event, task_id_for_run
+
+        run_id = "cancel-accepted-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        report = RunReport(
+            run_id=run_id,
+            status="running",
+            requirement="accepted req",
+            project_root=str(self.project_root),
+            output_dir=str(output_dir),
+            config_source="default",
+        )
+        report.write(output_dir / "report.json")
+        task_id = task_id_for_run(run_id)
+        record_task_event(
+            self.project_root,
+            TaskEvent(
+                task_id=task_id,
+                title="accepted req",
+                state="accepted",
+                source_stage="acceptance_confirm",
+                decision="approved",
+                run_id=run_id,
+                artifact_dir=str(output_dir),
+                decision_ids=[f"human:{run_id}:acceptance_confirm:1"],
+            ),
+        )
+
+        response = self.client.post(
+            f"/api/runs/{run_id}/cancel",
+            params={"workdir": str(self.project_root)},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = next(task for task in load_tasks(self.project_root) if task.id == task_id)
+        self.assertEqual(task.state, "accepted")
+        self.assertTrue(any(item["state"] == "cancelled" for item in task.state_history))
 
     def test_retry_failed_run(self) -> None:
         from engine.models import RunReport
