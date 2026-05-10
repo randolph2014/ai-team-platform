@@ -71,6 +71,11 @@ def _hydrate_stage(stage: Any) -> Dict[str, Any]:
         stage_data.setdefault("output_json", "codebase-context.json")
         stage_data.setdefault("required_artifacts", ["codebase-context.md", "codebase-context.json"])
 
+    if stage_id == "harness_verify":
+        stage_data["type"] = "harness_verify"
+        stage_data.setdefault("output_file", "harness-report.json")
+        stage_data.setdefault("required_artifacts", ["harness-report.json"])
+
     if "parallel" in stage_data and "is_parallel" not in stage_data:
         stage_data["is_parallel"] = bool(stage_data["parallel"])
 
@@ -165,6 +170,7 @@ BUILTIN_TEMPLATES: List[Dict[str, Any]] = [
             "task_plan_confirm",
             "develop",
             "qa",
+            "harness_verify",
             "review",
             "acceptance_confirm",
             "retrospect",
@@ -216,6 +222,7 @@ BUILTIN_TEMPLATES: List[Dict[str, Any]] = [
                 ],
             ),
             _stage("qa", name="回归测试"),
+            "harness_verify",
             _stage("review", name="修复审查与风险识别"),
             _stage("acceptance_confirm", name="修复结果人工验收"),
         ],

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
 from engine.quality_gates import (
+    QualityGateExecutionPolicy,
     QualityGateError,
     has_blocking_failure,
     inject_default_gates,
@@ -37,6 +42,101 @@ class TestQualityGateCommand(unittest.TestCase):
             )
             self.assertEqual(result.status, "failed")
             self.assertNotEqual(result.exit_code, 0)
+
+
+class TestQualityGateExecutionPolicy(unittest.TestCase):
+    def test_policy_rejects_cwd_outside_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as root_tmp, tempfile.TemporaryDirectory() as outside_tmp:
+            root = Path(root_tmp)
+            outside = Path(outside_tmp)
+            result = run_quality_gate(
+                {"name": "safe-cwd", "type": "command", "command": "echo ok", "required": True, "timeout_seconds": 1},
+                outside,
+                "run-policy",
+                execution_policy=QualityGateExecutionPolicy(allowed_cwd_roots=[root], require_timeout=True),
+            )
+
+        self.assertEqual(result.status, "failed")
+        self.assertIsNone(result.exit_code)
+        self.assertIn("outside allowed roots", result.output or "")
+
+    def test_policy_requires_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = run_quality_gate(
+                {"name": "timeout-required", "type": "command", "command": "echo ok", "required": True},
+                root,
+                "run-policy",
+                execution_policy=QualityGateExecutionPolicy(allowed_cwd_roots=[root], require_timeout=True),
+            )
+
+        self.assertEqual(result.status, "failed")
+        self.assertIsNone(result.exit_code)
+        self.assertIn("timeout is required", result.output or "")
+
+    def test_policy_rejects_missing_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing = root / "missing"
+            result = run_quality_gate(
+                {"name": "missing-cwd", "type": "command", "command": "echo ok", "required": True, "timeout_seconds": 1},
+                missing,
+                "run-policy",
+                execution_policy=QualityGateExecutionPolicy(allowed_cwd_roots=[root], require_timeout=True),
+            )
+
+        self.assertEqual(result.status, "failed")
+        self.assertIsNone(result.exit_code)
+        self.assertIn("does not exist", result.output or "")
+
+    def test_policy_truncates_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = run_quality_gate(
+                {
+                    "name": "truncate",
+                    "type": "command",
+                    "command": f'"{sys.executable}" -c "print(\'x\' * 100)"',
+                    "required": True,
+                    "timeout_seconds": 5,
+                },
+                root,
+                "run-policy",
+                execution_policy=QualityGateExecutionPolicy(
+                    allowed_cwd_roots=[root],
+                    require_timeout=True,
+                    output_limit=10,
+                    env_allowlist=["PATH"],
+                ),
+            )
+
+        self.assertEqual(result.status, "passed")
+        self.assertTrue(result.output_truncated)
+        self.assertLessEqual(len(result.output or ""), 10)
+
+    def test_policy_env_uses_allowlist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"HARNESS_SECRET_TOKEN": "secret"}, clear=False):
+            root = Path(tmp)
+            result = run_quality_gate(
+                {
+                    "name": "env",
+                    "type": "command",
+                    "command": f'"{sys.executable}" -c "import os; print(os.getenv(\'HARNESS_SECRET_TOKEN\', \'missing\'))"',
+                    "required": True,
+                    "timeout_seconds": 5,
+                },
+                root,
+                "run-policy",
+                execution_policy=QualityGateExecutionPolicy(
+                    allowed_cwd_roots=[root],
+                    require_timeout=True,
+                    env_allowlist=["PATH"],
+                ),
+            )
+
+        self.assertEqual(result.status, "passed")
+        self.assertIn("missing", result.output or "")
+        self.assertNotIn("secret", result.output or "")
 
 
 class TestQualityGateThreshold(unittest.TestCase):

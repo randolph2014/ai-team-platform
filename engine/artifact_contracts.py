@@ -14,6 +14,7 @@ SCHEMA_FILE_MAP: Dict[str, str] = {
     "test-report.json": "test-report.json",
     "review-report.json": "review-report.json",
     "release-readiness.json": "release-readiness.json",
+    "harness-report.json": "harness-report.json",
 }
 
 

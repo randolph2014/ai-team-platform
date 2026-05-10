@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import operator
+import os
 import re
 import subprocess
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -39,6 +41,21 @@ _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates" / "quality
 
 class QualityGateError(RuntimeError):
     pass
+
+
+@dataclass
+class QualityGateExecutionPolicy:
+    """Opt-in hardening for command execution.
+
+    Existing quality gate callers keep the historical behavior by omitting this
+    policy. Harness command checks must pass it so cwd, timeout, output, and env
+    controls are enforced in the shared runner instead of a parallel runner.
+    """
+
+    allowed_cwd_roots: List[Path] = field(default_factory=list)
+    require_timeout: bool = False
+    output_limit: int = 20_000
+    env_allowlist: Optional[List[str]] = None
 
 
 def validate_gates_config(gates: List[Dict], production: bool = False) -> None:
@@ -83,7 +100,39 @@ def inject_default_gates(project_root: Path, existing_gates: List[Dict]) -> List
         return existing_gates
 
 
-def _run_command(command: str, cwd: Path, timeout: Optional[int]) -> Tuple[int, str]:
+def _path_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(root.resolve(strict=False))
+        return True
+    except ValueError:
+        return False
+
+
+def _policy_failure(policy: Optional[QualityGateExecutionPolicy], cwd: Path, timeout: Optional[int]) -> Optional[str]:
+    if policy is None:
+        return None
+    if not cwd.is_dir():
+        return f"Quality gate cwd '{cwd.resolve(strict=False)}' does not exist or is not a directory"
+    if policy.allowed_cwd_roots and not any(_path_within(cwd, root) for root in policy.allowed_cwd_roots):
+        roots = ", ".join(str(root.resolve(strict=False)) for root in policy.allowed_cwd_roots)
+        return f"Quality gate cwd '{cwd.resolve(strict=False)}' is outside allowed roots: {roots}"
+    if policy.require_timeout and not timeout:
+        return "Quality gate timeout is required by execution policy"
+    return None
+
+
+def _policy_env(policy: Optional[QualityGateExecutionPolicy]) -> Optional[Dict[str, str]]:
+    if policy is None or policy.env_allowlist is None:
+        return None
+    return {key: os.environ[key] for key in policy.env_allowlist if key in os.environ}
+
+
+def _run_command(
+    command: str,
+    cwd: Path,
+    timeout: Optional[int],
+    policy: Optional[QualityGateExecutionPolicy] = None,
+) -> Tuple[int, str]:
     try:
         result = subprocess.run(
             command,
@@ -93,6 +142,7 @@ def _run_command(command: str, cwd: Path, timeout: Optional[int]) -> Tuple[int, 
             text=True,
             timeout=timeout,
             check=False,
+            env=_policy_env(policy),
         )
         output = "\n".join(part for part in [result.stdout, result.stderr] if part)
         return result.returncode, output
@@ -114,12 +164,21 @@ def _parse_threshold(gate: Dict, output: str) -> Optional[float]:
     return None
 
 
-def run_quality_gate(gate: Dict, cwd: Path, run_id: str, bus: Optional[EventBus] = None, retry_count: int = 0) -> QualityGateRun:
+def run_quality_gate(
+    gate: Dict,
+    cwd: Path,
+    run_id: str,
+    bus: Optional[EventBus] = None,
+    retry_count: int = 0,
+    execution_policy: Optional[QualityGateExecutionPolicy] = None,
+) -> QualityGateRun:
     name = gate.get("name") or gate.get("command") or "quality gate"
     gate_type = gate.get("type", "command")
     required = bool(gate.get("required", True))
     command = gate.get("command")
     timeout = gate.get("timeout_seconds") or gate.get("timeout")
+    gate_cwd = Path(gate.get("cwd") or cwd).expanduser().resolve(strict=False)
+    output_limit = execution_policy.output_limit if execution_policy else 20_000
     result = QualityGateRun(
         name=name,
         type=gate_type,
@@ -128,21 +187,30 @@ def run_quality_gate(gate: Dict, cwd: Path, run_id: str, bus: Optional[EventBus]
         retry_count=retry_count,
         status="running",
         started_at=utc_now(),
+        cwd=str(gate_cwd),
     )
     start = time.monotonic()
     if bus:
         bus.emit("gate:started", run_id, gate_name=name, command=command, retry_count=retry_count)
 
-    if gate_type not in {"command", "threshold"}:
+    policy_error = _policy_failure(execution_policy, gate_cwd, timeout)
+    if policy_error:
+        result.status = "failed" if required else "warning"
+        result.output = policy_error
+    elif gate_type not in {"command", "threshold"}:
         result.status = "skipped"
         result.output = f"Unsupported gate type: {gate_type}"
     elif not command:
         result.status = "failed" if required else "warning"
         result.output = "Missing gate command"
     else:
-        exit_code, output = _run_command(command, cwd, timeout)
+        exit_code, output = _run_command(command, gate_cwd, timeout, execution_policy)
         result.exit_code = exit_code
-        result.output = output[-20000:]
+        if output_limit >= 0 and len(output) > output_limit:
+            result.output = output[-output_limit:]
+            result.output_truncated = True
+        else:
+            result.output = output
         if gate_type == "threshold":
             actual = _parse_threshold(gate, output)
             threshold = float(gate.get("threshold", 0))
@@ -179,8 +247,18 @@ def run_quality_gate(gate: Dict, cwd: Path, run_id: str, bus: Optional[EventBus]
     return result
 
 
-def run_quality_gates(gates: Iterable[Dict], cwd: Path, run_id: str, bus: Optional[EventBus] = None, retry_count: int = 0) -> List[QualityGateRun]:
-    return [run_quality_gate(gate, cwd, run_id, bus=bus, retry_count=retry_count) for gate in gates]
+def run_quality_gates(
+    gates: Iterable[Dict],
+    cwd: Path,
+    run_id: str,
+    bus: Optional[EventBus] = None,
+    retry_count: int = 0,
+    execution_policy: Optional[QualityGateExecutionPolicy] = None,
+) -> List[QualityGateRun]:
+    return [
+        run_quality_gate(gate, cwd, run_id, bus=bus, retry_count=retry_count, execution_policy=execution_policy)
+        for gate in gates
+    ]
 
 
 def has_blocking_failure(results: Iterable[QualityGateRun]) -> bool:

@@ -107,6 +107,44 @@ class TestHarnessSchemaValidation(HarnessTempProject):
         self.assertTrue(bundle.validation["valid"])
         self.assertEqual(bundle.summary["skills_count"], 1)
 
+    def test_check_schema_requires_command_timeout_and_metadata(self) -> None:
+        self.write_harness(
+            "schema_version: '1.0'\n"
+            "checks:\n"
+            "  - id: cmd.missing-timeout\n"
+            "    type: command\n"
+            "    command: \"echo ok\"\n"
+        )
+
+        with self.assertRaises(HarnessSchemaError):
+            load_harness_bundle(self.root)
+
+        self.write_harness(
+            "schema_version: '1.0'\n"
+            "checks:\n"
+            "  - id: cmd.valid\n"
+            "    type: command\n"
+            "    command: \"echo ok\"\n"
+            "    timeout_seconds: 5\n"
+        )
+
+        bundle = load_harness_bundle(self.root)
+        self.assertEqual(bundle.config.checks[0].id, "cmd.valid")
+
+    def test_check_schema_rejects_unsafe_command_cwd(self) -> None:
+        self.write_harness(
+            "schema_version: '1.0'\n"
+            "checks:\n"
+            "  - id: cmd.unsafe-cwd\n"
+            "    type: command\n"
+            "    command: \"echo ok\"\n"
+            "    timeout_seconds: 5\n"
+            "    cwd: ../outside\n"
+        )
+
+        with self.assertRaises(HarnessSchemaError):
+            load_harness_bundle(self.root)
+
 
 class TestHarnessPathSafety(HarnessTempProject):
     def test_allows_only_harness_yaml_and_harness_directory(self) -> None:
@@ -119,7 +157,7 @@ class TestHarnessPathSafety(HarnessTempProject):
             (self.root / ".ai" / "harness" / "rules" / "security.md").resolve(strict=False),
         )
         with self.assertRaises(HarnessPathError):
-            resolve_harness_path(self.root, ".ai/team.yaml")
+            resolve_harness_path(self.root, ".ai/not-harness.yaml")
 
     def test_rejects_absolute_path(self) -> None:
         with self.assertRaises(HarnessPathError):
@@ -127,7 +165,7 @@ class TestHarnessPathSafety(HarnessTempProject):
 
     def test_rejects_parent_traversal(self) -> None:
         with self.assertRaises(HarnessPathError):
-            resolve_harness_path(self.root, ".ai/harness/../team.yaml")
+            resolve_harness_path(self.root, ".ai/harness/../not-harness.yaml")
 
     def test_rejects_symlink_escape(self) -> None:
         outside = self.root.parent / f"{self.root.name}-outside"

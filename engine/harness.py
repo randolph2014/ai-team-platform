@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 HARNESS_CONFIG_PATH = ".ai/harness.yaml"
@@ -66,6 +66,37 @@ class HarnessCheckRef(BaseModel):
     pattern: Optional[str] = None
     severity: Optional[str] = None
     blocking: Optional[bool] = None
+    timeout_seconds: Optional[int] = None
+    globs: List[str] = Field(default_factory=list)
+    exclude: List[str] = Field(default_factory=list)
+    baseline_file: Optional[str] = None
+    metric: Optional[str] = None
+    operator: Optional[str] = None
+    threshold: Optional[float] = None
+    env_allowlist: List[str] = Field(default_factory=list)
+    cwd: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_checks_metadata(self) -> "HarnessCheckRef":
+        check_type = self.type
+        if check_type and check_type not in {"pattern", "command", "baseline"}:
+            raise ValueError("harness check type must be one of: pattern, command, baseline")
+        if self.severity and self.severity not in {"info", "warning", "error"}:
+            raise ValueError("harness check severity must be one of: info, warning, error")
+        if check_type == "command":
+            if not self.command:
+                raise ValueError("command checks require command")
+            if not self.timeout_seconds or self.timeout_seconds <= 0:
+                raise ValueError("command checks require positive timeout_seconds")
+        if check_type == "pattern" and not self.pattern:
+            raise ValueError("pattern checks require pattern")
+        if check_type == "baseline" and not self.baseline_file:
+            raise ValueError("baseline checks require baseline_file")
+        if self.cwd:
+            pure = PurePosixPath(self.cwd)
+            if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts) or "\\" in self.cwd:
+                raise ValueError("command check cwd must be a safe relative POSIX path")
+        return self
 
 
 class HarnessConfig(BaseModel):
@@ -214,6 +245,8 @@ def _referenced_files(config: HarnessConfig) -> List[str]:
     for item in config.checks:
         if item.file:
             refs.append(item.file)
+        if item.baseline_file:
+            refs.append(item.baseline_file)
     return refs
 
 

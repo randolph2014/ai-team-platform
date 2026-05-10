@@ -211,7 +211,7 @@ class TestHarnessWriteSafety(HarnessRoutesTest):
             current = self.client.get("/api/projects/proj-1/harness").json()["manifest_hash"]
             response = self.client.put(
                 "/api/projects/proj-1/harness",
-                json={"manifest_hash": current, "files": [{"path": ".ai/team.yaml", "content": "bad"}]},
+                json={"manifest_hash": current, "files": [{"path": ".ai/not-harness.yaml", "content": "bad"}]},
             )
 
         self.assertEqual(response.status_code, 400)
@@ -230,6 +230,62 @@ class TestHarnessValidationApi(HarnessRoutesTest):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual((self.project_root / ".ai" / "harness.yaml").read_text(encoding="utf-8"), "schema_version: '1.0'\n")
+
+
+class TestHarnessChecksRunApi(HarnessRoutesTest):
+    def test_checks_run_uses_repository_config(self) -> None:
+        (self.project_root / ".ai" / "harness.yaml").write_text(
+            "schema_version: '1.0'\n"
+            "checks:\n"
+            "  - id: cmd.api\n"
+            "    type: command\n"
+            "    command: \"echo ok\"\n"
+            "    timeout_seconds: 5\n",
+            encoding="utf-8",
+        )
+        fake_db, fake_repo = self.fake_db()
+
+        with patch("api.routes.harness.try_persistence", return_value=fake_db), \
+             patch("api.routes.harness._get_project_repo", return_value=fake_repo):
+            response = self.client.post("/api/projects/proj-1/harness/checks/run", json={"run_id": "api-run"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["project_id"], "proj-1")
+        self.assertEqual(body["checks"][0]["id"], "cmd.api")
+
+    def test_checks_run_rejects_body_defined_commands(self) -> None:
+        fake_db, fake_repo = self.fake_db()
+
+        with patch("api.routes.harness.try_persistence", return_value=fake_db), \
+             patch("api.routes.harness._get_project_repo", return_value=fake_repo):
+            response = self.client.post(
+                "/api/projects/proj-1/harness/checks/run",
+                json={"run_id": "api-run", "command": "echo bad"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("repository files", response.json()["detail"])
+
+    def test_checks_run_in_production_rejects_dirty_command_config(self) -> None:
+        (self.project_root / ".ai" / "harness.yaml").write_text(
+            "schema_version: '1.0'\n"
+            "checks:\n"
+            "  - id: cmd.prod\n"
+            "    type: command\n"
+            "    command: \"echo ok\"\n"
+            "    timeout_seconds: 5\n",
+            encoding="utf-8",
+        )
+        fake_db, fake_repo = self.fake_db()
+
+        with patch("api.routes.harness.is_production_mode", return_value=True), \
+             patch("api.routes.harness.try_persistence", return_value=fake_db), \
+             patch("api.routes.harness._get_project_repo", return_value=fake_repo):
+            response = self.client.post("/api/projects/proj-1/harness/checks/run", json={"run_id": "api-prod"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("clean committed Harness command config", response.json()["detail"])
 
 
 class TestHarnessManifestApi(HarnessRoutesTest):

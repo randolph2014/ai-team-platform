@@ -1,0 +1,79 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "project_id",
+    "stage_id",
+    "harness_config_hash",
+    "generated_at",
+    "status",
+    "blocking",
+    "summary",
+    "checks",
+    "baseline_results",
+    "rule_violations",
+    "warnings",
+    "evidence",
+    "next_stage_contract"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string"},
+    "run_id": {"type": "string"},
+    "project_id": {"type": "string"},
+    "stage_id": {"type": "string"},
+    "harness_config_hash": {"type": "string"},
+    "generated_at": {"type": "string"},
+    "status": {"type": "string", "enum": ["pass", "warning", "fail"]},
+    "blocking": {"type": "boolean"},
+    "summary": {
+      "type": "object",
+      "required": ["total", "passed", "warnings", "failed", "skipped"],
+      "additionalProperties": false,
+      "properties": {
+        "total": {"type": "integer"},
+        "passed": {"type": "integer"},
+        "warnings": {"type": "integer"},
+        "failed": {"type": "integer"},
+        "skipped": {"type": "integer"}
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "status",
+          "severity",
+          "blocking",
+          "duration_ms",
+          "exit_code",
+          "matched_files",
+          "output_excerpt",
+          "evidence_refs"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "type": {"type": "string", "enum": ["pattern", "command", "baseline", "unknown"]},
+          "status": {"type": "string", "enum": ["pass", "warning", "fail", "skipped"]},
+          "severity": {"type": "string", "enum": ["info", "warning", "error"]},
+          "blocking": {"type": "boolean"},
+          "duration_ms": {"type": "integer"},
+          "exit_code": {},
+          "matched_files": {"type": "array", "items": {"type": "string"}},
+          "output_excerpt": {"type": "string"},
+          "evidence_refs": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "baseline_results": {"type": "array", "items": {"type": "object"}},
+    "rule_violations": {"type": "array", "items": {"type": "object"}},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "evidence": {"type": "array", "items": {"type": "string"}},
+    "next_stage_contract": {"type": "object"}
+  }
+}

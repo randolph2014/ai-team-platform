@@ -438,6 +438,7 @@ class TestDefaultAgentCollaborationWorkflow(unittest.TestCase):
                 "task_plan_confirm",
                 "develop",
                 "qa",
+                "harness_verify",
                 "review",
                 "acceptance_confirm",
                 "retrospect",
@@ -558,6 +559,10 @@ class TestDefaultAgentCollaborationWorkflow(unittest.TestCase):
                 "json_artifacts": ["test-report.json"],
                 "required_artifacts": ["test-report.md", "test-report.json"],
                 "input": ["solution-plan.json", "task-plan.json", "implementation-report.json"],
+            },
+            "harness_verify": {
+                "required_artifacts": ["harness-report.json"],
+                "input": ["solution-plan.json", "task-plan.json", "implementation-report.json", "test-report.json"],
             },
             "review": {
                 "json_artifacts": ["review-report.json"],

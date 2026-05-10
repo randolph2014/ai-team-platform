@@ -39,6 +39,7 @@ from .human_gate import (
     waiting_decision,
     write_decision_artifacts,
 )
+from .harness_checks import render_harness_feedback, run_harness_verification
 from .models import AgentDefinition, AgentRun, HumanDecision, RequirementUnit, RequirementUnitProgress, RunReport, StageRun, model_to_dict, utc_now
 from .requirement_splitter import estimate_prompt_size, should_split, split_requirement
 from .runtimes import _cli_config_model, backfill_runtime_models, resolve_auto_cli, runtime_config
@@ -146,6 +147,7 @@ class Orchestrator:
         self.bus = event_bus or EventBus()
         self.output_base = output_base or (self.project_root / ".ai" / "team-output")
         self.agents = agent_map(self.config)
+        self._production_run = False
         self._backfill_runtime_models()
 
     def _backfill_runtime_models(self) -> None:
@@ -169,6 +171,7 @@ class Orchestrator:
     ) -> RunReport:
         if execution_mode and execution_mode not in {"serial", "parallel", "auto"}:
             raise ConfigError("execution_mode must be one of: serial, parallel, auto")
+        self._production_run = bool(production or self.config.get("runner", {}).get("production_mode"))
         run_id = run_id or new_run_id()
         logger = get_logger("orchestrator", run_id=run_id)
         log_engine_start(str(self.project_root), self.loaded_config.source)
@@ -434,6 +437,10 @@ class Orchestrator:
             stage_runs_to_append: List[StageRun]
             if stage.get("type") == "context_scan":
                 stage_run = self._run_context_stage(stage, report, artifact_dir, worktree_path)
+                stage_runs_to_append = [stage_run]
+            elif stage.get("type") == "harness_verify":
+                cwd = self._stage_cwd(stage_id, worktree_path)
+                stage_run = self._run_harness_verify_stage(stage, report, artifact_dir, cwd)
                 stage_runs_to_append = [stage_run]
             elif stage.get("type") == "human_review":
                 stage_decision = pending_human_decision
@@ -1144,6 +1151,57 @@ class Orchestrator:
             stage_run.error_message = str(exc)
         stage_run.completed_at = utc_now()
         stage_run.duration_seconds = _duration(start)
+        self.bus.emit("stage:completed", report.run_id, stage_id=stage_id, status=stage_run.status, duration=stage_run.duration_seconds)
+        return stage_run
+
+    def _run_harness_verify_stage(
+        self,
+        stage: Dict[str, Any],
+        report: RunReport,
+        output_dir: Path,
+        cwd: Path,
+    ) -> StageRun:
+        stage_id = stage.get("id", "harness_verify")
+        stage_run = StageRun(
+            stage_id=stage_id,
+            stage_name=stage.get("name", stage_id),
+            status="running",
+            type="harness_verify",
+            started_at=utc_now(),
+            output_dir=str(output_dir),
+        )
+        start = time.monotonic()
+        log_stage_start(report.run_id, stage_id)
+        self.bus.emit("stage:started", report.run_id, stage_id=stage_id, stage_name=stage_run.stage_name, iteration=stage_run.iteration)
+        try:
+            harness_report = run_harness_verification(
+                self.project_root,
+                run_id=report.run_id,
+                stage_id=stage_id,
+                artifact_dir=output_dir,
+                cwd=cwd,
+                production=self._production_run,
+            )
+            validations = validate_required_artifacts(stage, output_dir)
+            stage_run.artifact_validations.extend(validations)
+            if harness_report.get("blocking"):
+                feedback = render_harness_feedback(harness_report)
+                feedback_file = output_dir / "harness-feedback.md"
+                feedback_file.write_text(feedback, encoding="utf-8")
+                stage_run.status = "failed"
+                stage_run.error_message = "Harness checks failed; see harness-feedback.md"
+            elif has_artifact_validation_failure(validations):
+                failed = "; ".join(f"{item.artifact}: {item.message}" for item in validations if item.status == "failed")
+                stage_run.status = "failed"
+                stage_run.error_message = failed
+            else:
+                stage_run.status = "completed"
+        except Exception as exc:
+            stage_run.status = "failed"
+            stage_run.error_message = str(exc)
+        stage_run.completed_at = utc_now()
+        stage_run.duration_seconds = _duration(start)
+        log_stage_complete(report.run_id, stage_id, stage_run.status, stage_run.duration_seconds)
         self.bus.emit("stage:completed", report.run_id, stage_id=stage_id, status=stage_run.status, duration=stage_run.duration_seconds)
         return stage_run
 

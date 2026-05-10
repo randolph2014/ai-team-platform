@@ -94,7 +94,14 @@ def _valid_review_report_with_changes():
 
 class TestSchemaLoading(unittest.TestCase):
     def test_load_all_schemas(self):
-        for name in ["requirement-final.json", "task-plan.json", "test-report.json", "review-report.json", "release-readiness.json"]:
+        for name in [
+            "requirement-final.json",
+            "task-plan.json",
+            "test-report.json",
+            "review-report.json",
+            "release-readiness.json",
+            "harness-report.json",
+        ]:
             schema = load_schema_for_artifact(name)
             self.assertIsNotNone(schema, f"Failed to load schema: {name}")
             self.assertIn("required", schema)

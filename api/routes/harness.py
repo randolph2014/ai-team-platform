@@ -12,6 +12,7 @@ from engine.harness import (
     read_harness_files,
     validate_harness_files,
 )
+from engine.harness_checks import run_harness_verification
 from engine.production_guard import is_production_mode
 
 from ..db import try_persistence
@@ -147,6 +148,28 @@ if router:
         project_root = await _resolve_project_root(project_id, user)
         try:
             return validate_harness_files(project_root, body.get("files") or [])
+        except HarnessError as exc:
+            raise _harness_400(exc) from exc
+
+    @router.post("/projects/{project_id}/harness/checks/run")
+    async def run_harness_checks(project_id: str, request: Request, user: Dict[str, Any] = _get_auth()):
+        body = await _request_json(request)
+        _reject_workdir(request, body)
+        disallowed = {"checks", "command", "commands", "cwd"}
+        provided = sorted(disallowed.intersection(body))
+        if provided:
+            raise HTTPException(status_code=400, detail=f"Harness checks must come from repository files, not request body: {', '.join(provided)}")
+        project_root = await _resolve_project_root(project_id, user)
+        run_id = str(body.get("run_id") or f"harness-api-{project_id}")
+        try:
+            report = run_harness_verification(
+                project_root,
+                run_id=run_id,
+                project_id=project_id,
+                cwd=project_root,
+                production=is_production_mode(),
+            )
+            return report
         except HarnessError as exc:
             raise _harness_400(exc) from exc
 

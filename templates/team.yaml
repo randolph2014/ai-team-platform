@@ -221,6 +221,24 @@ pipeline:
       loopback_trigger: ["FAILED", "ERROR", "失败", "exit code: 1", "退出码: 1"]
       max_retries: 2
 
+    - id: harness_verify
+      name: "Harness 验证"
+      type: harness_verify
+      input:
+        - requirement-final.md
+        - requirement-final.json
+        - solution-plan.json
+        - task-plan.md
+        - task-plan.json
+        - implementation-report.md
+        - implementation-report.json
+        - test-report.md
+        - test-report.json
+        - git-diff
+      output_file: harness-report.json
+      required_artifacts:
+        - harness-report.json
+
     - id: review
       name: "代码审查与风险识别"
       parallel: false

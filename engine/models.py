@@ -108,6 +108,8 @@ class QualityGateRun(BaseModel):
     retry_count: int = 0
     threshold: Optional[float] = None
     actual: Optional[float] = None
+    cwd: Optional[str] = None
+    output_truncated: bool = False
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     duration_seconds: Optional[float] = None
