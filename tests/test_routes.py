@@ -688,12 +688,27 @@ class TestRunsRoutes(BaseRoutesTest):
                 "workdir": str(self.project_root),
                 "run_id": "api-ambiguous-pipeline",
                 "pipeline_id": "template:bugfix",
-                "config_path": str(self.project_root / ".ai" / "team.yaml"),
+                "config_path": str(self.project_root / ".ai" / "pipeline-configs" / "manual.yaml"),
             },
         )
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("pipeline_id", response.json()["detail"])
+
+    def test_create_run_rejects_deprecated_project_team_config_path(self) -> None:
+        """POST /api/runs 拒绝历史项目配置入口，避免它被重新当作事实源。"""
+        response = self.client.post(
+            "/api/runs",
+            json={
+                "requirement": "修复登录失败",
+                "workdir": str(self.project_root),
+                "run_id": "api-deprecated-team-config",
+                "config_path": str(self.project_root / ".ai" / "team.yaml"),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("deprecated", response.json()["detail"])
 
     def test_list_runs_returns_list(self) -> None:
         """GET /api/runs 返回运行列表"""
@@ -746,6 +761,30 @@ class TestRunsRoutes(BaseRoutesTest):
             config_path=config_path,
             execution_mode="serial",
         )
+
+    def test_resume_run_rejects_deprecated_project_team_config_path(self) -> None:
+        """POST /api/runs/{id}/resume 拒绝历史项目级 team 配置入口。"""
+        run_id = "resume-deprecated-team-config-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        (output_dir / "checkpoint.json").write_text(
+            json.dumps({"run_id": run_id, "completed_stages": ["plan"]}),
+            encoding="utf-8",
+        )
+        (output_dir / "requirement.md").write_text("req", encoding="utf-8")
+
+        with patch("api.routes.runs.resume_run_background", return_value=output_dir) as resume_bg:
+            response = self.client.post(
+                f"/api/runs/{run_id}/resume",
+                params={
+                    "workdir": str(self.project_root),
+                    "config_path": str(self.project_root / ".ai" / "team.yaml"),
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("deprecated", response.json()["detail"])
+        resume_bg.assert_not_called()
 
     def test_human_decision_reject_requires_reason(self) -> None:
         run_id = "decision-reason-run"
@@ -842,6 +881,53 @@ class TestRunsRoutes(BaseRoutesTest):
         self.assertEqual(decision.stage_id, "task_plan_confirm")
         self.assertEqual(decision.reason, "任务缺少回滚方案")
         self.assertEqual(decision.required_changes, ["补充回滚方案"])
+
+    def test_human_decision_rejects_deprecated_project_team_config_path(self) -> None:
+        """POST /api/runs/{id}/human-decision 不能用历史项目级 team 配置恢复运行。"""
+        run_id = "decision-deprecated-team-config-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        (output_dir / "checkpoint.json").write_text(
+            json.dumps({"run_id": run_id, "completed_stages": []}),
+            encoding="utf-8",
+        )
+        (output_dir / "requirement.md").write_text("req", encoding="utf-8")
+        (output_dir / "report.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "waiting",
+                    "requirement": "req",
+                    "project_root": str(self.project_root),
+                    "output_dir": str(output_dir),
+                    "config_source": "project",
+                    "config_path": str(self.project_root / ".ai" / "team.yaml"),
+                    "stages": [
+                        {
+                            "stage_id": "task_plan_confirm",
+                            "stage_name": "Task Plan Confirm",
+                            "status": "waiting",
+                            "type": "human_review",
+                            "is_parallel": False,
+                            "agents": [],
+                            "quality_gates": [],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("api.routes.runs.resume_run_background", return_value=output_dir) as resume_bg:
+            response = self.client.post(
+                f"/api/runs/{run_id}/human-decision",
+                params={"workdir": str(self.project_root)},
+                json={"stage_id": "task_plan_confirm", "decision": "approved"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("deprecated", response.json()["detail"])
+        resume_bg.assert_not_called()
 
     def test_human_decision_requires_report(self) -> None:
         run_id = "decision-missing-report-run"

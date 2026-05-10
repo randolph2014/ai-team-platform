@@ -21,6 +21,7 @@ TEMPLATES_ROOT = PLATFORM_ROOT / "templates"
 DEFAULT_TEAM_FILE = TEMPLATES_ROOT / "team.yaml"
 USER_CONFIG_FILE = PLATFORM_ROOT / ".user-config.yaml"
 SKILL_ROOT = Path.home() / ".agents" / "skills" / "ai-team"
+DEPRECATED_PROJECT_TEAM_FILE = Path(".ai") / "team.yaml"
 
 
 SIMPLIFIED_DEFAULT_AGENTS: List[Dict[str, Any]] = [
@@ -340,6 +341,27 @@ def _safe_prompt_path(path: Path, allowed_roots: Iterable[Path], label: str) -> 
     raise ConfigError(f"{label} must be inside allowed roots ({roots}): {path}")
 
 
+def is_deprecated_project_team_config(project_root: Path, config_path: str | Path | None) -> bool:
+    if config_path is None:
+        return False
+    project_root = project_root.expanduser().resolve(strict=False)
+    path = Path(config_path).expanduser()
+    if not path.is_absolute():
+        path = project_root / path
+    deprecated = project_root / DEPRECATED_PROJECT_TEAM_FILE
+    if Path(os.path.abspath(path)) == Path(os.path.abspath(deprecated)):
+        return True
+    return path.resolve(strict=False) == deprecated.resolve(strict=False)
+
+
+def reject_deprecated_project_team_config(project_root: Path, config_path: str | Path | None) -> None:
+    if is_deprecated_project_team_config(project_root, config_path):
+        raise ConfigError(
+            "Project-level team.yaml under .ai is deprecated and is not a supported config source. "
+            "Use platform settings, builtin pipeline templates, or materialized .ai/pipeline-configs/*.yaml."
+        )
+
+
 def find_project_root(start: str) -> Path:
     current = Path(start).expanduser().resolve()
     if current.is_file():
@@ -366,8 +388,9 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
 def load_config(project_root: Path, explicit_config: Optional[str] = None) -> LoadedConfig:
     warnings: List[str] = []
 
-    # explicit_config 仅用于测试，生产环境始终走平台模板
+    # explicit_config 仅用于测试或 run-scoped 物化配置；历史项目级 team 配置入口必须拒绝。
     if explicit_config:
+        reject_deprecated_project_team_config(project_root, explicit_config)
         path = Path(explicit_config).expanduser()
         if not path.is_absolute():
             path = project_root / path

@@ -13,7 +13,7 @@
 ## Preflight Constraints
 
 - The current working tree may contain unrelated staged and unstaged changes. Before implementation, run `git status --short --branch` and use a dedicated worktree or commit only explicit plan files.
-- Do not include `.coverage`, `.ai/team.yaml`, or unrelated runtime/settings/frontend changes in commits for this work unless they are intentionally modified by a task below.
+- Do not include `.coverage` or unrelated runtime/settings/frontend changes in commits for this work unless they are intentionally modified by a task below.
 - Local validation commands should use `.venv/bin/python`, not `/usr/bin/python3`, because the project requires Python 3.11+ and the repository `.venv` is Python 3.12.
 
 ## Target File Structure

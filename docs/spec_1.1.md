@@ -458,7 +458,7 @@ Phase 2 核心：可视化编辑 Pipeline、模板管理、外部触发。
 
 ### 2. 模板库
 
-**背景**：除内置 `templates/team.yaml` 外，用户可在项目中创建、管理自定义 Pipeline 模板。
+**背景**：除内置 `templates/team.yaml` 外，用户可在平台中创建、管理自定义 Pipeline 模板。
 
 **要改/新建的文件**：
 - `api/routes/templates.py`（新建）— 模板 CRUD
@@ -471,7 +471,7 @@ CREATE TABLE template (
     name TEXT NOT NULL,
     description TEXT,
     category TEXT NOT NULL DEFAULT 'general',
-    config JSONB NOT NULL,          -- 完整的 team.yaml 配置
+    config JSONB NOT NULL,          -- 完整的 pipeline 配置
     author TEXT,
     is_public BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -483,7 +483,7 @@ CREATE TABLE template (
 - `GET /api/templates` — 列出可用模板（含内置 + 用户创建），支持 category 过滤
 - `POST /api/templates` — 从当前 Pipeline 或上传 YAML 创建模板
 - `GET/PUT/DELETE /api/templates/{id}` — 模板 CRUD
-- `POST /api/templates/{id}/apply` — 将模板应用为项目 `.ai/team.yaml`
+- `POST /api/templates/{id}/apply` — 将模板保存到平台 Settings 或物化为 pipeline config
 
 **元数据索引**：`templates/` 目录下新增 `index.yaml` 描述内置模板列表和分类：
 ```yaml
@@ -523,7 +523,7 @@ CREATE TABLE webhook (
 ```
 
 ### 验收标准
-- Pipeline Editor 可视化渲染 team.yaml
+- Pipeline Editor 可视化渲染 pipeline 配置
 - 保存 pipeline 到 DB
 - 模板 CRUD API 可用，模板可导出/导入
 - Webhook 触发创建 run

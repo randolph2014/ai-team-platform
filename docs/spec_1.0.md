@@ -328,9 +328,9 @@ qa/review 阶段触发 loopback 时，同样将上一轮的完整输出注入到
 
 #### 4.1.4 Agent Prompt 增强
 
-**问题**：所有 agent 用通用 prompt，没有项目级定制。
+**问题**：所有 agent 用通用 prompt，缺少项目治理上下文。
 
-**方案**：在现有 agent prompt 基础上，通过项目级配置增强关键行为。
+**方案**：在现有 agent prompt 基础上，通过平台 Settings、Harness rules/skills/checks 和项目 prompt 覆盖增强关键行为。
 
 **solution-architect 增强**：
 
@@ -375,7 +375,6 @@ qa/review 阶段触发 loopback 时，同样将上一轮的完整输出注入到
 ```
 项目根目录/
   .ai/
-    team.yaml
     agents/
       tech-lead.md        # 覆盖默认 tech-lead prompt
       code-reviewer.md    # 覆盖默认 code-reviewer prompt
@@ -383,7 +382,7 @@ qa/review 阶段触发 loopback 时，同样将上一轮的完整输出注入到
 
 prompt 解析优先级：
 1. 项目 `.ai/agents/<name>.md`（项目级定制）
-2. team.yaml 中 `prompt:` 指定的路径
+2. 平台模板、DB Settings 或物化 pipeline config 中 `prompt:` 指定的路径
 3. 平台内置模板目录 `templates/agents/<name>.md`
 4. 兼容期才允许回退到 `~/.agents/skills/ai-team/agents/<name>.md`，仅用于用户曾经手动修改过本机 skill prompt、且平台模板缺失同名 prompt 的迁移场景；触发时必须输出 deprecation warning
 
@@ -437,7 +436,7 @@ CREATE TABLE pipeline (
     name TEXT NOT NULL,
     description TEXT,
     project_path TEXT NOT NULL,
-    config JSONB NOT NULL,          -- 完整的 team.yaml 内容
+    config JSONB NOT NULL,          -- 完整的 pipeline 配置内容
     version INT NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -696,10 +695,10 @@ Phase 1 前端完成时，除了功能可用，还必须通过原型对齐验收
 
 ---
 
-## 5. 项目级配置（完整示例）
+## 5. 平台运行配置（完整示例）
 
 ```yaml
-# .ai/team.yaml (LifeRhythm 项目)
+# 物化 pipeline config 示例，可由内置模板或 Settings 生成
 
 metadata:
   name: "LifeRhythm 标准交付"
@@ -791,7 +790,7 @@ quality_gates:
     required: false
     max_retries: 1
 
-# Pipeline 定义（兼容现有 team.yaml 字段）
+# Pipeline 定义（兼容现有平台 pipeline 配置字段）
 pipeline:
   - id: plan
     name: "方案讨论"
@@ -825,7 +824,7 @@ pipeline:
     name: "人工验收"
     type: human_review
 
-# Runner 配置（兼容现有 team.yaml 字段）
+# Runner 配置（兼容现有平台 pipeline 配置字段）
 runner:
   agent_timeout_seconds: 1800
   heartbeat_seconds: 60
@@ -969,7 +968,7 @@ persistence:
 - 全部通过后 squash merge 到 main
 - 可选 skill adapter 能把同一个需求转发到平台，并产出同一个 run 记录格式
 - 旧 skill runner 不再承接新增功能；如仍保留，只能作为兼容回退并输出 deprecation warning
-- 默认配置回退从 skill 迁到平台模板：未找到项目 `.ai/team.yaml` 时，WARNING 必须指向 `templates/team.yaml`，不能再指向 `~/.agents/skills/ai-team/team.yaml`。
+- 默认配置回退从 skill 迁到平台模板：运行报告必须指向 `templates/team.yaml`、DB Settings 或物化 pipeline config，不能再指向 `~/.agents/skills/ai-team/team.yaml`。
 - `report.json` / API 中的 `config_source` 枚举必须迁移为 `project` / `platform` / `default`；旧值 `skill` 只允许在兼容 adapter 读取旧报告时映射展示，不能由新 run 产生。
 
 ### Phase 1：持久化 + 前端（2-3 周）
@@ -1043,7 +1042,7 @@ persistence:
 - `ai-team install-skill --target ~/.agents/skills/ai-team`
 
 兼容规则：
-- `.ai/team.yaml` 现有字段全部兼容，新增字段为 optional。
+- 历史项目级 team 配置入口不再作为兼容目标；新增配置应进入平台 Settings、内置模板、物化 pipeline config 或 Harness governance assets。
 - 旧 `~/.agents/skills/ai-team/scripts/run.py` 在兼容期可以存在，但应改成 thin wrapper，内部调用平台 CLI/API。
 - 平台仓库的 `adapters/ai-team-skill/` 是 adapter 源；`~/.agents/skills/ai-team/` 是安装产物，不允许在安装产物里手工演进核心逻辑。
 - 如果旧 runner 暂时无法删除，必须标记为 deprecated，只读保留，不接受新增功能。
@@ -1052,7 +1051,7 @@ persistence:
 
 退出标准：
 - 平台 CLI/API 覆盖旧 runner 的常用能力。
-- 项目级 `.ai/team.yaml` 在平台 engine 中通过 schema 校验。
+- 平台默认配置、DB Settings 和物化 pipeline config 在平台 engine 中通过 schema 校验。
 - 至少一次真实需求同时通过平台 CLI 和 skill adapter 转发路径验证，产物结构一致。
 - 删除或冻结旧 runner 后，仍能通过平台 CLI 独立完成 Phase 0 验收。
 

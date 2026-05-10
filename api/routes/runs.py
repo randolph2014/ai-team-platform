@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from engine.config import find_project_root
+from engine.config import ConfigError, find_project_root, reject_deprecated_project_team_config
 from engine.models import HumanDecision, InvalidStatusTransition, normalize_run_status, validate_run_transition
 from engine.orchestrator import find_run_reports, load_report
 from engine.production_guard import is_production_mode
@@ -237,6 +237,11 @@ if router:
             raise HTTPException(status_code=409, detail="run id already exists")
 
         config_path = body.config_path
+        if config_path:
+            try:
+                reject_deprecated_project_team_config(Path(find_project_root(resolved_workdir)), config_path)
+            except ConfigError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         if pipeline_ref:
             try:
                 from .pipelines import materialize_pipeline_config
@@ -366,6 +371,11 @@ if router:
             if normalize_run_status(report.status) not in {"failed", "running", "paused", "resuming", "blocked"}:
                 raise HTTPException(status_code=400, detail=f"run status is {report.status}, cannot resume")
             config_path = config_path or report.config_path
+        if config_path:
+            try:
+                reject_deprecated_project_team_config(Path(find_project_root(resolved_workdir)), config_path)
+            except ConfigError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         try:
             output_dir = resume_run_background(
@@ -416,6 +426,11 @@ if router:
         if normalize_run_status(report.status) != "paused":
             raise HTTPException(status_code=400, detail=f"run status is {report.status}, cannot submit human decision")
         config_path = config_path or report.config_path
+        if config_path:
+            try:
+                reject_deprecated_project_team_config(Path(find_project_root(resolved_workdir)), config_path)
+            except ConfigError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         stage = next((item for item in reversed(report.stages) if item.stage_id == body.stage_id), None)
         if stage is None:

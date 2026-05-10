@@ -1,7 +1,8 @@
 # ============================================================
 # AI Team 平台默认配置
 # ============================================================
-# 项目级配置放在 .ai/team.yaml，会优先于此文件加载。
+# 平台默认配置由此文件提供；项目运行期自定义通过 Settings/DB 或
+# .ai/pipeline-configs/*.yaml 物化配置传入；历史项目级 team 配置入口已废弃。
 #
 # ── runtimes ──────────────────────────────────────────────
 # 声明可用的 CLI 工具池。每个 runtime 是一个独立的 CLI 适配配置，
@@ -31,7 +32,7 @@ runtimes:
     name: Auto
     cli: auto
 
-  # ── 以下是进阶示例（默认注释）。按需启用或复制到项目级配置 ──
+  # ── 以下是进阶示例（默认注释）。按需通过 Settings 或 pipeline 模板启用 ──
 
   # 示例 1：Claude Opus —— 深度推理，适合架构 / 方案定稿
   # claude-opus:
@@ -314,7 +315,7 @@ pipeline:
         - retrospect-report.json
 
 # Quality Gates — develop 阶段完成后自动运行。
-# 项目级 .ai/team.yaml 可覆盖此配置。
+# 自定义门禁应通过 Settings/DB、内置模板或物化 pipeline config 管理。
 # 示例（Python 项目）：
 #   quality_gates:
 #     - name: python-syntax

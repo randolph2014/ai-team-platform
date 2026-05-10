@@ -152,7 +152,7 @@ class TestTaskQueue(unittest.TestCase):
             "requirement": "req",
             "workdir": "/tmp/project",
             "run_id": "run-fail",
-            "config_path": "/tmp/project/.ai/team.yaml",
+            "config_path": "/tmp/project/.ai/pipeline-configs/manual.yaml",
         }
         job.args = ()
 

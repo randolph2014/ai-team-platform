@@ -28,7 +28,7 @@ ai-team install-skill --target ~/.agents/skills/ai-team --symlink
 
 ## 2. 核心流程：单需求的完整生命周期
 
-### 2.1 Pipeline 阶段（team.yaml 定义）
+### 2.1 Pipeline 阶段（平台 `templates/team.yaml` 定义）
 
 ```
 plan (并行)  →  architect  →  context_scan  →  develop  →  code_apply  →  qa  →  review  →  accept
@@ -128,7 +128,7 @@ class StageRun(BaseModel):
 
 ### 4.1 Quality Gates（质量门禁）
 
-定义在 `team.yaml` 的 `quality_gates` 配置中：
+默认定义在平台 `templates/team.yaml` 的 `quality_gates` 配置中：
 
 ```yaml
 quality_gates:
@@ -326,10 +326,10 @@ requirement → brainstorm → solution → context → code → test → review
 
 | 扩展点 | 方式 |
 |--------|------|
-| 新增 Agent | 添加 prompt 文件 + 更新 team.yaml |
-| 新增质量门禁 | 在 quality_gates 配置中添加条目 |
-| 自定义 Runtime | 在 runtimes 中配置 CLI 命令 |
-| 项目级覆盖 | `.ai/team.yaml` + `.ai/agents/*.md` |
+| 新增 Agent | 添加 prompt 文件 + 更新平台模板、DB Settings 或 pipeline 模板 |
+| 新增质量门禁 | 在平台模板、DB Settings 或物化 pipeline config 的 quality_gates 配置中添加条目 |
+| 自定义 Runtime | 在 DB Settings 或 pipeline config 的 runtimes 中配置 CLI 命令 |
+| 项目级覆盖 | `.ai/agents/*.md` + Harness governance assets |
 
 ---
 

@@ -6,7 +6,7 @@ This runbook is the release safety baseline for AI Team Platform production.
 
 - PostgreSQL state: pipelines, runs, stages, gates, events, decisions, costs, webhooks, and audit logs.
 - Runtime artifacts: `.ai/team-output` or the value of `AI_TEAM_OUTPUT_DIR`.
-- Configuration: `.ai/team.yaml`, deployment environment variables, Docker image tag, and release commit SHA.
+- Configuration: DB-backed Settings, materialized pipeline configs, deployment environment variables, Docker image tag, and release commit SHA.
 
 ## Backup Before Release
 
@@ -32,7 +32,7 @@ This runbook is the release safety baseline for AI Team Platform production.
 4. Back up runtime config without printing secrets:
 
    ```bash
-   cp .ai/team.yaml "backups/team-$(date -u +%Y%m%dT%H%M%SZ).yaml"
+   tar -czf "backups/pipeline-configs-$(date -u +%Y%m%dT%H%M%SZ).tar.gz" .ai/pipeline-configs 2>/dev/null || true
    env | grep '^AI_TEAM_' | sed -E 's/(SECRET|TOKEN|KEY|PASSWORD)=.*/\1=***REDACTED***/' > "backups/env-redacted.txt"
    ```
 

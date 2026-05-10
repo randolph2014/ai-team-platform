@@ -31,7 +31,6 @@ Thumbs.db
 *.db
 *.sqlite3
 
-.ai/team.yaml
 .ai/worktrees/
 .ai/runs/
 .ai/team-output/

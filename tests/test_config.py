@@ -280,10 +280,17 @@ class TestCliParser(unittest.TestCase):
         self.assertEqual(args.run_id, "run-123")
         self.assertEqual(args.execution_mode, "auto")
 
+    def test_deprecated_project_config_init_command_is_not_exposed(self) -> None:
+        """CLI 不再暴露会生成历史项目配置文件的 init 命令"""
+        from cli.main import build_parser
+
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["init", "--lang", "python"])
+
 
 class TestLoadConfig(unittest.TestCase):
-    def test_load_from_project_config(self) -> None:
-        """项目级 .ai/team.yaml 不再自动加载，始终返回平台模板配置"""
+    def test_legacy_project_team_yaml_is_ignored_by_default_loader(self) -> None:
+        """默认加载器忽略历史项目配置文件，始终返回平台模板配置"""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".ai").mkdir()
@@ -293,6 +300,17 @@ class TestLoadConfig(unittest.TestCase):
             )
             loaded = load_config(root)
             self.assertNotEqual(loaded.source, "project")
+
+    def test_explicit_legacy_project_team_yaml_is_rejected(self) -> None:
+        """即使显式传入，也拒绝历史项目配置入口，避免重新制造事实源歧义"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            config_path = root / ".ai" / "team.yaml"
+            config_path.write_text("runtimes: {}\nagents: []\npipeline: []\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ConfigError, "deprecated"):
+                load_config(root, explicit_config=str(config_path))
 
     def test_load_with_explicit_config(self) -> None:
         """使用显式配置路径加载"""
