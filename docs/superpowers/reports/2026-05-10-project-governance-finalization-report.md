@@ -16,7 +16,7 @@ Project Governance Phase 0-4 的总体验收通过，可以进入提交 / PR 准
 |---|---|
 | 首条命令 | `git status --short --branch --untracked-files=all`，工作区已有 Phase 1-4 与历史 Harness Checks/UI/Task Board 未提交改动 |
 | 输入文件读取 | 已读取父级设计、Phase 1-4 final report、Task Board/UI final report、`AGENTS.md`、`.ai/harness.yaml` 和 `.ai/harness/**` |
-| Harness 事实源 | `engine/harness.py` 只允许 `.ai/harness.yaml` 与 `.ai/harness/**`，当前 `.ai/harness.yaml` 声明 rules、skills、blocking command check、baseline |
+| Harness 事实源 | `engine/harness.py` 只允许 `.ai/harness.yaml` 与 `.ai/harness/**`，当前 `.ai/harness.yaml` 声明 rules、skills、blocking command checks、baseline |
 | API 边界 | `api/routes/harness.py` 所有 Harness / Task Board public API 均为 `/api/projects/{project_id}/...`，统一拒绝 `workdir` query/body |
 | Runner 边界 | `engine/harness_checks.py` 调用 `run_quality_gates()`；静态扫描证明该文件没有 subprocess/shell runner 命中，只有 `engine/quality_gates.py` 命中 |
 | 文件存在性 | Phase 1-4 与 Task Board/UI 报告声称的关键文件均存在；文件存在性检查无 `MISSING` 输出 |
@@ -30,7 +30,7 @@ Project Governance Phase 0-4 的总体验收通过，可以进入提交 / PR 准
 | Phase 2 产物：Agent traceability contract | `engine/schemas/implementation-report.json`; `engine/schemas/test-report.json`; `engine/schemas/review-report.json`; `engine/artifact_contracts.py`; `engine/orchestrator.py`; `templates/agents/{coder,tech-lead,qa-automation,code-reviewer,reviewer}.md`; `tests/test_artifact_contracts.py`; `tests/test_config.py`; Phase 2 plan/report | Phase 2 report 声称 implementation/test/review schema、prompt 和 fallback artifact 汇总已加入 traceability；当前 status 对应文件存在并 dirty/untracked | 纳入交付清单；不改运行时代码 |
 | Phase 3 产物：executable checks / QualityGateRunner reuse | `.ai/harness.yaml`; `.ai/harness/checks/README.md`; `.ai/harness/checks/checks-contract.md`; `.ai/harness/checks/executable-command-checks.md`; `tests/test_harness_checks.py`; `tests/test_harness_core.py`; Phase 3 plan/report | 当前 Harness config 声明 blocking command check；`engine/harness_checks.py` 通过 `run_quality_gates()` 执行 command check；fresh static scan 符合预期 | 纳入交付清单；不新增第二套 runner |
 | Phase 4 产物：Task Board/UI 治理收口 | `docs/superpowers/plans/2026-05-10-project-governance-phase-4-task-board-ui.md`; `docs/superpowers/reports/2026-05-10-project-governance-phase-4-final-report.md` | Phase 4 report 明确 Task Board / UI 已有实现，本阶段只新增计划与 final report，并用 fresh verification 复核 | 纳入交付清单；本轮未新增 UI/Task Board 功能 |
-| 本轮 Finalization 产物 | `docs/superpowers/reports/2026-05-10-project-governance-finalization-report.md` | 本轮新增最终总体验收、归因、stale delta、warnings 和提交/PR 准备结论 | 纳入交付清单；不是 Phase 5 功能 |
+| 本轮 Finalization 产物 | `docs/superpowers/reports/2026-05-10-project-governance-finalization-report.md`; `.ai/harness/checks/project-governance-finalization.md`; `scripts/verify_project_governance.py`; `tests/test_project_governance_checks.py` | 本轮新增最终总体验收、归因、stale delta、warnings、提交/PR 准备结论，并把本项目治理禁区落成 repo-local mechanical check | 纳入交付清单；不是 Phase 5 功能 |
 | 进入本轮前已有的 Harness Checks/UI/Task Board 历史文件 | `docs/superpowers/plans/2026-05-09-harness-checks.md`; `docs/superpowers/plans/2026-05-09-harness-task-board.md`; `docs/superpowers/plans/2026-05-09-harness-ui.md`; `docs/superpowers/reports/2026-05-09-harness-checks-final-report.md`; `docs/superpowers/reports/2026-05-09-harness-task-board-final-report.md`; `docs/superpowers/reports/2026-05-10-harness-ui-final-report.md`; `docs/superpowers/reports/2026-05-10-harness-epic-final-report.md`; `docs/superpowers/reports/2026-05-10-project-governance-configuration-final-report.md` | Phase 4 input和当前 status 证明这些是既有 Harness Checks/UI/Task Board 历史上下文，不是本轮 finalization 新功能 | 只读取和归因；不随意删除或重写 |
 | 无法归因或疑似残留文件 | 无 | 当前 status 未出现无法归因文件；未发现未忽略 `__pycache__`/`.pyc` | 无需删除；若提交前范围收窄，应按上述归因选择性 staging |
 
@@ -59,9 +59,11 @@ Project Governance Phase 0-4 的总体验收通过，可以进入提交 / PR 准
 
 | 命令 | 结果 | Warnings / 说明 |
 |---|---|---|
-| `.venv/bin/python -m pytest -q` | PASS：949 passed, 2 skipped, 11 warnings in 18.06s | PyJWT HMAC key length warnings；RQ `on_failure` deprecation warnings |
+| `.venv/bin/python scripts/verify_project_governance.py` | PASS：`project governance checks passed` | repo-local governance invariant scan |
+| `.venv/bin/python -m pytest tests/test_project_governance_checks.py tests/test_harness_core.py::TestRepositoryHarnessGovernanceAssets tests/test_harness_checks.py::TestRepositoryHarnessExecutableChecks -q` | PASS：5 passed in 7.21s | 覆盖新增治理检查脚本、Harness 注册和结构化 command result |
+| `.venv/bin/python -m pytest -q` | PASS：952 passed, 2 skipped, 11 warnings in 25.94s | PyJWT HMAC key length warnings；RQ `on_failure` deprecation warnings |
 | `cd web && npm run test` | PASS：9 test files passed, 29 tests passed | Vite React/Babel esbuild/oxc deprecation warnings |
-| `cd web && npm run build` | PASS：built in 2.87s；main JS 1,280.53 kB gzip 386.89 kB | Vite chunk-size warning |
+| `cd web && npm run build` | PASS：built in 3.10s；main JS 1,280.53 kB gzip 386.89 kB | Vite chunk-size warning |
 | `cd web && node scripts/playwright-harness-ui-smoke.mjs` | PASS：exit 0 | Vite websocket proxy `ECONNREFUSED 127.0.0.1:8000`；smoke 使用 mock HTTP route，断言路径通过 |
 | `git diff --check` | PASS：exit 0，无输出 | 无空白错误 |
 | 用户指定废弃入口残留扫描 | PASS：无输出，`rg` no-match 语义退出码 1 | 报告中不重复精确废弃路径，避免报告自触发 |
@@ -73,9 +75,9 @@ Project Governance Phase 0-4 的总体验收通过，可以进入提交 / PR 准
 | 来源报告 | Fresh 对照 | 结论 |
 |---|---|---|
 | Phase 1 final report | 当前 `.ai/harness.yaml` 已包含 Phase 3 command check；Phase 1 中 “checks skeleton-only” 只在 Phase 1 时间点成立 | STALE_BY_DESIGN：不是缺陷，属于 Phase 3 合法演进 |
-| Phase 2 final report | 旧报告全量 pytest 为 948 passed, 2 skipped, 11 warnings；本轮为 949 passed, 2 skipped, 11 warnings | STALE_DELTA：测试数合理增加，warnings 类型一致 |
+| Phase 2 final report | 旧报告全量 pytest 为 948 passed, 2 skipped, 11 warnings；本轮为 952 passed, 2 skipped, 11 warnings | STALE_DELTA：测试数合理增加，warnings 类型一致 |
 | Phase 3 final report | 旧报告 focused suites 为 68/2/67 passed；本轮全量 pytest 与静态 runner 扫描通过 | CONSISTENT：QualityGateRunner reuse 和无第二 runner 仍成立 |
-| Phase 4 final report | 旧报告全量 pytest 为 949 passed, 2 skipped, 11 warnings；前端 9 files / 29 tests；build 和 smoke 通过 | CONSISTENT：本轮结果一致，warnings 类型一致 |
+| Phase 4 final report | 旧报告全量 pytest 为 949 passed, 2 skipped, 11 warnings；前端 9 files / 29 tests；build 和 smoke 通过 | STALE_DELTA：本轮后端新增 3 个治理检查测试，前端结果与 warnings 类型一致 |
 | Harness Task Board historical report | 历史报告记录 focused 28 passed、unittest 815/819、前端 7 files / 21 tests；当前项目已演进为 pytest 949、前端 9/29 | STALE_HISTORICAL：作为历史上下文保留，不作为当前验收数字 |
 | Harness UI historical report | 历史报告记录 UI smoke/build/test warnings；本轮仍复现同类 Vite deprecation、chunk-size、proxy warning | CONSISTENT_WITH_WARNINGS |
 | 文件存在性 | 对 Phase 1-4 与 Task Board/UI 报告关键文件做存在性检查，无 `MISSING` 输出 | CONSISTENT |
