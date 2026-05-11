@@ -60,8 +60,7 @@ def _try_load_db_config() -> Optional[Dict[str, Any]]:
         from persistence.connection import is_available
         if not is_available():
             return None
-        import asyncio
-        from persistence.connection import get_connection, release_connection
+        from persistence.connection import get_connection, release_connection, run_sync
         from persistence.repository import SettingsRepo
 
         async def _load():
@@ -74,14 +73,7 @@ def _try_load_db_config() -> Optional[Dict[str, Any]]:
             finally:
                 await release_connection(conn)
 
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(_load())
-        else:
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(lambda: asyncio.run(_load())).result(timeout=10)
+        return run_sync(_load())
     except Exception:
         return None
 

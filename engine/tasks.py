@@ -126,14 +126,24 @@ def execute_resume(
         redis_bus.close()
 
 
+def build_worker(redis_url: str | None = None):
+    from redis import Redis
+    from rq import Queue, Worker
+
+    resolved_url = redis_url or os.environ.get("AI_TEAM_REDIS_URL", "redis://localhost:6379/0")
+    conn = Redis.from_url(resolved_url)
+    queue = Queue("default", connection=conn)
+    return Worker([queue], connection=conn)
+
+
+def run_worker(redis_url: str | None = None) -> None:
+    worker = build_worker(redis_url)
+    worker.work()
+
+
 if __name__ == "__main__":
     import logging
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-    from redis import Redis
-    from rq import Worker
-
-    redis_url = os.environ.get("AI_TEAM_REDIS_URL", "redis://localhost:6379/0")
-    w = Worker(["default"], connection=Redis.from_url(redis_url))
-    w.work()
+    run_worker()

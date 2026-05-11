@@ -10,7 +10,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -b --noEmit",
-    "smoke:playwright": "node scripts/playwright-smoke.mjs"
+    "smoke:playwright": "node scripts/playwright-smoke.mjs",
+    "smoke:real-backend": "node scripts/playwright-real-backend-smoke.mjs",
+    "smoke:real-stack": "node scripts/playwright-real-stack-smoke.mjs"
   },
   "dependencies": {
     "@types/dompurify": "^3.0.5",

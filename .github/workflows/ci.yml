@@ -107,6 +107,13 @@ jobs:
       - name: Install dependencies
         run: cd web && npm ci
 
+      - name: Create backend venv for real smoke
+        run: |
+          python3.12 -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install -e ".[dev]"
+
       - name: Typecheck
         run: cd web && npm run typecheck
 
@@ -118,6 +125,12 @@ jobs:
 
       - name: Playwright smoke
         run: cd web && npm run smoke:playwright
+
+      - name: Playwright real backend smoke
+        run: cd web && AI_TEAM_BACKEND_PYTHON=../.venv/bin/python npm run smoke:real-backend
+
+      - name: Playwright real stack smoke
+        run: cd web && AI_TEAM_BACKEND_PYTHON=../.venv/bin/python npm run smoke:real-stack
 
       - name: Build
         run: cd web && npm run build

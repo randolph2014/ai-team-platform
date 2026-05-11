@@ -176,5 +176,39 @@ class TestExecuteResume(unittest.TestCase):
             self.assertEqual(call_kwargs["human_decision"].stage_id, "s1")
 
 
+class TestWorkerEntrypoint(unittest.TestCase):
+    @patch("rq.Worker")
+    @patch("rq.Queue")
+    @patch("redis.Redis.from_url")
+    def test_build_worker_uses_queue_connection(self, mock_from_url, MockQueue, MockWorker) -> None:
+        from engine.tasks import build_worker
+
+        conn = MagicMock()
+        queue = MagicMock()
+        worker = MagicMock()
+        mock_from_url.return_value = conn
+        MockQueue.return_value = queue
+        MockWorker.return_value = worker
+
+        result = build_worker("redis://127.0.0.1:6379/3")
+
+        self.assertIs(result, worker)
+        mock_from_url.assert_called_once_with("redis://127.0.0.1:6379/3")
+        MockQueue.assert_called_once_with("default", connection=conn)
+        MockWorker.assert_called_once_with([queue], connection=conn)
+
+    @patch("engine.tasks.build_worker")
+    def test_run_worker_starts_built_worker(self, mock_build_worker) -> None:
+        from engine.tasks import run_worker
+
+        worker = MagicMock()
+        mock_build_worker.return_value = worker
+
+        run_worker("redis://127.0.0.1:6379/4")
+
+        mock_build_worker.assert_called_once_with("redis://127.0.0.1:6379/4")
+        worker.work.assert_called_once_with()
+
+
 if __name__ == "__main__":
     unittest.main()

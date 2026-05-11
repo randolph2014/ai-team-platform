@@ -129,6 +129,72 @@ class TestConnection:
         finally:
             loop.close()
 
+    def test_get_connection_rebuilds_pool_bound_to_closed_loop(self) -> None:
+        """同步包装器多次 asyncio.run 时不能复用已关闭事件循环上的 pool。"""
+        from persistence import connection
+
+        old_loop = MagicMock()
+        old_loop.is_closed.return_value = True
+        old_pool = AsyncMock()
+        new_pool = AsyncMock()
+        new_conn = object()
+        new_pool.acquire = AsyncMock(return_value=new_conn)
+
+        connection._pool = old_pool
+        connection._pool_loop = old_loop
+
+        loop = asyncio.new_event_loop()
+        create_pool = AsyncMock(return_value=new_pool)
+        try:
+            with patch.dict(os.environ, {"DATABASE_URL": "postgres://localhost/test"}, clear=True), \
+                 patch("persistence.connection.asyncpg.create_pool", create_pool):
+                result = loop.run_until_complete(connection.get_connection())
+
+            assert result is new_conn
+            assert connection._pool is new_pool
+            assert connection._pool_loop is loop
+            create_pool.assert_awaited_once()
+        finally:
+            connection._pool = None
+            connection._pool_loop = None
+            loop.close()
+
+    def test_release_connection_uses_original_pool_when_global_pool_changes(self) -> None:
+        """连接释放必须回到 acquire 时的 pool，不能受后续事件循环重建影响。"""
+        from persistence import connection
+
+        conn = object()
+        original_pool = AsyncMock()
+        replacement_pool = AsyncMock()
+        connection._pool = replacement_pool
+        connection._conn_pool_by_id[id(conn)] = original_pool
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(connection.release_connection(conn))
+
+            original_pool.release.assert_awaited_once_with(conn)
+            replacement_pool.release.assert_not_awaited()
+            assert id(conn) not in connection._conn_pool_by_id
+        finally:
+            connection._pool = None
+            connection._conn_pool_by_id.clear()
+            loop.close()
+
+    def test_run_sync_reuses_dedicated_background_loop(self) -> None:
+        """同步 DB 包装器必须复用后台 loop，避免每次调用都重建连接池。"""
+        from persistence import connection
+
+        loops = []
+
+        async def capture_loop():
+            loops.append(asyncio.get_running_loop())
+
+        connection.run_sync(capture_loop())
+        connection.run_sync(capture_loop())
+
+        assert loops[0] is loops[1]
+
 
 # ══════════════════════════════════════════════════════════════════════
 # Repository 测试（使用 mock 连接）

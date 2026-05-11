@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import threading
 from typing import Dict, Optional
 
 import asyncpg
@@ -9,7 +11,11 @@ import asyncpg
 logger = logging.getLogger(__name__)
 
 _pool: Optional[asyncpg.Pool] = None
-_pools: Dict[int, asyncpg.Pool] = {}
+_pool_loop: Optional[asyncio.AbstractEventLoop] = None
+_pool_dsn: Optional[str] = None
+_conn_pool_by_id: Dict[int, asyncpg.Pool] = {}
+_sync_loop: Optional[asyncio.AbstractEventLoop] = None
+_sync_loop_lock = threading.Lock()
 
 
 def _get_database_url() -> Optional[str]:
@@ -19,50 +25,47 @@ def _get_database_url() -> Optional[str]:
 
 async def get_connection() -> Optional[asyncpg.Connection]:
     """获取数据库连接，若未配置 DATABASE_URL 则返回 None（优雅降级）"""
-    import asyncio
-
-    global _pool
+    global _pool, _pool_loop, _pool_dsn
     url = _get_database_url()
     if not url:
         logger.debug("DATABASE_URL not set, persistence disabled")
         return None
 
-    loop_id = id(asyncio.get_running_loop())
-    pool = _pools.get(loop_id)
-    if pool is None or getattr(pool, "_closed", False):
-        pool = await asyncpg.create_pool(dsn=url, min_size=1, max_size=10)
-        _pools[loop_id] = pool
-        _pool = pool
+    loop = asyncio.get_running_loop()
+    if _pool is not None and (_pool_loop is not loop or _pool_dsn != url or (_pool_loop and _pool_loop.is_closed())):
+        logger.info("Discarding database pool bound to a different event loop or DSN")
+        _pool = None
+        _pool_loop = None
+        _pool_dsn = None
+        _conn_pool_by_id.clear()
+    if _pool is None:
+        _pool = await asyncpg.create_pool(dsn=url, min_size=1, max_size=10)
+        _pool_loop = loop
+        _pool_dsn = url
         logger.info("Database connection pool created")
-    return await pool.acquire()
+    conn = await _pool.acquire()
+    _conn_pool_by_id[id(conn)] = _pool
+    return conn
 
 
 async def release_connection(conn: asyncpg.Connection) -> None:
     """释放连接回连接池"""
-    import asyncio
-
     if conn is None:
         return
-    pool = _pools.get(id(asyncio.get_running_loop())) or _pool
+    pool = _conn_pool_by_id.pop(id(conn), None) or _pool
     if pool:
         await pool.release(conn)
 
 
 async def close_pool() -> None:
     """关闭连接池"""
-    import asyncio
-
-    global _pool
-    loop_id = id(asyncio.get_running_loop())
-    pool = _pools.pop(loop_id, None)
-    if pool is None and _pool is not None:
-        pool = _pool
-        for key, value in list(_pools.items()):
-            if value is pool:
-                _pools.pop(key, None)
-    if pool:
-        await pool.close()
-        _pool = next(iter(_pools.values()), None)
+    global _pool, _pool_loop, _pool_dsn
+    if _pool:
+        await _pool.close()
+        _pool = None
+        _pool_loop = None
+        _pool_dsn = None
+        _conn_pool_by_id.clear()
         logger.info("Database connection pool closed")
 
 
@@ -72,19 +75,27 @@ def is_available() -> bool:
 
 
 def run_sync(coro):
-    import asyncio
-    import concurrent.futures
+    loop = _get_sync_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=30)
 
-    async def _run_and_close():
-        try:
-            return await coro
-        finally:
-            await close_pool()
 
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(_run_and_close())
-    else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(lambda: asyncio.run(_run_and_close())).result(timeout=30)
+def _get_sync_loop() -> asyncio.AbstractEventLoop:
+    global _sync_loop
+    with _sync_loop_lock:
+        if _sync_loop is not None and _sync_loop.is_running() and not _sync_loop.is_closed():
+            return _sync_loop
+
+        ready = threading.Event()
+        loop = asyncio.new_event_loop()
+
+        def _run() -> None:
+            asyncio.set_event_loop(loop)
+            ready.set()
+            loop.run_forever()
+
+        thread = threading.Thread(target=_run, name="ai-team-db-sync-loop", daemon=True)
+        thread.start()
+        ready.wait(timeout=5)
+        _sync_loop = loop
+        return loop

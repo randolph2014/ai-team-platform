@@ -1061,6 +1061,7 @@ def run_row_to_summary(row: Dict[str, Any]) -> Dict[str, Any]:
         "run_id": ctx.get("app_run_id") or row.get("id"),
         "status": normalize_run_status(row.get("status")),
         "pipeline": ctx.get("pipeline_ref") or ctx.get("config_path"),
+        "project_root": row.get("project_root"),
         "output_dir": ctx.get("output_dir"),
         "started_at": _dt_to_str(row.get("started_at")),
         "completed_at": _dt_to_str(row.get("completed_at")),
@@ -1238,23 +1239,15 @@ class SettingsRepo:
 
 def settings_sync(method):
     """装饰器：将 async SettingsRepo 方法包装为同步调用，DB 不可用时静默跳过。"""
-    import asyncio
     import functools
 
     @functools.wraps(method)
     def wrapper(*args, **kwargs):
         try:
-            from .connection import is_available
+            from .connection import is_available, run_sync
             if not is_available():
                 return None
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                return asyncio.run(method(*args, **kwargs))
-            else:
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    return pool.submit(lambda: asyncio.run(method(*args, **kwargs))).result(timeout=10)
+            return run_sync(method(*args, **kwargs))
         except Exception:
             logger.debug("Settings DB operation failed, falling back to file", exc_info=True)
             return None

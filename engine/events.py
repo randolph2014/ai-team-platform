@@ -100,15 +100,8 @@ class DBEventStore:
             from persistence.connection import is_available
             if not is_available():
                 return
-            import asyncio
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                asyncio.run(self._async_write(event))
-            else:
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    pool.submit(lambda: asyncio.run(self._async_write(event))).result(timeout=10)
+            from persistence.connection import run_sync
+            run_sync(self._async_write(event))
         except Exception:
             logger.debug("DB event write failed for run %s", event.run_id, exc_info=True)
 

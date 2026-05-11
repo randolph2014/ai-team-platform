@@ -74,6 +74,15 @@ npm run dev
 
 # 前端测试与构建
 cd web && npm run test && npm run build
+
+# 前端构建
+cd web && npm ci && npm run build
+
+# 真实前后端浏览器 smoke（启动 FastAPI + Vite，不 mock API）
+cd web && npm run smoke:real-backend
+
+# 真实全栈浏览器 smoke（启动 Postgres + Redis/RQ + worker + FastAPI + Vite）
+cd web && npm run smoke:real-stack
 ```
 
 仓库卫生检查：

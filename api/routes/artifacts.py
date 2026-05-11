@@ -87,16 +87,16 @@ def _get_project_repo():
     return ProjectRepo()
 
 
-async def _validate_project_ownership(run_id: str, project_id: Optional[str]) -> None:
+async def _validate_project_ownership(run_id: str, project_id: Optional[str]) -> Optional[str]:
     if not project_id:
-        return
+        return None
     db = try_persistence()
     if db is None:
-        return
+        return None
     get_connection, release_connection, PipelineRunRepo, _, _ = db
     conn = await get_connection()
     if conn is None:
-        return
+        return None
     try:
         project = await _get_project_repo().get_by_id(conn, project_id)
         if project is None:
@@ -106,13 +106,15 @@ async def _validate_project_ownership(run_id: str, project_id: Optional[str]) ->
         repo = PipelineRunRepo()
         run = await repo.get_by_id(conn, run_db_id(run_id))
         if run is None:
-            return
+            return project["root_path"]
         if run.get("project_root") != project["root_path"]:
             raise HTTPException(status_code=403, detail="run does not belong to the specified project")
+        return project["root_path"]
     except HTTPException:
         raise
     except Exception:
         logger.debug("DB project ownership check failed for run %s", run_id, exc_info=True)
+        return None
     finally:
         await release_connection(conn)
 
@@ -145,14 +147,14 @@ if router:
 
     @router.get("/runs/{run_id}/artifacts")
     async def list_artifacts(run_id: str, workdir: Optional[str] = Query(default=None), project_id: Optional[str] = Query(default=None), user: Dict[str, Any] = _get_auth()):
-        await _validate_project_ownership(run_id, project_id)
+        resolved_workdir = await _validate_project_ownership(run_id, project_id) or workdir
 
         db_exists = await _db_run_exists(run_id)
         if db_exists is False:
             raise HTTPException(status_code=404, detail="run not found")
 
         try:
-            run_dir = _run_dir(workdir, run_id)
+            run_dir = _run_dir(resolved_workdir, run_id)
         except FileNotFoundError:
             if db_exists is True:
                 return []
@@ -161,14 +163,14 @@ if router:
 
     @router.get("/runs/{run_id}/artifacts/{filename}")
     async def get_artifact(run_id: str, filename: str, workdir: Optional[str] = Query(default=None), project_id: Optional[str] = Query(default=None), user: Dict[str, Any] = _get_auth()):
-        await _validate_project_ownership(run_id, project_id)
+        resolved_workdir = await _validate_project_ownership(run_id, project_id) or workdir
 
         db_exists = await _db_run_exists(run_id)
         if db_exists is False:
             raise HTTPException(status_code=404, detail="run not found")
 
         try:
-            run_dir = _run_dir(workdir, run_id)
+            run_dir = _run_dir(resolved_workdir, run_id)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="run not found")
         path = _resolve_artifact_path(run_dir, filename)

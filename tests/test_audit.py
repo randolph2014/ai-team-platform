@@ -128,3 +128,30 @@ class TestAuditLogging(unittest.TestCase):
             self.assertEqual(entry["actor"], "sync_user")
         finally:
             audit_mod._AUDIT_DB_AVAILABLE = original
+
+    def test_write_audit_db_converts_iso_created_at_to_datetime(self):
+        import asyncio
+        import engine.audit as audit_mod
+
+        conn = AsyncMock()
+        release = AsyncMock()
+        entry = {
+            "id": "audit-1",
+            "action": "create_run",
+            "actor": "api-user",
+            "resource_type": "run",
+            "resource_id": "run-1",
+            "detail": {"ok": True},
+            "ip_address": None,
+            "user_agent": None,
+            "created_at": "2026-05-11T23:27:22.218352+00:00",
+        }
+
+        with patch("persistence.connection.get_connection", AsyncMock(return_value=conn)), \
+             patch("persistence.connection.release_connection", release):
+            asyncio.run(audit_mod._write_audit_db(entry))
+
+        created_at_arg = conn.execute.call_args.args[9]
+        self.assertIsInstance(created_at_arg, datetime)
+        self.assertEqual(created_at_arg.isoformat(), entry["created_at"])
+        release.assert_awaited_once_with(conn)

@@ -1389,6 +1389,46 @@ class TestArtifactsRoutes(BaseRoutesTest):
 
             self.assertEqual(ctx.exception.status_code, 404)
 
+    def test_get_artifact_resolves_project_id_root(self) -> None:
+        """project_id 查询 artifact 时必须用项目 root_path 定位真实产物目录。"""
+        from unittest.mock import AsyncMock
+
+        run_id = "project-artifact-run"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        (output_dir / "report.json").write_text('{"run_id":"project-artifact-run"}', encoding="utf-8")
+        (output_dir / "implementation-report.md").write_text("project artifact body", encoding="utf-8")
+
+        async def fake_project_get_by_id(conn, id):
+            if id == "proj-1":
+                return {"id": "proj-1", "name": "Project", "root_path": str(self.project_root), "created_at": "2026-01-01T00:00:00"}
+            return None
+
+        async def fake_run_exists(conn, id):
+            return True
+
+        async def fake_run_get_by_id(conn, id):
+            return {"id": id, "project_root": str(self.project_root)}
+
+        fake_project_repo = type("FakeProjectRepo", (), {"get_by_id": staticmethod(fake_project_get_by_id)})()
+        fake_run_repo_cls = type("FakeRunRepo", (), {
+            "run_exists": staticmethod(fake_run_exists),
+            "get_by_id": staticmethod(fake_run_get_by_id),
+        })
+        conn = AsyncMock()
+        fake_db = (AsyncMock(return_value=conn), AsyncMock(), fake_run_repo_cls, None, None)
+
+        with patch("api.routes.artifacts.try_persistence", return_value=fake_db), \
+             patch("api.routes.artifacts._get_project_repo", return_value=fake_project_repo), \
+             patch("api.routes.artifacts.run_db_id", side_effect=lambda x: x):
+            response = self.client.get(
+                f"/api/runs/{run_id}/artifacts/implementation-report.md",
+                params={"project_id": "proj-1"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("project artifact body", response.text)
+
 
 class TestSettingsDesensitization(BaseRoutesTest):
     """测试 settings GET 敏感字段脱敏"""
@@ -1729,10 +1769,14 @@ class TestRunsFallbackToFilesystem(BaseRoutesTest):
         report = RunReport(
             run_id="list-fs-run",
             status="completed",
-            requirement="测试",
+            requirement="真实列表需求",
             project_root=str(self.project_root),
             output_dir=str(output_dir),
             config_source="default",
+            config_path=str(self.project_root / ".ai" / "pipeline-configs" / "list-fs-run.yaml"),
+            duration_seconds=12,
+            started_at="2026-05-12T00:00:00+08:00",
+            completed_at="2026-05-12T00:00:12+08:00",
         )
         report.write(output_dir / "report.json")
 
@@ -1742,6 +1786,10 @@ class TestRunsFallbackToFilesystem(BaseRoutesTest):
         items = data.get("items", data) if isinstance(data, dict) else data
         run_ids = [r["run_id"] for r in items]
         self.assertIn("list-fs-run", run_ids)
+        item = next(r for r in items if r["run_id"] == "list-fs-run")
+        self.assertEqual(item["requirement"], "真实列表需求")
+        self.assertEqual(item["duration_seconds"], 12)
+        self.assertEqual(item["project_root"], str(self.project_root))
 
     def test_get_run_uses_completed_file_report_when_db_detail_is_stale(self) -> None:
         """DB 详情缺 stages/artifacts 时，文件报告优先，避免 queued 覆盖 completed。"""

@@ -119,6 +119,7 @@ export interface RunListItem {
   status: RunStatus;
   pipeline?: string | null;
   requirement?: string;
+  project_root?: string;
   output_dir?: string;
   started_at?: string;
   completed_at?: string;

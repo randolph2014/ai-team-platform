@@ -41,6 +41,9 @@ async def _write_audit_db(entry: Dict[str, Any]) -> None:
         conn = await get_connection()
         if conn is None:
             return
+        created_at = entry["created_at"]
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
         try:
             await conn.execute(
                 "INSERT INTO audit_logs (id, action, actor, resource_type, resource_id, detail, ip_address, user_agent, created_at) "
@@ -112,13 +115,5 @@ def record_audit_sync(
     resource_id: Optional[str] = None,
     detail: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    import asyncio
-    try:
-        asyncio.get_running_loop()
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(
-                lambda: asyncio.run(record_audit(action, actor, resource_type, resource_id, detail))
-            ).result(timeout=30)
-    except RuntimeError:
-        return asyncio.run(record_audit(action, actor, resource_type, resource_id, detail))
+    from persistence.connection import run_sync
+    return run_sync(record_audit(action, actor, resource_type, resource_id, detail))
