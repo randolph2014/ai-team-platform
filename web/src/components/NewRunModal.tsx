@@ -15,7 +15,13 @@ interface PipelineChoice {
   name: string;
   description: string;
   source: 'template' | 'pipeline';
+  priority: number;
 }
+
+const TEMPLATE_PRIORITY: Record<string, number> = {
+  bugfix: 0,
+  'project-delivery': 1,
+};
 
 function templateChoice(template: PipelineTemplate): PipelineChoice {
   return {
@@ -23,6 +29,7 @@ function templateChoice(template: PipelineTemplate): PipelineChoice {
     name: template.name,
     description: template.description,
     source: 'template',
+    priority: TEMPLATE_PRIORITY[template.id] ?? TEMPLATE_PRIORITY[template.category || ''] ?? 10,
   };
 }
 
@@ -32,12 +39,12 @@ function customPipelineChoice(pipeline: Pipeline): PipelineChoice {
     name: pipeline.name,
     description: pipeline.description,
     source: 'pipeline',
+    priority: 20,
   };
 }
 
 export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
   const [projectId, setProjectId] = useState('');
-  const [workdir, setWorkdir] = useState('');
   const [requirement, setRequirement] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -49,19 +56,23 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
     if (open) {
       setSelectedPipeline('');
       setProjectId('');
-      setWorkdir('');
-      Promise.all([fetchPipelineTemplates(), fetchPipelines()])
-        .then(([templates, pipelines]) => {
+      Promise.allSettled([fetchPipelineTemplates(), fetchPipelines()])
+        .then(([templatesResult, pipelinesResult]) => {
+          const templates = templatesResult.status === 'fulfilled' ? templatesResult.value : [];
+          const pipelines = pipelinesResult.status === 'fulfilled' ? pipelinesResult.value : [];
           const choices = [
             ...templates.map(templateChoice),
             ...pipelines.map(customPipelineChoice),
-          ];
+          ].sort((a, b) => a.priority - b.priority);
           setPipelineChoices(choices);
           if (choices.length > 0) {
             setSelectedPipeline(choices[0].ref);
           }
-        })
-        .catch((e: Error) => setError(e.message || '加载 Pipeline 模板失败'));
+          const failures = [templatesResult, pipelinesResult].filter((result) => result.status === 'rejected');
+          if (failures.length > 0 && choices.length === 0) {
+            setError('加载 Pipeline 模板失败');
+          }
+        });
       setError('');
       setValidationErrors({});
     }
@@ -69,7 +80,7 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
 
   function validate(): boolean {
     const errors: Record<string, string> = {};
-    if (!projectId && !workdir.trim()) errors.workdir = '请选择项目或输入项目路径';
+    if (!projectId) errors.project = '请选择项目路径';
     if (!requirement.trim()) errors.requirement = '需求描述不能为空';
     setValidationErrors(errors);
     return Object.keys(errors).length === 0;
@@ -81,14 +92,14 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
     setError('');
     try {
       const payload = await createRun(
-        workdir.trim(),
+        '',
         requirement.trim(),
         {
           pipeline_id: selectedPipeline || undefined,
           project_id: projectId || undefined,
         },
       );
-      const resolvedWorkdir = workdir.trim() || payload.project_root || '';
+      const resolvedWorkdir = payload.project_root || '';
       if (resolvedWorkdir) {
         rememberRunWorkdir(payload.run_id, resolvedWorkdir);
       }
@@ -129,21 +140,14 @@ export function NewRunModal({ open, onClose, onRefreshNeeded }: Props) {
             <option>无可用模板</option>
           </select>
         )}
-        <label htmlFor="new-run-project">项目</label>
-        <ProjectSelector id="new-run-project" value={projectId} onChange={(id) => { setProjectId(id); if (id) setWorkdir(''); }} error={validationErrors.project} />
-        {!projectId && (
-          <>
-            <label htmlFor="new-run-workdir">项目路径（手动输入）</label>
-            <input id="new-run-workdir" value={workdir} onChange={(event) => setWorkdir(event.target.value)} />
-            {validationErrors.workdir && <span className="fieldError">{validationErrors.workdir}</span>}
-          </>
-        )}
+        <label htmlFor="new-run-project">项目路径</label>
+        <ProjectSelector id="new-run-project" value={projectId} onChange={setProjectId} error={validationErrors.project} />
         <label htmlFor="new-run-requirement">需求描述</label>
-        <textarea id="new-run-requirement" value={requirement} onChange={(event) => setRequirement(event.target.value)} />
+        <textarea id="new-run-requirement" className="requirementTextarea" value={requirement} onChange={(event) => setRequirement(event.target.value)} />
         {validationErrors.requirement && <span className="fieldError">{validationErrors.requirement}</span>}
         <div className="modalActions">
           <button className="button" onClick={onClose}>取消</button>
-          <button className="button primary" disabled={!requirement.trim() || submitting} onClick={submit}>
+          <button className="button primary" disabled={!projectId || !requirement.trim() || submitting} onClick={submit}>
             {submitting ? '创建中' : '开始运行'}
           </button>
         </div>

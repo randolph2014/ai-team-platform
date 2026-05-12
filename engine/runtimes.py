@@ -4,6 +4,8 @@ import os
 import subprocess
 import shutil
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -73,6 +75,8 @@ TRANSIENT_RUNTIME_KEYS = {
     "provider",
     "source",
 }
+RUNTIME_CANDIDATE_CACHE_TTL_SECONDS = 60.0
+_runtime_candidate_cache: Dict[Tuple[Any, ...], Tuple[float, List[Dict[str, Any]]]] = {}
 
 
 def _config_error(message: str) -> Exception:
@@ -227,6 +231,41 @@ def detect_cli_version(cli_path: str) -> Optional[str]:
     return output.splitlines()[0] if output else None
 
 
+def clear_runtime_candidate_cache() -> None:
+    _runtime_candidate_cache.clear()
+
+
+def _copy_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [dict(candidate) for candidate in candidates]
+
+
+def _runtime_candidate_probe() -> Tuple[Tuple[Any, ...], Dict[str, Optional[str]], Dict[str, str]]:
+    paths: Dict[str, Optional[str]] = {}
+    commands: Dict[str, str] = {}
+    key_parts: List[Tuple[Any, ...]] = []
+    for runtime_id, spec in RUNTIME_SPECS.items():
+        if not spec.get("supported"):
+            continue
+        command = _env_path(spec) or spec["cli"]
+        path = shutil.which(command)
+        paths[runtime_id] = path
+        commands[runtime_id] = command
+        key_parts.append((runtime_id, command, path, _env_model(spec)))
+    return (str(Path.home()), tuple(key_parts)), paths, commands
+
+
+def _detect_versions(paths: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]:
+    available = {runtime_id: path for runtime_id, path in paths.items() if path}
+    if not available:
+        return {}
+    with ThreadPoolExecutor(max_workers=len(available)) as executor:
+        futures = {
+            runtime_id: executor.submit(detect_cli_version, path)
+            for runtime_id, path in available.items()
+        }
+        return {runtime_id: future.result() for runtime_id, future in futures.items()}
+
+
 def backfill_runtime_models(runtimes: Dict[str, Any]) -> None:
     """对未显式声明 model 的 runtime，尝试从 CLI 配置回填，仅用于可观测性。
 
@@ -249,12 +288,18 @@ def backfill_runtime_models(runtimes: Dict[str, Any]) -> None:
 
 
 def discover_runtime_candidates() -> List[Dict[str, Any]]:
+    cache_key, paths, _commands = _runtime_candidate_probe()
+    now = time.monotonic()
+    cached = _runtime_candidate_cache.get(cache_key)
+    if cached and now - cached[0] < RUNTIME_CANDIDATE_CACHE_TTL_SECONDS:
+        return _copy_candidates(cached[1])
+
+    versions = _detect_versions(paths)
     candidates: List[Dict[str, Any]] = []
     for runtime_id, spec in RUNTIME_SPECS.items():
         if not spec.get("supported"):
             continue
-        command = _env_path(spec) or spec["cli"]
-        path = shutil.which(command)
+        path = paths.get(runtime_id)
         available = path is not None
         item = {
             "id": runtime_id,
@@ -268,12 +313,13 @@ def discover_runtime_candidates() -> List[Dict[str, Any]]:
             "prompt_mode": spec.get("prompt_mode", "stdin"),
             "model_arg_style": spec.get("model_arg_style"),
             "launch_header": spec.get("launch_header", spec["cli"]),
-            "version": detect_cli_version(path) if available else None,
+            "version": versions.get(runtime_id) if available else None,
         }
         model = _env_model(spec) or _cli_config_model(runtime_id)
         if model:
             item["model"] = model
         candidates.append(item)
+    _runtime_candidate_cache[cache_key] = (now, _copy_candidates(candidates))
     return candidates
 
 

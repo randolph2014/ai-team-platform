@@ -358,6 +358,38 @@ class TestLoadConfig(unittest.TestCase):
             loaded = load_config(root, explicit_config=str(config_path))
             self.assertIn("Mock", loaded.config["runtimes"])
 
+    def test_explicit_empty_quality_gates_disables_default_injection(self) -> None:
+        """显式 quality_gates: [] 表示禁用默认质量门禁。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+            config_path = root / "custom.yaml"
+            config_path.write_text(
+                "runtimes:\n  mock:\n    cli: mock\nagents: []\npipeline: []\nquality_gates: []\n",
+                encoding="utf-8",
+            )
+
+            loaded = load_config(root, explicit_config=str(config_path))
+
+            self.assertEqual(loaded.config["quality_gates"], [])
+
+    def test_missing_quality_gates_injects_project_defaults(self) -> None:
+        """未配置 quality_gates 时仍按项目语言注入默认门禁。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+            config_path = root / "custom.yaml"
+            config_path.write_text(
+                "runtimes:\n  mock:\n    cli: mock\nagents: []\npipeline: []\n",
+                encoding="utf-8",
+            )
+
+            loaded = load_config(root, explicit_config=str(config_path))
+
+            gate_names = [gate["name"] for gate in loaded.config["quality_gates"]]
+            self.assertIn("python-syntax", gate_names)
+            self.assertIn("pytest", gate_names)
+
     def test_load_config_invalid_yaml(self) -> None:
         """加载无效 YAML 抛出 ConfigError"""
         with tempfile.TemporaryDirectory() as tmp:

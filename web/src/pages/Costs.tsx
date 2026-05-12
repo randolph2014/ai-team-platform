@@ -12,9 +12,19 @@ interface CostEntry {
   timestamp: string;
 }
 
+interface CostSummary {
+  total_cost: number;
+  total_tokens: number;
+  run_count: number;
+  source?: string;
+  token_basis?: string;
+  pricing_basis?: string;
+  is_estimate?: boolean;
+}
+
 export function Costs() {
   const [period, setPeriod] = useState('daily');
-  const [summary, setSummary] = useState<{ total_cost: number; total_tokens: number; run_count: number } | null>(null);
+  const [summary, setSummary] = useState<CostSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState('');
 
@@ -50,6 +60,13 @@ export function Costs() {
         <h1>成本追踪</h1>
       </header>
 
+      <section className="panel costDataNotice">
+        <strong>真实执行记录，估算成本</strong>
+        <span>
+          数据来自后端 <code>cost_tracking</code> 表；Agent 完成后按 prompt/output 文本估算 Token，再按模型单价估算 USD。它可用于趋势和量级判断，但不是云厂商账单。
+        </span>
+      </section>
+
       <div className="costPeriodSelector">
         <button
           className={`button ${period === 'daily' ? 'primary' : ''}`}
@@ -82,6 +99,7 @@ export function Costs() {
           ) : (
             <strong>${summary?.total_cost.toFixed(4) ?? '0.0000'}</strong>
           )}
+          <small>估算 USD</small>
         </div>
         <div className="statCard">
           <Hash size={20} />
@@ -91,6 +109,7 @@ export function Costs() {
           ) : (
             <strong>{(summary?.total_tokens ?? 0).toLocaleString()}</strong>
           )}
+          <small>按文本估算</small>
         </div>
         <div className="statCard">
           <Play size={20} />

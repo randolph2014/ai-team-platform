@@ -132,9 +132,8 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     from redis import Redis
-    from rq import Connection, Worker
+    from rq import Worker
 
     redis_url = os.environ.get("AI_TEAM_REDIS_URL", "redis://localhost:6379/0")
-    with Connection(Redis.from_url(redis_url)):
-        w = Worker(["default"])
-        w.work()
+    w = Worker(["default"], connection=Redis.from_url(redis_url))
+    w.work()

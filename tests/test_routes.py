@@ -19,7 +19,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 try:
     from fastapi.testclient import TestClient
@@ -195,24 +195,34 @@ class TestPipelinesRoutes(BaseRoutesTest):
         data = response.json()
         self.assertIsInstance(data, list)
 
+    def test_list_pipelines_falls_back_to_files_when_db_query_fails(self) -> None:
+        """GET /api/pipelines 的 DB 查询失败时返回本地流水线列表而不是 500。"""
+        with patch("persistence.connection.is_available", return_value=True), \
+             patch("api.routes.pipelines._async_list_pipelines", new=AsyncMock(side_effect=RuntimeError("loop closed"))):
+            response = self.client.get("/api/pipelines")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
     def test_list_templates_returns_builtin(self) -> None:
         """GET /api/pipelines/templates 返回内置模板"""
         response = self.client.get("/api/pipelines/templates")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIsInstance(data, list)
-        self.assertEqual([item["id"] for item in data], ["project-delivery", "bugfix", "requirement"])
+        self.assertEqual([item["id"] for item in data], ["project-delivery", "bugfix"])
         self.assertIn("id", data[0])
         self.assertIn("name", data[0])
+        self.assertEqual(data[0]["name"], "研发流水线")
 
     def test_builtin_templates_use_current_collaboration_workflow(self) -> None:
-        """内置模板必须是三条有真实差异的可执行流水线。"""
+        """内置模板必须是有真实差异的可执行流水线。"""
         response = self.client.get("/api/pipelines/templates")
         self.assertEqual(response.status_code, 200)
 
         legacy_stages = {"plan", "architect", "context", "accept", "risk_analysis", "doc", "code_apply"}
         templates = {template["id"]: template for template in response.json()}
-        self.assertEqual(set(templates), {"project-delivery", "bugfix", "requirement"})
+        self.assertEqual(set(templates), {"project-delivery", "bugfix"})
 
         expected_stage_ids = {
             "project-delivery": [
@@ -240,12 +250,6 @@ class TestPipelinesRoutes(BaseRoutesTest):
                 "review",
                 "acceptance_confirm",
             ],
-            "requirement": [
-                "context_scan",
-                "requirement_analysis",
-                "requirement_synthesis",
-                "requirement_confirm",
-            ],
         }
         for template_id, template in templates.items():
             stages = template.get("stages", [])
@@ -263,10 +267,6 @@ class TestPipelinesRoutes(BaseRoutesTest):
                 self.assertNotIn("requirement_analysis", stages)
                 self.assertNotIn("task_plan_confirm", stages)
                 self.assertEqual(stage_contracts["planning"]["name"], "修复方案与回归计划")
-            if template_id == "requirement":
-                self.assertNotIn("develop", stages)
-                self.assertNotIn("qa", stages)
-                self.assertNotIn("review", stages)
 
     def test_create_pipeline_hydrates_known_stage_contracts(self) -> None:
         """保存模板时即使 UI 只传 id，也必须补齐上下文扫描和硬人工门禁契约。"""
@@ -1673,6 +1673,108 @@ class TestRunsFallbackToFilesystem(BaseRoutesTest):
         run_ids = [r["run_id"] for r in items]
         self.assertIn("list-fs-run", run_ids)
 
+    def test_get_run_uses_completed_file_report_when_db_detail_is_stale(self) -> None:
+        """DB 详情缺 stages/artifacts 时，文件报告优先，避免 queued 覆盖 completed。"""
+        from engine.models import RunReport, StageRun
+
+        run_id = "stale-db-detail"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        report = RunReport(
+            run_id=run_id,
+            status="completed",
+            requirement="测试需求",
+            project_root=str(self.project_root),
+            output_dir=str(output_dir),
+            config_source="project",
+            started_at="2026-05-11T08:00:00+00:00",
+            completed_at="2026-05-11T08:00:05+00:00",
+            artifacts=["a.md", "b.json"],
+            stages=[
+                StageRun(stage_id="planning", stage_name="Planning", status="completed", started_at="2026-05-11T08:00:01+00:00"),
+                StageRun(stage_id="develop", stage_name="Develop", status="completed", started_at="2026-05-11T08:00:02+00:00"),
+            ],
+        )
+        report.write(output_dir / "report.json")
+        stale_db = {
+            "run_id": run_id,
+            "status": "queued",
+            "project_root": str(self.project_root),
+            "output_dir": "",
+            "started_at": None,
+            "artifacts": [],
+            "stages": [],
+        }
+
+        with patch("api.routes.runs._db_get_run", new=AsyncMock(return_value=stale_db)):
+            response = self.client.get(f"/api/runs/{run_id}", params={"workdir": str(self.project_root)})
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "completed")
+        self.assertEqual(data["output_dir"], str(output_dir))
+        self.assertEqual(data["artifacts"], ["a.md", "b.json"])
+        self.assertEqual([stage["stage_id"] for stage in data["stages"]], ["planning", "develop"])
+
+    def test_list_runs_overlays_stale_db_summary_from_file_report(self) -> None:
+        """DB 摘要缺运行结果字段时，列表使用最新文件报告补齐。"""
+        from engine.models import RunReport
+
+        run_id = "stale-db-list"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        report = RunReport(
+            run_id=run_id,
+            status="completed",
+            requirement="测试列表",
+            project_root=str(self.project_root),
+            output_dir=str(output_dir),
+            config_source="project",
+            started_at="2026-05-11T08:00:00+00:00",
+            completed_at="2026-05-11T08:00:05+00:00",
+            duration_seconds=5,
+        )
+        report.write(output_dir / "report.json")
+        db_results = {
+            "items": [{"run_id": run_id, "status": "queued", "output_dir": "", "started_at": None}],
+            "total": 1,
+            "page": 1,
+            "size": 20,
+        }
+
+        with patch("api.routes.runs._db_list_runs", new=AsyncMock(return_value=db_results)):
+            response = self.client.get("/api/runs", params={"workdir": str(self.project_root)})
+
+        self.assertEqual(response.status_code, 200)
+        item = response.json()["items"][0]
+        self.assertEqual(item["status"], "completed")
+        self.assertEqual(item["output_dir"], str(output_dir))
+        self.assertEqual(item["started_at"], "2026-05-11T08:00:00+00:00")
+        self.assertEqual(item["duration_seconds"], 5)
+
+    def test_list_runs_includes_filesystem_completed_run_missing_from_db_page(self) -> None:
+        """DB 状态过滤漏掉 stale completed 文件时，列表会追加文件报告。"""
+        from engine.models import RunReport
+
+        run_id = "stale-db-filtered"
+        output_dir = self.project_root / ".ai" / "team-output" / run_id
+        output_dir.mkdir(parents=True)
+        RunReport(
+            run_id=run_id,
+            status="completed",
+            requirement="测试过滤",
+            project_root=str(self.project_root),
+            output_dir=str(output_dir),
+            config_source="project",
+        ).write(output_dir / "report.json")
+        db_results = {"items": [], "total": 0, "page": 1, "size": 20}
+
+        with patch("api.routes.runs._db_list_runs", new=AsyncMock(return_value=db_results)):
+            response = self.client.get("/api/runs", params={"workdir": str(self.project_root), "status": "completed"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["run_id"] for item in response.json()["items"]], [run_id])
+
 
 class TestProjectRoutes(BaseRoutesTest):
     """测试 /api/projects CRUD 端点"""
@@ -1803,6 +1905,97 @@ class TestProjectRoutes(BaseRoutesTest):
             json={"name": "Bad", "root_path": "/nonexistent/path/xyz"},
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_browse_project_directories_lists_allowed_children(self) -> None:
+        """GET /api/projects/browse 返回可选择的目录，并复用 allowed roots 边界。"""
+        repo_dir = self.project_root / "repo"
+        repo_dir.mkdir()
+        hidden_file = self.project_root / "README.md"
+        hidden_file.write_text("not a directory", encoding="utf-8")
+
+        with patch.dict(os.environ, {"AI_TEAM_ALLOWED_ROOTS": str(self.project_root)}, clear=False):
+            response = self.client.get("/api/projects/browse", params={"path": str(self.project_root)})
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["path"], str(self.project_root.resolve()))
+        self.assertEqual(data["parent"], None)
+        self.assertEqual([entry["name"] for entry in data["entries"]], ["repo"])
+        self.assertEqual(data["entries"][0]["path"], str(repo_dir.resolve()))
+
+    def test_browse_project_directories_rejects_outside_allowed_roots(self) -> None:
+        """目录浏览不能越过 allowed roots。"""
+        outside = self.project_root.parent / f"{self.project_root.name}-outside"
+        outside.mkdir()
+
+        with patch.dict(os.environ, {"AI_TEAM_ALLOWED_ROOTS": str(self.project_root)}, clear=False):
+            response = self.client.get("/api/projects/browse", params={"path": str(outside)})
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_import_project_returns_existing_record_for_same_root_path(self) -> None:
+        """POST /api/projects/import 对同一路径幂等，不要求用户先手动建项目。"""
+        existing = {"id": "existing", "name": "Existing", "root_path": str(self.project_root.resolve()), "created_at": "2026-01-01T00:00:00"}
+
+        async def fake_create(conn, *, name, root_path):
+            raise AssertionError("import should not create duplicate project")
+
+        async def fake_get_by_id(conn, id):
+            return existing
+
+        async def fake_get_by_root_path(conn, root_path):
+            return existing
+
+        fake_repo = type("FakeRepo", (), {
+            "create": staticmethod(fake_create),
+            "get_by_id": staticmethod(fake_get_by_id),
+            "get_by_root_path": staticmethod(fake_get_by_root_path),
+        })()
+
+        conn = AsyncMock()
+        fake_db = (AsyncMock(return_value=conn), AsyncMock(), None, None, None)
+
+        with patch("api.routes.projects.try_persistence", return_value=fake_db), \
+             patch("api.routes.projects._get_project_repo", return_value=fake_repo):
+            response = self.client.post("/api/projects/import", json={"root_path": str(self.project_root)})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), existing)
+
+    def test_import_project_creates_project_from_selected_directory(self) -> None:
+        """POST /api/projects/import 可直接把选择的目录引入为项目。"""
+        repo_dir = self.project_root / "selected-repo"
+        repo_dir.mkdir()
+        created = {}
+
+        async def fake_create(conn, *, name, root_path):
+            created["name"] = name
+            created["root_path"] = root_path
+            return "new-id"
+
+        async def fake_get_by_id(conn, id):
+            return {"id": id, "name": created["name"], "root_path": created["root_path"], "created_at": "2026-01-01T00:00:00"}
+
+        async def fake_get_by_root_path(conn, root_path):
+            return None
+
+        fake_repo = type("FakeRepo", (), {
+            "create": staticmethod(fake_create),
+            "get_by_id": staticmethod(fake_get_by_id),
+            "get_by_root_path": staticmethod(fake_get_by_root_path),
+        })()
+
+        conn = AsyncMock()
+        fake_db = (AsyncMock(return_value=conn), AsyncMock(), None, None, None)
+
+        with patch("api.routes.projects.try_persistence", return_value=fake_db), \
+             patch("api.routes.projects._get_project_repo", return_value=fake_repo):
+            response = self.client.post("/api/projects/import", json={"root_path": str(repo_dir)})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], "new-id")
+        self.assertEqual(response.json()["name"], "selected-repo")
+        self.assertEqual(response.json()["root_path"], str(repo_dir.resolve()))
 
     def test_delete_project(self) -> None:
         """DELETE /api/projects/{id} 删除项目"""

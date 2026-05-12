@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import types
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestTaskQueue(unittest.TestCase):
@@ -169,6 +170,27 @@ class TestTaskQueue(unittest.TestCase):
         self.assertEqual(report.project_root, "/tmp/project")
         self.assertEqual(report.output_dir, "/tmp/project/.ai/team-output/run-fail")
 
+    def test_failure_callback_accepts_rq_connection_argument(self):
+        from engine import task_queue
+
+        job = MagicMock()
+        job.kwargs = {
+            "requirement": "req",
+            "workdir": "/tmp/project",
+            "run_id": "run-fail-rq28",
+        }
+        job.args = ()
+
+        save_report = MagicMock()
+        persistence_mod = types.SimpleNamespace(save_report_sync=save_report)
+        with patch("engine.config.find_project_root", return_value="/tmp/project"), \
+             patch.dict("sys.modules", {"persistence": persistence_mod}):
+            task_queue._handle_pipeline_failure(job, object(), RuntimeError, RuntimeError("boom"), None)
+
+        report = save_report.call_args.args[0]
+        self.assertEqual(report.run_id, "run-fail-rq28")
+        self.assertEqual(report.status, "failed")
+
     def test_enqueue_run_exception_resets_queue(self):
         from engine import task_queue
 
@@ -258,6 +280,138 @@ class TestTaskQueue(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             url = task_queue._redis_url()
             self.assertIn("localhost", url)
+
+
+class TestPersistenceContracts(unittest.TestCase):
+    def tearDown(self) -> None:
+        from persistence import connection
+
+        connection._pools.clear()
+        connection._pool = None
+
+    def test_run_sync_closes_loop_local_pool_between_calls(self) -> None:
+        from persistence import connection
+
+        class FakePool:
+            def __init__(self) -> None:
+                self.acquire = AsyncMock(return_value=object())
+                self.release = AsyncMock()
+                self.close = AsyncMock()
+
+        pools = [FakePool(), FakePool()]
+
+        async def use_connection() -> str:
+            conn = await connection.get_connection()
+            await connection.release_connection(conn)
+            return "ok"
+
+        connection._pools.clear()
+        connection._pool = None
+        with patch.dict(os.environ, {"AI_TEAM_DB_URL": "postgresql://example/test"}, clear=False), \
+             patch("persistence.connection.asyncpg.create_pool", new=AsyncMock(side_effect=pools)) as create_pool:
+            self.assertEqual(connection.run_sync(use_connection()), "ok")
+            self.assertEqual(connection.run_sync(use_connection()), "ok")
+
+        self.assertEqual(create_pool.await_count, 2)
+        self.assertEqual(pools[0].close.await_count, 1)
+        self.assertEqual(pools[1].close.await_count, 1)
+        self.assertEqual(connection._pools, {})
+        self.assertIsNone(connection._pool)
+
+    def test_save_report_persists_complete_run_context(self) -> None:
+        import asyncio
+        from engine.models import RunReport, StageRun, StatusTimelineEntry
+        from persistence.repository import save_report
+
+        class Tx:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeConn:
+            def __init__(self) -> None:
+                self.execute_calls = []
+
+            def transaction(self):
+                return Tx()
+
+            async def execute(self, query, *args):
+                self.execute_calls.append((query, args))
+                return "INSERT 0 1"
+
+        fake_conn = FakeConn()
+        report = RunReport(
+            run_id="contract-run",
+            status="completed",
+            requirement="req",
+            project_root="/tmp/project",
+            output_dir="/tmp/project/.ai/team-output/contract-run",
+            config_source="project",
+            started_at="2026-05-11T08:00:00+00:00",
+            completed_at="2026-05-11T08:00:05+00:00",
+            duration_seconds=5,
+            artifacts=["result.md"],
+            status_timeline=[StatusTimelineEntry(status="completed", timestamp="2026-05-11T08:00:05+00:00")],
+            stages=[
+                StageRun(
+                    stage_id="develop",
+                    stage_name="Develop",
+                    status="completed",
+                    started_at="2026-05-11T08:00:01+00:00",
+                    completed_at="2026-05-11T08:00:04+00:00",
+                    output_dir="/tmp/project/.ai/team-output/contract-run/develop",
+                )
+            ],
+        )
+
+        with patch("persistence.connection.get_connection", new=AsyncMock(return_value=fake_conn)), \
+             patch("persistence.connection.release_connection", new=AsyncMock()):
+            asyncio.run(save_report(report, {}))
+
+        run_query, run_args = fake_conn.execute_calls[0]
+        ctx = json.loads(run_args[8])
+        self.assertIn("started_at = COALESCE(EXCLUDED.started_at", run_query)
+        self.assertEqual(ctx["output_dir"], report.output_dir)
+        self.assertEqual(ctx["artifacts"], ["result.md"])
+        self.assertEqual(ctx["status_timeline"][0]["status"], "completed")
+        self.assertEqual(run_args[2], "completed")
+        self.assertEqual(run_args[12], 5)
+
+    def test_stage_runs_order_by_execution_time_before_stage_id(self) -> None:
+        import asyncio
+        from persistence.repository import StageRunRepo
+
+        class FakeConn:
+            def __init__(self) -> None:
+                self.query = ""
+
+            async def fetch(self, query, *args):
+                self.query = query
+                return []
+
+        fake_conn = FakeConn()
+        asyncio.run(StageRunRepo().list_by_run(fake_conn, "run-db-id"))
+
+        self.assertIn("ORDER BY COALESCE(started_at, completed_at) NULLS LAST, iteration, stage_id", fake_conn.query)
+
+    def test_run_detail_response_reads_output_dir_from_context(self) -> None:
+        from persistence.repository import run_detail_to_response
+
+        result = run_detail_to_response(
+            {
+                "id": "db-run",
+                "status": "completed",
+                "project_root": "/tmp/project",
+                "requirement": "req",
+                "context": {"app_run_id": "app-run", "output_dir": "/tmp/project/.ai/team-output/app-run"},
+                "stages": [],
+            }
+        )
+
+        self.assertEqual(result["run_id"], "app-run")
+        self.assertEqual(result["output_dir"], "/tmp/project/.ai/team-output/app-run")
 
 
 if __name__ == "__main__":

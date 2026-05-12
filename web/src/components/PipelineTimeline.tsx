@@ -1,8 +1,9 @@
-import { CheckCircle, Clock, FileText, XCircle } from 'lucide-react';
+import { CheckCircle, FileText, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import type { HumanDecisionValue, RunReport, StageRun } from '../lib/types';
 import { rememberedWorkdir, submitHumanDecision } from '../lib/api';
 import { ArtifactContent } from './ArtifactContent';
+import { ArtifactViewer } from './ArtifactViewer';
 import { StatusBadge } from './StatusBadge';
 
 function humanDecisionLabel(decision: HumanDecisionValue | string): string {
@@ -22,8 +23,9 @@ function splitRequiredChanges(value: string): string[] {
 function formatTime(iso?: string) {
   if (!iso) return null;
   return new Date(iso).toLocaleString('zh-CN', {
-    month: '2-digit', day: '2-digit',
+    year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
   });
 }
 
@@ -33,6 +35,13 @@ function formatDuration(seconds?: number) {
   const m = Math.floor(seconds / 60);
   const s = Math.round(seconds % 60);
   return `${m}m${s}s`;
+}
+
+function formatTimeRange(start?: string, end?: string) {
+  const startLabel = formatTime(start);
+  const endLabel = formatTime(end);
+  if (!startLabel && !endLabel) return null;
+  return `${startLabel || '-'} ～ ${endLabel || '-'}`;
 }
 
 function ReviewActions({ stage, runId, workdir, onActionDone }: {
@@ -114,17 +123,21 @@ function ReviewActions({ stage, runId, workdir, onActionDone }: {
   );
 }
 
-function StageCard({ stage, liveLines, runId, workdir, projectId, onStageAction }: {
+function agentLabel(agent: StageRun['agents'][number]): string {
+  return agent.role || agent.agent_name || agent.runtime_id || agent.runtime_cli || 'agent';
+}
+
+function StageCard({ stage, liveLines, runId, workdir, projectId, onStageAction, onArtifactOpen }: {
   stage: StageRun;
   liveLines: string[];
   runId: string;
   workdir: string;
   projectId?: string;
   onStageAction: () => void;
+  onArtifactOpen: (artifactName: string) => void;
 }) {
   const lines = liveLines;
-  const stageStart = formatTime(stage.started_at);
-  const stageEnd = formatTime(stage.completed_at);
+  const stageRange = formatTimeRange(stage.started_at, stage.completed_at);
   const stageDuration = formatDuration(stage.duration_seconds);
   return (
     <section className={`stageCard stage-${stage.status}`}>
@@ -132,17 +145,14 @@ function StageCard({ stage, liveLines, runId, workdir, projectId, onStageAction 
         <div className="stageTitle">
           <span className="stageName">{stage.stage_name}</span>
           {stage.is_parallel && <span className="stageTag">parallel</span>}
-          {stage.type === 'human_review' && <span className="stageTag">accept</span>}
-          {stageDuration && (
-            <span className="stageTag stageDuration"><Clock size={11} /> {stageDuration}</span>
-          )}
+          {stage.type === 'human_review' && <span className="stageTag stageHumanTag">人工确认</span>}
         </div>
         <StatusBadge status={stage.status} />
       </header>
-      {(stageStart || stageEnd) && (
+      {(stageRange || stageDuration) && (
         <div className="stageTimeInfo">
-          {stageStart && <span className="stageTimeItem">开始 {stageStart}</span>}
-          {stageEnd && <span className="stageTimeItem">结束 {stageEnd}</span>}
+          {stageRange && <span className="stageTimeRange">{stageRange}</span>}
+          {stageDuration && <span className="stageDurationText">耗时 {stageDuration}</span>}
         </div>
       )}
       {stage.error_message && (
@@ -156,7 +166,14 @@ function StageCard({ stage, liveLines, runId, workdir, projectId, onStageAction 
               {stage.artifact_validations.map((validation, index) => (
                 <div className="artifactValidationRow" key={`${stage.stage_id}-validation-${validation.artifact}-${index}`}>
                   <div className="artifactValidationMain">
-                    <span className="artifactValidationArtifact">{validation.artifact}</span>
+                    <button
+                      type="button"
+                      className="artifactValidationArtifact"
+                      onClick={() => onArtifactOpen(validation.artifact)}
+                      title={`查看 ${validation.artifact}`}
+                    >
+                      {validation.artifact}
+                    </button>
                     {validation.validator ? <span className="stageTag">{validation.validator}</span> : null}
                     {validation.message ? <span className="artifactValidationMessage">{validation.message}</span> : null}
                   </div>
@@ -188,35 +205,28 @@ function StageCard({ stage, liveLines, runId, workdir, projectId, onStageAction 
           </div>
         ) : null}
         {stage.agents.map((agent) => {
-          const agentStart = formatTime(agent.started_at);
-          const agentEnd = formatTime(agent.completed_at);
+          const agentRange = formatTimeRange(agent.started_at, agent.completed_at);
+          const agentDuration = formatDuration(agent.duration_seconds);
           return (
           <div className="agentRow" key={`${stage.stage_id}-${agent.agent_name}`}>
-            <div className="agentInfo">
-              <div className="agentIcon">{agent.agent_name.slice(0, 2).toUpperCase()}</div>
-              <div>
-                <div className="agentName">{agent.agent_name}</div>
-                <div className="agentRole">{agent.role ?? agent.runtime_id ?? agent.runtime_cli}</div>
-                {(agentStart || agent.model_used) && (
-                  <div className="agentDetail">
-                    {agentStart && <span>{agentStart}</span>}
-                    {agentEnd && <span> → {agentEnd}</span>}
-                    {agent.model_used && <span className="agentModel">{agent.model_used}</span>}
-                  </div>
-                )}
-                {agent.error_message && <div className="agentError">{agent.error_message}</div>}
-              </div>
+            <div className="agentIdentity">
+              <span className="agentCoreLabel">{agentLabel(agent)}</span>
             </div>
-            <div className="agentMeta">
-              {agent.duration_seconds ? <span>{Math.round(agent.duration_seconds)}s</span> : null}
+            <div className="agentRunInfo">
+              {agentRange && <span className="agentTimeRange">{agentRange}</span>}
+              {agentDuration && <span className="agentDuration">耗时 {agentDuration}</span>}
+              {agent.model_used && <span className="agentModel">{agent.model_used}</span>}
+            </div>
+            <div className="agentOutput">
               {agent.exit_code != null && agent.exit_code !== 0 && <span className="agentExitCode">exit {agent.exit_code}</span>}
               {agent.output_file ? (
                 <span className="artifactLink">
                   <FileText size={13} /> {agent.output_file.split('/').pop()}
                 </span>
               ) : null}
-              <StatusBadge status={agent.status} />
             </div>
+            <StatusBadge status={agent.status} />
+            {agent.error_message && <div className="agentError">{agent.error_message}</div>}
           </div>
           );
         })}
@@ -249,16 +259,15 @@ function StageCard({ stage, liveLines, runId, workdir, projectId, onStageAction 
         {stage.quality_gates.length > 0 ? (
           <div className="gateList">
             {stage.quality_gates.map((gate) => {
-              const gateStart = formatTime(gate.started_at);
-              const gateEnd = formatTime(gate.completed_at);
+              const gateRange = formatTimeRange(gate.started_at, gate.completed_at);
               return (
               <div className="gateRow" key={gate.name}>
                 <div>
                   <div className="gateName">{gate.name}</div>
                   {gate.command ? <div className="gateCommand">{gate.command}</div> : null}
-                  {(gateStart || gate.retry_count) && (
+                  {(gateRange || gate.retry_count) && (
                     <div className="gateDetail">
-                      {gateStart && <span>{gateStart}{gateEnd ? ` → ${gateEnd}` : ''}</span>}
+                      {gateRange && <span>{gateRange}</span>}
                       {gate.retry_count != null && gate.retry_count > 0 && <span>重试 {gate.retry_count} 次</span>}
                     </div>
                   )}
@@ -280,20 +289,32 @@ export function PipelineTimeline({ run, liveLines = [], projectId, onStageAction
   projectId?: string;
   onStageAction: () => void;
 }) {
+  const [viewingArtifact, setViewingArtifact] = useState<string | null>(null);
   const wd = rememberedWorkdir(run.run_id) || run.project_root;
   return (
-    <div className="timeline">
-      {run.stages.map((stage) => (
-        <StageCard
-          stage={stage}
-          liveLines={liveLines}
+    <>
+      <div className="timeline">
+        {run.stages.map((stage) => (
+          <StageCard
+            stage={stage}
+            liveLines={liveLines}
+            runId={run.run_id}
+            workdir={wd}
+            projectId={projectId}
+            onStageAction={onStageAction}
+            onArtifactOpen={setViewingArtifact}
+            key={`${stage.stage_id}-${stage.iteration ?? 1}`}
+          />
+        ))}
+      </div>
+      {viewingArtifact && (
+        <ArtifactViewer
           runId={run.run_id}
-          workdir={wd}
           projectId={projectId}
-          onStageAction={onStageAction}
-          key={`${stage.stage_id}-${stage.iteration ?? 1}`}
+          artifactName={viewingArtifact}
+          onClose={() => setViewingArtifact(null)}
         />
-      ))}
-    </div>
+      )}
+    </>
   );
 }

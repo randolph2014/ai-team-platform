@@ -1,6 +1,7 @@
 import { AlertTriangle, Boxes, Edit3, Plus, Trash2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { createPipeline, deletePipeline, fetchPipelineTemplates, fetchPipelines, updatePipeline } from '../lib/api';
+import { pipelineStageRuntimeSummary } from '../lib/pipelineDisplay';
 import type { Pipeline, PipelineTemplate } from '../lib/types';
 
 const DEFAULT_YAML = `name: my-pipeline
@@ -61,6 +62,11 @@ function parseInlineList(value: string): string[] {
 const ARRAY_STAGE_FIELDS = new Set(['agents', 'input', 'json_artifacts', 'required_artifacts', 'loopback_trigger']);
 const BOOLEAN_STAGE_FIELDS = new Set(['is_parallel', 'parallel', 'allow_auto_approve', 'allow_auto_skip', 'requires_reason_on_reject']);
 const NUMBER_STAGE_FIELDS = new Set(['max_retries']);
+const PRIMARY_TEMPLATE_CATEGORIES = new Set(['bugfix']);
+const TEMPLATE_ORDER: Record<string, number> = {
+  bugfix: 0,
+  'project-delivery': 1,
+};
 
 function parseStageFieldValue(key: string, value: string): unknown {
   const trimmed = value.trim();
@@ -161,6 +167,10 @@ function stringArray(value: unknown): string[] {
     return value.map(String);
   }
   return typeof value === 'string' && value ? [value] : [];
+}
+
+function templateSortKey(template: PipelineTemplate): number {
+  return TEMPLATE_ORDER[template.id] ?? TEMPLATE_ORDER[template.category || ''] ?? 10;
 }
 
 function writeArrayField(lines: string[], key: string, value: unknown) {
@@ -352,6 +362,29 @@ export function Pipelines() {
     setEditorOpen(true);
   }
 
+  function renderTemplateCard(template: PipelineTemplate, badge: string) {
+    return (
+      <div key={template.id} className="pipelineCard">
+        <div className="pipelineCardTop">
+          <Boxes size={20} />
+          <span className="metaTag metaTagAccent">{badge}</span>
+        </div>
+        <h2>{template.name}</h2>
+        <p>{template.description}</p>
+        <div className="pipelineStats">
+          <span>{template.stage_count ?? template.stages.length} 个阶段</span>
+          <span>{template.human_gate_count ?? 0} 个人工确认</span>
+        </div>
+        <p className="pipelineStageSummary">
+          {pipelineStageRuntimeSummary(template)}
+        </p>
+        <button className="button" style={{ marginTop: 12 }} onClick={() => useTemplate(template)}>
+          <Plus size={14} /> 从模板创建
+        </button>
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div className="page">
@@ -365,52 +398,49 @@ export function Pipelines() {
     );
   }
 
+  const sortedTemplates = [...templates].sort((a, b) => templateSortKey(a) - templateSortKey(b));
+  const primaryTemplates = sortedTemplates.filter((template) => PRIMARY_TEMPLATE_CATEGORIES.has(template.category || template.id));
+  const advancedTemplates = sortedTemplates.filter((template) => !PRIMARY_TEMPLATE_CATEGORIES.has(template.category || template.id));
+
   return (
     <div className="page">
       <header className="pageHeader">
         <h1>Pipeline 模板</h1>
-        <button className="button primary" onClick={() => openEditor(null)}><Plus size={15} /> 新建 Pipeline</button>
+        <button className="button primary" onClick={() => openEditor(null)}><Plus size={15} /> 新建自定义 Pipeline</button>
       </header>
 
-      {templates.length > 0 && (
+      {primaryTemplates.length > 0 && (
         <section style={{ marginBottom: 24 }}>
-          <div className="panelHeader"><h2>内置模板</h2></div>
+          <div className="panelHeader">
+            <h2>常用模板</h2>
+            <span className="panelHint">当前主入口：修复 bug</span>
+          </div>
           <div className="templateGrid">
-            {templates.map((template) => (
-              <div key={template.id} className="pipelineCard">
-                <Boxes size={20} />
-                <h2>{template.name}</h2>
-                <p>{template.description}</p>
-                <div className="pipelineStats">
-                  <span>{template.stage_count ?? template.stages.length} 个阶段</span>
-                  <span>{template.human_gate_count ?? 0} 个人工确认</span>
-                  <span>{template.estimated_effort || 'M'}</span>
-                </div>
-                <p className="pipelineStageSummary">
-                  {(template.stage_summary && template.stage_summary.length > 0 ? template.stage_summary : template.stages).join(' → ')}
-                </p>
-                {template.tags && template.tags.length > 0 && (
-                  <div className="tagRow">
-                    {template.tags.map((tag) => <span key={tag} className="tagPill">{tag}</span>)}
-                  </div>
-                )}
-                <button className="button" style={{ marginTop: 12 }} onClick={() => useTemplate(template)}>
-                  <Plus size={14} /> 从模板创建
-                </button>
-              </div>
-            ))}
+            {primaryTemplates.map((template) => renderTemplateCard(template, '主流程'))}
+          </div>
+        </section>
+      )}
+
+      {advancedTemplates.length > 0 && (
+        <section style={{ marginBottom: 24 }}>
+          <div className="panelHeader">
+            <h2>完整流程模板</h2>
+            <span className="panelHint">保留完整研发闭环，需要人工确认与验收时使用</span>
+          </div>
+          <div className="templateGrid templateGridCompact">
+            {advancedTemplates.map((template) => renderTemplateCard(template, '高级'))}
           </div>
         </section>
       )}
 
       <section className="panel">
-        <div className="panelHeader"><h2>自定义 Pipeline</h2></div>
+        <div className="panelHeader"><h2>高级自定义 Pipeline</h2></div>
         {loading ? (
           <div className="emptyState">加载中...</div>
         ) : pipelines.length === 0 ? (
           <div className="emptyState">
             <p>暂无自定义 Pipeline</p>
-            <small>点击"新建 Pipeline"或使用上方内置模板创建</small>
+            <small>点击「新建自定义 Pipeline」或使用上方模板创建</small>
           </div>
         ) : (
           <div className="tableWrap">

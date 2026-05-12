@@ -95,6 +95,8 @@ class CostTrackerNoDBTests(unittest.TestCase):
         self.assertEqual(summary["run_id"], "nonexistent-run")
         self.assertEqual(summary["count"], 0)
         self.assertEqual(summary["total_cost"], 0.0)
+        self.assertEqual(summary["source"], "cost_tracking")
+        self.assertTrue(summary["is_estimate"])
 
     def test_get_summary_no_db(self) -> None:
         tracker = CostTracker()
@@ -102,6 +104,7 @@ class CostTrackerNoDBTests(unittest.TestCase):
         self.assertEqual(summary["period"], "daily")
         self.assertIn("total_cost", summary)
         self.assertIn("by_model", summary)
+        self.assertEqual(summary["token_basis"], "estimated_from_prompt_and_output_text")
 
     def test_get_aggregate_no_db(self) -> None:
         tracker = CostTracker()

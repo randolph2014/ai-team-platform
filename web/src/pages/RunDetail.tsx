@@ -1,4 +1,4 @@
-import { Archive, Clock, Eye, FileDiff, FileText, FolderGit2, GitBranchPlus, RefreshCw, Wifi, WifiOff, X, XCircle } from 'lucide-react';
+import { Archive, CheckCircle, Clock, Eye, FileDiff, FileText, FolderGit2, GitBranchPlus, RefreshCw, Wifi, WifiOff, X, XCircle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { ArtifactViewer } from '../components/ArtifactViewer';
 import { HarnessReportPanel } from '../components/HarnessReportPanel';
@@ -6,7 +6,7 @@ import { PipelineTimeline } from '../components/PipelineTimeline';
 import { StatusBadge } from '../components/StatusBadge';
 import { apiFetch, fetchRun, fetchRunArtifactText, fetchRunDiff, projectQuery, rememberedWorkdir, rememberRunWorkdir, runWebSocketUrl } from '../lib/api';
 import { parseHarnessReport } from '../lib/harnessSchema';
-import type { HarnessReport, RunEvent, RunReport } from '../lib/types';
+import type { HarnessReport, RunEvent, RunReport, StageRun } from '../lib/types';
 
 function artifactColor(name: string): string {
   if (/\.(md|markdown)$/i.test(name)) return 'var(--blue)';
@@ -23,6 +23,72 @@ function fileIcon(file: string): string {
   if (/\.(md|markdown|rst|txt)$/i.test(file)) return 'var(--blue)';
   if (/\.(css|scss|less)$/i.test(file)) return 'var(--purple)';
   return 'var(--text-secondary)';
+}
+
+const KEY_MILESTONES = [
+  {
+    stageId: 'requirement_confirm',
+    label: '需求定稿确认',
+    description: '需求定稿后由人工确认是否进入规划',
+  },
+  {
+    stageId: 'task_plan_confirm',
+    label: '任务规划确认',
+    description: '任务拆分完成后由人工确认实施范围',
+  },
+  {
+    stageId: 'acceptance_confirm',
+    label: '最终交付确认',
+    description: '交付前由人工确认验收结果',
+  },
+  {
+    stageId: 'retrospect',
+    label: '需求总结报告',
+    description: '交付后沉淀总结、产物和后续建议',
+  },
+] as const;
+
+function milestoneStage(run: RunReport, stageId: string): StageRun | null {
+  return run.stages.find((stage) => stage.stage_id === stageId) || null;
+}
+
+function milestoneArtifact(run: RunReport, stageId: string): string | null {
+  if (stageId === 'retrospect') {
+    return run.artifacts.find((artifact) => /^retrospect-report\.(md|json)$/i.test(artifact)) || null;
+  }
+  return null;
+}
+
+function KeyMilestones({ run }: { run: RunReport }) {
+  return (
+    <section className="panel milestonePanel">
+      <div className="panelHeader">
+        <h2><CheckCircle size={16} /> 关键节点</h2>
+      </div>
+      <div className="milestoneGrid">
+        {KEY_MILESTONES.map((milestone) => {
+          const stage = milestoneStage(run, milestone.stageId);
+          const artifact = milestoneArtifact(run, milestone.stageId);
+          const resolvedStatus = stage?.status || (artifact ? 'completed' : null);
+          return (
+            <div className={`milestoneItem ${resolvedStatus ? '' : 'milestoneItemMissing'}`} key={milestone.stageId}>
+              <div className="milestoneMain">
+                <div className="milestoneTitle">{milestone.label}</div>
+                <div className="milestoneDescription">{milestone.description}</div>
+                {artifact ? <div className="milestoneArtifact mono">{artifact}</div> : null}
+                {stage?.human_decision ? (
+                  <div className="milestoneDecision">
+                    决策：{stage.human_decision.decision === 'approved' ? '已通过' : stage.human_decision.decision === 'rejected' ? '已拒绝' : '待确认'}
+                  </div>
+                ) : null}
+              </div>
+              {resolvedStatus ? <StatusBadge status={resolvedStatus} /> : <span className="milestoneMissing">未配置</span>}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
 
 export function RunDetail({ runId }: { runId: string }) {
@@ -58,8 +124,8 @@ export function RunDetail({ runId }: { runId: string }) {
         setRun(payload);
         setWorkdir(payload.project_root || resolvedWorkdir);
         rememberRunWorkdir(runId, payload.project_root);
-        if (payload.changed_files?.length) setChangedFiles(payload.changed_files);
-        if (payload.diff_stat) setDiffStat(payload.diff_stat);
+        setChangedFiles(payload.changed_files || []);
+        setDiffStat(payload.diff_stat || '');
       })
       .catch((error: Error) => {
         if (!ignore) setLoadError(error.message);
@@ -107,8 +173,8 @@ export function RunDetail({ runId }: { runId: string }) {
           fetchRun(runId, projectId ? { projectId } : workdir).then((updated) => {
             if (!disposed) {
               setRun(updated);
-              if (updated.changed_files?.length) setChangedFiles(updated.changed_files);
-              if (updated.diff_stat) setDiffStat(updated.diff_stat);
+              setChangedFiles(updated.changed_files || []);
+              setDiffStat(updated.diff_stat || '');
             }
           }).catch(() => undefined);
         }
@@ -221,6 +287,8 @@ export function RunDetail({ runId }: { runId: string }) {
   const canCancel = ['queued', 'running', 'paused', 'resuming', 'blocked'].includes(run.status);
   const canRetry = run.status === 'failed' || run.status === 'blocked';
   const canArchive = ['completed', 'failed', 'cancelled', 'blocked'].includes(run.status);
+  const hasDiffData = changedFiles.length > 0 || Boolean(diffStat.trim());
+  const diffSummary = diffStat.trim().split('\n').filter(Boolean).slice(-1)[0] || '本次运行没有检测到代码变更';
 
   return (
     <div className="page">
@@ -247,6 +315,7 @@ export function RunDetail({ runId }: { runId: string }) {
       </section>
 
       {harnessReport ? <HarnessReportPanel report={harnessReport} /> : null}
+      <KeyMilestones run={run} />
 
       {(canCancel || canRetry || canArchive) && (
         <section className="panel runActionsPanel">
@@ -262,8 +331,13 @@ export function RunDetail({ runId }: { runId: string }) {
               </button>
             )}
             {canArchive && (
-              <button className="button" onClick={() => handleRunAction('archive')}>
-                <Archive size={14} /> 归档
+              <button
+                className="button"
+                onClick={() => handleRunAction('archive')}
+                title="将运行状态标记为已归档，保留运行记录和产物"
+                aria-label="移入归档：保留运行记录和产物"
+              >
+                <Archive size={14} /> 移入归档
               </button>
             )}
           </div>
@@ -314,14 +388,24 @@ export function RunDetail({ runId }: { runId: string }) {
         </section>
       )}
 
-      {changedFiles.length > 0 && (
-        <section className="panel fileChangesPanel">
-          <div className="panelHeader">
-            <h2><GitBranchPlus size={16} /> 文件变更<span className="artifactCount">{changedFiles.length}</span></h2>
-            <button className="button" onClick={handleViewDiff}>
-              <FileDiff size={14} /> 查看 Diff
-            </button>
+      <section className="panel fileChangesPanel">
+        <div className="panelHeader">
+          <h2><GitBranchPlus size={16} /> 代码变更<span className="artifactCount">{changedFiles.length}</span></h2>
+          <button className="button" onClick={handleViewDiff} disabled={!hasDiffData}>
+            <FileDiff size={14} /> 查看 Diff
+          </button>
+        </div>
+        <div className="fileChangesSummary">
+          <div>
+            <span className="summaryLabel">文件数</span>
+            <strong>{changedFiles.length}</strong>
           </div>
+          <div>
+            <span className="summaryLabel">统计</span>
+            <strong>{diffSummary}</strong>
+          </div>
+        </div>
+        {changedFiles.length > 0 ? (
           <div className="fileChangesList">
             {changedFiles.map((file) => (
               <div key={file} className="fileChangeItem">
@@ -330,14 +414,16 @@ export function RunDetail({ runId }: { runId: string }) {
               </div>
             ))}
           </div>
-          {diffStat && (
-            <div className="fileChangesStat">
-              <FileText size={12} />
-              <span>{diffStat.split('\n').slice(0, 2).join(' | ')}</span>
-            </div>
-          )}
-        </section>
-      )}
+        ) : (
+          <div className="fileChangesEmpty">暂无代码文件变更</div>
+        )}
+        {diffStat && (
+          <div className="fileChangesStat">
+            <FileText size={12} />
+            <span>{diffStat.split('\n').slice(0, 2).join(' | ')}</span>
+          </div>
+        )}
+      </section>
 
       <div className="detailGrid">
         <PipelineTimeline

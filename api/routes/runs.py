@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from engine.config import ConfigError, find_project_root, reject_deprecated_project_team_config
-from engine.models import HumanDecision, InvalidStatusTransition, normalize_run_status, validate_run_transition
+from engine.models import HumanDecision, InvalidStatusTransition, RunReport, normalize_run_status, validate_run_transition
 from engine.orchestrator import find_run_reports, load_report
 from engine.production_guard import is_production_mode
 
@@ -23,6 +23,8 @@ except ImportError:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 router = APIRouter() if APIRouter else None
+
+TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled", "archived", "blocked"}
 
 
 def _get_auth():
@@ -180,6 +182,85 @@ async def _db_get_run(run_id: str) -> Optional[Dict[str, Any]]:
         await release_connection(conn)
 
 
+def _report_to_summary(report: RunReport) -> Dict[str, Any]:
+    return {
+        "run_id": report.run_id,
+        "status": normalize_run_status(report.status),
+        "pipeline": report.config_path,
+        "output_dir": report.output_dir,
+        "started_at": report.started_at,
+        "completed_at": report.completed_at,
+        "duration_seconds": report.duration_seconds,
+        "requirement": report.requirement,
+    }
+
+
+def _load_report_for_run(project_root: Path, run_id: str) -> Optional[RunReport]:
+    for path in find_run_reports(Path(project_root)):
+        if path.parent.name == run_id:
+            return load_report(path)
+    return None
+
+
+def _load_reports_by_id(project_root: Path, status: Optional[str] = None) -> Dict[str, RunReport]:
+    reports: Dict[str, RunReport] = {}
+    normalized_status = normalize_run_status(status) if status else None
+    for path in find_run_reports(Path(project_root)):
+        report = load_report(path)
+        if normalized_status and normalize_run_status(report.status) != normalized_status:
+            continue
+        reports[report.run_id] = report
+    return reports
+
+
+def _db_detail_is_stale(db_result: Dict[str, Any], report: Optional[RunReport]) -> bool:
+    if report is None:
+        return False
+    db_status = normalize_run_status(db_result.get("status"))
+    report_status = normalize_run_status(report.status)
+    if db_status != report_status and (report_status in TERMINAL_RUN_STATUSES or db_status in {"queued", "running", "resuming"}):
+        return True
+    if report.output_dir and not db_result.get("output_dir"):
+        return True
+    if report.started_at and not db_result.get("started_at"):
+        return True
+    if report.completed_at and not db_result.get("completed_at") and report_status in TERMINAL_RUN_STATUSES:
+        return True
+    if report.stages and not db_result.get("stages"):
+        return True
+    if report.artifacts and not db_result.get("artifacts"):
+        return True
+    return False
+
+
+def _db_summary_is_stale(db_summary: Dict[str, Any], report: Optional[RunReport]) -> bool:
+    if report is None:
+        return False
+    db_status = normalize_run_status(db_summary.get("status"))
+    report_status = normalize_run_status(report.status)
+    if db_status != report_status and (report_status in TERMINAL_RUN_STATUSES or db_status in {"queued", "running", "resuming"}):
+        return True
+    if report.output_dir and not db_summary.get("output_dir"):
+        return True
+    if report.started_at and not db_summary.get("started_at"):
+        return True
+    if report.completed_at and not db_summary.get("completed_at") and report_status in TERMINAL_RUN_STATUSES:
+        return True
+    if report.duration_seconds is not None and db_summary.get("duration_seconds") is None:
+        return True
+    return False
+
+
+async def _filesystem_reports_for_request(
+    workdir: Optional[str],
+    project_id: Optional[str],
+    status: Optional[str] = None,
+) -> Dict[str, RunReport]:
+    resolved_workdir = await _resolve_workdir_optional(project_id, workdir)
+    project_root = find_project_root(resolved_workdir or ".")
+    return _load_reports_by_id(Path(project_root), status=status)
+
+
 async def _db_create_queued(
     run_id: str,
     workdir: str,
@@ -286,6 +367,23 @@ if router:
     ):
         db_results = await _db_list_runs(workdir, project_id, page, size, status)
         if db_results is not None:
+            reports_by_id = await _filesystem_reports_for_request(workdir, project_id, status)
+            merged_items = []
+            seen = set()
+            for item in db_results.get("items", []):
+                run_id = item.get("run_id")
+                report = reports_by_id.get(run_id)
+                if _db_summary_is_stale(item, report):
+                    item = _report_to_summary(report)
+                merged_items.append(item)
+                if run_id:
+                    seen.add(run_id)
+            for run_id, report in reports_by_id.items():
+                if run_id not in seen:
+                    merged_items.append(_report_to_summary(report))
+            db_results = dict(db_results)
+            db_results["items"] = merged_items
+            db_results["total"] = max(int(db_results.get("total") or 0), len(merged_items))
             return db_results
 
         resolved_workdir = await _resolve_workdir_optional(project_id, workdir) or "."
@@ -294,31 +392,26 @@ if router:
         normalized_status = normalize_run_status(status) if status else None
         for path in find_run_reports(Path(project_root)):
             report = load_report(path)
-            if normalized_status and report.status != normalized_status:
+            if normalized_status and normalize_run_status(report.status) != normalized_status:
                 continue
-            reports.append(
-                {
-                    "run_id": report.run_id,
-                    "status": report.status,
-                    "pipeline": report.config_path,
-                    "output_dir": report.output_dir,
-                    "started_at": report.started_at,
-                    "completed_at": report.completed_at,
-                }
-            )
+            reports.append(_report_to_summary(report))
         return {"items": reports, "total": len(reports), "page": page, "size": size}
 
     @router.get("/runs/{run_id}")
     async def get_run(run_id: str, workdir: Optional[str] = Query(default=None), project_id: Optional[str] = Query(default=None), user: Dict[str, Any] = _get_auth()):
         db_result = await _db_get_run(run_id)
+        fs_report = None
+        if db_result is not None and db_result.get("project_root"):
+            fs_report = _load_report_for_run(Path(db_result["project_root"]), run_id)
+        if fs_report is None:
+            resolved_workdir = await _resolve_workdir_optional(project_id, workdir)
+            project_root = project_for_run(run_id, resolved_workdir)
+            fs_report = _load_report_for_run(Path(project_root), run_id)
+
+        if fs_report is not None and (db_result is None or _db_detail_is_stale(db_result, fs_report)):
+            return fs_report.model_dump(mode="json")
         if db_result is not None:
             return db_result
-
-        resolved_workdir = await _resolve_workdir_optional(project_id, workdir)
-        project_root = project_for_run(run_id, resolved_workdir)
-        for path in find_run_reports(Path(project_root)):
-            if path.parent.name == run_id:
-                return load_report(path).model_dump(mode="json")
         raise HTTPException(status_code=404, detail="run not found")
 
     @router.get("/runs/{run_id}/diff")

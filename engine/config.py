@@ -303,10 +303,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_input_chars_per_file": None,
         "max_loopback_feedback_chars": 20000,
         "loopback_truncate_strategy": "smart",  # smart | head | tail
-        "stop_parallel_on_first_error": True,
         "agent_timeout_seconds": 1800,
         "heartbeat_seconds": 60,
-        "parallel_log_mode": "interleaved",
         "production_mode": False,
         "require_worktree": False,
         "require_verify_cmd": False,
@@ -396,10 +394,11 @@ def load_config(project_root: Path, explicit_config: Optional[str] = None) -> Lo
             path = project_root / path
         if path.exists():
             config = _read_yaml(path)
+            quality_gates_explicit = "quality_gates" in config
             if "providers" in config or any(isinstance(agent, dict) and "provider" in agent for agent in config.get("agents", [])):
                 warnings.append("DEPRECATED: providers/agent.provider 已迁移为 runtimes/agent.runtime_id，请保存配置以写回新结构。")
             normalized = normalize_config(config, project_root)
-            _post_process_gates(project_root, normalized)
+            _post_process_gates(project_root, normalized, inject_defaults=not quality_gates_explicit)
             return LoadedConfig(config=normalized, source="project", path=str(path), warnings=warnings)
 
     # 始终使用平台模板作为基础配置
@@ -412,10 +411,13 @@ def load_config(project_root: Path, explicit_config: Optional[str] = None) -> Lo
     else:
         base_config = dict(DEFAULT_CONFIG)
         config_source = "default"
+    quality_gates_explicit = "quality_gates" in base_config
 
     # 合并用户个性化配置：唯一数据源 DB
     db_config = _try_load_db_config()
     if db_config and isinstance(db_config, dict):
+        if "quality_gates" in db_config:
+            quality_gates_explicit = True
         _deep_merge(base_config, db_config)
         collapse_legacy_default_agents(base_config)
         config_source = "customized"
@@ -425,13 +427,14 @@ def load_config(project_root: Path, explicit_config: Optional[str] = None) -> Lo
         warnings.append("DEPRECATED: providers/agent.provider 已迁移为 runtimes/agent.runtime_id，请保存配置以写回新结构。")
 
     normalized = normalize_config(base_config, project_root)
-    _post_process_gates(project_root, normalized)
+    _post_process_gates(project_root, normalized, inject_defaults=not quality_gates_explicit)
     return LoadedConfig(config=normalized, source=config_source, path=config_path, warnings=warnings)
 
 
-def _post_process_gates(project_root: Path, config: Dict[str, Any]) -> None:
+def _post_process_gates(project_root: Path, config: Dict[str, Any], *, inject_defaults: bool = True) -> None:
     gates = config.get("quality_gates", [])
-    gates = inject_default_gates(project_root, gates)
+    if inject_defaults:
+        gates = inject_default_gates(project_root, gates)
     config["quality_gates"] = gates
     production = config.get("runner", {}).get("production_mode", False)
     validate_gates_config(gates, production=production)

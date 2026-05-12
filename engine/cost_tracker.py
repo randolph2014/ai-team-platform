@@ -23,6 +23,9 @@ MODEL_PRICING: Dict[str, Dict[str, float]] = {
 DEFAULT_PRICING = {"input": 3.0, "output": 15.0}
 
 ESTIMATE_CHARS_PER_TOKEN = 4
+COST_TRACKING_SOURCE = "cost_tracking"
+COST_TOKEN_BASIS = "estimated_from_prompt_and_output_text"
+COST_PRICING_BASIS = "model_pricing_table_with_optional_AI_TEAM_MODEL_PRICING_overrides"
 
 
 def _load_env_pricing() -> Dict[str, Dict[str, float]]:
@@ -154,6 +157,10 @@ class CostTracker:
 
         return {
             "run_id": run_id,
+            "source": COST_TRACKING_SOURCE,
+            "token_basis": COST_TOKEN_BASIS,
+            "pricing_basis": COST_PRICING_BASIS,
+            "is_estimate": True,
             "records": records,
             "count": len(records),
             "total_prompt_tokens": total_prompt,
@@ -217,6 +224,10 @@ class CostTracker:
 
         return {
             "period": period,
+            "source": COST_TRACKING_SOURCE,
+            "token_basis": COST_TOKEN_BASIS,
+            "pricing_basis": COST_PRICING_BASIS,
+            "is_estimate": True,
             "runs": sorted(runs),
             "run_count": len(runs),
             "total_calls": len(records),
@@ -268,19 +279,43 @@ class CostTracker:
 
     def get_aggregate(self, group_by: str = "model", period: str = "daily") -> dict:
         if not _is_db_available():
-            return {"period": period, "group_by": group_by, "groups": []}
+            return {
+                "period": period,
+                "group_by": group_by,
+                "source": COST_TRACKING_SOURCE,
+                "token_basis": COST_TOKEN_BASIS,
+                "pricing_basis": COST_PRICING_BASIS,
+                "is_estimate": True,
+                "groups": [],
+            }
         try:
             from persistence.connection import run_sync
             return run_sync(self._async_get_aggregate(group_by, period))
         except Exception:
             logger.exception("Failed to get cost aggregate from DB")
-            return {"period": period, "group_by": group_by, "groups": []}
+            return {
+                "period": period,
+                "group_by": group_by,
+                "source": COST_TRACKING_SOURCE,
+                "token_basis": COST_TOKEN_BASIS,
+                "pricing_basis": COST_PRICING_BASIS,
+                "is_estimate": True,
+                "groups": [],
+            }
 
     async def _async_get_aggregate(self, group_by: str, period: str) -> dict:
         from persistence.connection import get_connection, release_connection
         conn = await get_connection()
         if conn is None:
-            return {"period": period, "group_by": group_by, "groups": []}
+            return {
+                "period": period,
+                "group_by": group_by,
+                "source": COST_TRACKING_SOURCE,
+                "token_basis": COST_TOKEN_BASIS,
+                "pricing_basis": COST_PRICING_BASIS,
+                "is_estimate": True,
+                "groups": [],
+            }
         try:
             date_filter = {
                 "daily": "ct.created_at::date = CURRENT_DATE",
@@ -351,6 +386,14 @@ class CostTracker:
                 }
                 for r in rows
             ]
-            return {"period": period, "group_by": group_by, "groups": groups}
+            return {
+                "period": period,
+                "group_by": group_by,
+                "source": COST_TRACKING_SOURCE,
+                "token_basis": COST_TOKEN_BASIS,
+                "pricing_basis": COST_PRICING_BASIS,
+                "is_estimate": True,
+                "groups": groups,
+            }
         finally:
             await release_connection(conn)

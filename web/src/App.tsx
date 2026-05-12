@@ -1,6 +1,6 @@
 import { Activity, Boxes, CircleDollarSign, History, LogOut, Settings2, ShieldCheck, Webhook } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { Navigate, NavLink, Outlet, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, NavLink, Outlet, Route, Routes, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { checkAuthStatus, clearToken, isLoggedIn } from './lib/api';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { NewRunModal } from './components/NewRunModal';
@@ -23,6 +23,20 @@ function RunDetailRoute() {
 function PipelineEditorRoute() {
   const { pipelineId } = useParams();
   return <PipelineEditor pipelineId={pipelineId} />;
+}
+
+interface AppLayoutContext {
+  openNewRun: () => void;
+}
+
+function DashboardRoute() {
+  const { openNewRun } = useOutletContext<AppLayoutContext>();
+  return <Dashboard onNewRun={openNewRun} />;
+}
+
+function RunsRoute() {
+  const { openNewRun } = useOutletContext<AppLayoutContext>();
+  return <Runs onNewRun={openNewRun} />;
 }
 
 function AuthGate({ children }: { children: React.ReactNode }) {
@@ -61,7 +75,6 @@ function AppLayout() {
     ['/runs', History, '执行记录'],
     ['/harness', ShieldCheck, 'Harness'],
     ['/pipelines', Boxes, 'Pipeline 模板'],
-    ['/webhooks', Webhook, 'Webhook'],
     ['/costs', CircleDollarSign, '成本追踪'],
     ['/settings', Settings2, '设置'],
   ] as const;
@@ -97,7 +110,7 @@ function AppLayout() {
       </aside>
       <main>
         <ErrorBoundary>
-          <Outlet />
+          <Outlet context={{ openNewRun: () => setModalOpen(true) }} />
         </ErrorBoundary>
       </main>
       <NewRunModal open={modalOpen} onClose={() => setModalOpen(false)} onRefreshNeeded={() => {}} />
@@ -118,8 +131,8 @@ export function App() {
         }
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<Dashboard onNewRun={() => {}} />} />
-        <Route path="runs" element={<Runs onNewRun={() => {}} />} />
+        <Route path="dashboard" element={<DashboardRoute />} />
+        <Route path="runs" element={<RunsRoute />} />
         <Route path="runs/:runId" element={<RunDetailRoute />} />
         <Route path="harness" element={<Harness />} />
         <Route path="pipelines" element={<Pipelines />} />

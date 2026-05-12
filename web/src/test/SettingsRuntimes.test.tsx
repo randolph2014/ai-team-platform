@@ -124,6 +124,8 @@ describe('Settings runtimes', () => {
     expect(screen.queryByText('Model Override')).not.toBeInTheDocument();
     expect(screen.queryByText(/CLI 当前配置/)).not.toBeInTheDocument();
     expect(screen.queryByText('自动检测')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '清除自定义设置' })).not.toBeInTheDocument();
   });
 
   it('moves agents off auto when the detected runtimes become the editable defaults', async () => {
@@ -138,7 +140,7 @@ describe('Settings runtimes', () => {
     expect(runtimeSelect).toHaveValue('claude');
   });
 
-  it('keeps the save path available after expanding runtime defaults', async () => {
+  it('keeps saving available only on editable agent settings', async () => {
     updateSettingsMock.mockResolvedValueOnce({
       source: 'customized',
       path: 'db:default',
@@ -163,6 +165,8 @@ describe('Settings runtimes', () => {
     render(<Settings />);
 
     await screen.findByText('Claude Code');
+    expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Agents' }));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {

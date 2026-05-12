@@ -175,8 +175,14 @@ class PipelineRunRepo:
                                        error_message, started_at, completed_at, duration_seconds)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13)
             ON CONFLICT (id) DO UPDATE SET
+                pipeline_id = COALESCE(EXCLUDED.pipeline_id, {self.TABLE}.pipeline_id),
                 status = EXCLUDED.status,
+                project_root = EXCLUDED.project_root,
+                main_branch = EXCLUDED.main_branch,
+                requirement = COALESCE(EXCLUDED.requirement, {self.TABLE}.requirement),
+                trigger_source = EXCLUDED.trigger_source,
                 error_message = EXCLUDED.error_message,
+                started_at = COALESCE(EXCLUDED.started_at, {self.TABLE}.started_at),
                 completed_at = COALESCE(EXCLUDED.completed_at, {self.TABLE}.completed_at),
                 duration_seconds = EXCLUDED.duration_seconds,
                 worktree_path = COALESCE(EXCLUDED.worktree_path, {self.TABLE}.worktree_path),
@@ -371,6 +377,7 @@ class StageRunRepo:
                 status = EXCLUDED.status,
                 is_parallel = EXCLUDED.is_parallel,
                 error_message = EXCLUDED.error_message,
+                started_at = COALESCE(EXCLUDED.started_at, {self.TABLE}.started_at),
                 completed_at = COALESCE(EXCLUDED.completed_at, {self.TABLE}.completed_at),
                 duration_seconds = EXCLUDED.duration_seconds,
                 output_dir = COALESCE(EXCLUDED.output_dir, {self.TABLE}.output_dir),
@@ -398,7 +405,11 @@ class StageRunRepo:
 
     async def list_by_run(self, conn, pipeline_run_id: str) -> List[Dict[str, Any]]:
         rows = await conn.fetch(
-            f"SELECT * FROM {self.TABLE} WHERE pipeline_run_id = $1 ORDER BY iteration, stage_id",
+            f"""
+            SELECT * FROM {self.TABLE}
+            WHERE pipeline_run_id = $1
+            ORDER BY COALESCE(started_at, completed_at) NULLS LAST, iteration, stage_id
+            """,
             pipeline_run_id,
         )
         return [dict(row) for row in rows]
@@ -449,6 +460,7 @@ class AgentRunRepo:
                 error_message = EXCLUDED.error_message,
                 model_requested = COALESCE(EXCLUDED.model_requested, {self.TABLE}.model_requested),
                 model_used = EXCLUDED.model_used,
+                started_at = COALESCE(EXCLUDED.started_at, {self.TABLE}.started_at),
                 completed_at = COALESCE(EXCLUDED.completed_at, {self.TABLE}.completed_at),
                 duration_seconds = EXCLUDED.duration_seconds,
                 output_file = COALESCE(EXCLUDED.output_file, {self.TABLE}.output_file),
@@ -517,6 +529,7 @@ class QualityGateRunRepo:
                 exit_code = EXCLUDED.exit_code,
                 output = COALESCE(EXCLUDED.output, {self.TABLE}.output),
                 retry_count = EXCLUDED.retry_count,
+                started_at = COALESCE(EXCLUDED.started_at, {self.TABLE}.started_at),
                 completed_at = COALESCE(EXCLUDED.completed_at, {self.TABLE}.completed_at)
             """,
             id,
@@ -574,17 +587,17 @@ async def save_report(report: RunReport, config: Optional[Dict[str, Any]] = None
                 "app_run_id": report.run_id,
                 "config_source": report.config_source,
                 "config_path": report.config_path,
+                "output_dir": report.output_dir,
                 "artifacts": report.artifacts,
                 "human_decisions": [model_to_dict(item) for item in report.human_decisions],
                 "changed_files": report.changed_files,
                 "diff_stat": report.diff_stat,
+                "status_timeline": [model_to_dict(item) for item in report.status_timeline],
             }
             if report.merge_result:
                 ctx["merge_result"] = report.merge_result
             if report.error_detail:
                 ctx["error_detail"] = model_to_dict(report.error_detail)
-            if report.status_timeline:
-                ctx["status_timeline"] = [model_to_dict(item) for item in report.status_timeline]
 
             await run_repo.upsert(
                 conn,
@@ -677,23 +690,12 @@ def save_report_sync(report: RunReport, config: Optional[Dict[str, Any]] = None)
     所有异常均被静默捕获，确保 DB 故障不影响主流程。
     """
     try:
-        from .connection import is_available
+        from .connection import is_available, run_sync
 
         if not is_available():
             return
 
-        import asyncio
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            asyncio.run(save_report(report, config))
-        else:
-            # 已有运行中的事件循环（如 FastAPI handler 直接调用时），在独立线程中执行
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                pool.submit(lambda: asyncio.run(save_report(report, config))).result(timeout=30)
+        run_sync(save_report(report, config))
     except Exception:
         pass
 
@@ -1131,7 +1133,7 @@ def run_detail_to_response(detail: Dict[str, Any]) -> Dict[str, Any]:
         "status": normalize_run_status(detail.get("status")),
         "mode": "single",
         "project_root": detail.get("project_root"),
-        "output_dir": detail.get("output_dir") or "",
+        "output_dir": ctx.get("output_dir") or detail.get("output_dir") or "",
         "requirement": detail.get("requirement"),
         "worktree_path": detail.get("worktree_path"),
         "merge_result": ctx.get("merge_result"),

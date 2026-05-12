@@ -126,6 +126,8 @@ def _builtin_template(
             "description": description,
             "version": "1.0",
             "execution_mode": execution_mode,
+            "runtimes": copy.deepcopy(DEFAULT_CONFIG.get("runtimes", {})),
+            "agents": copy.deepcopy(DEFAULT_CONFIG.get("agents", [])),
             "stages": stages,
             "metadata": {
                 "pipeline_id": template_id,
@@ -159,7 +161,7 @@ def _builtin_template(
 BUILTIN_TEMPLATES: List[Dict[str, Any]] = [
     _builtin_template(
         "project-delivery",
-        "项目研发流水线",
+        "研发流水线",
         "适用于完整功能研发：代码库扫描、需求定稿、任务规划、开发、测试、审查、人工验收和复盘全闭环。",
         [
             "context_scan",
@@ -230,15 +232,6 @@ BUILTIN_TEMPLATES: List[Dict[str, Any]] = [
         tags=["bugfix", "regression", "root-cause", "review"],
         estimated_effort="M",
     ),
-    _builtin_template(
-        "requirement",
-        "需求流水线",
-        "适用于需求澄清和范围定稿：只做代码库扫描、需求分析、需求综合和人工确认，不进入开发实施。",
-        ["context_scan", "requirement_analysis", "requirement_synthesis", "requirement_confirm"],
-        category="requirement",
-        tags=["requirement", "analysis", "scope"],
-        estimated_effort="S",
-    ),
 ]
 
 
@@ -281,8 +274,8 @@ def _load_pipelines() -> List[Dict[str, Any]]:
         from persistence.connection import run_sync
         return run_sync(_async_list_pipelines())
     except Exception:
-        logger.exception("Failed to list pipelines from DB")
-        raise
+        logger.exception("Failed to list pipelines from DB, falling back to local files")
+        return _load_pipelines_from_files()
 
 
 async def _async_list_pipelines() -> List[Dict[str, Any]]:

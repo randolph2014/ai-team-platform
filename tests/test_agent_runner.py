@@ -97,6 +97,11 @@ class TestBuildCommand(unittest.TestCase):
 
 
 class TestDiscoverRuntimeCandidates(unittest.TestCase):
+    def tearDown(self) -> None:
+        from engine.runtimes import clear_runtime_candidate_cache
+
+        clear_runtime_candidate_cache()
+
     def test_reads_models_from_cli_config_files(self) -> None:
         """Runtime 候选项从本机 CLI 配置读取默认模型，仅作为 runtime 元信息暴露"""
         from engine.runtimes import discover_runtime_candidates
@@ -131,6 +136,27 @@ class TestDiscoverRuntimeCandidates(unittest.TestCase):
         self.assertEqual(by_id["codex"]["model"], "gpt-5.5")
         self.assertEqual(by_id["claude"]["model"], "mimo-v2.5-pro")
         self.assertEqual(by_id["opencode"]["model"], "glm-5")
+
+    def test_runtime_discovery_caches_version_checks(self) -> None:
+        """Runtime 候选项探测缓存版本检查，避免设置页每次加载都等待 CLI --version"""
+        from engine.runtimes import clear_runtime_candidate_cache, discover_runtime_candidates
+
+        clear_runtime_candidate_cache()
+
+        def fake_which(command: str) -> str | None:
+            return f"/usr/local/bin/{command}" if command in {"claude", "codex"} else None
+
+        with patch("engine.runtimes.shutil.which", side_effect=fake_which), \
+             patch("engine.runtimes.detect_cli_version", return_value="1.0.0") as detect_version, \
+             patch.dict(os.environ, {}, clear=True):
+            first = discover_runtime_candidates()
+            second = discover_runtime_candidates()
+
+        first_by_id = {candidate["id"]: candidate for candidate in first}
+        second_by_id = {candidate["id"]: candidate for candidate in second}
+        self.assertEqual(first_by_id["claude"]["version"], "1.0.0")
+        self.assertEqual(second_by_id["codex"]["version"], "1.0.0")
+        self.assertEqual(detect_version.call_count, 2)
 
 
 class TestDecodeClaudeStreamLine(unittest.TestCase):

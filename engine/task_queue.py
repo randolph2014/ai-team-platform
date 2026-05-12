@@ -57,7 +57,16 @@ def _store_run_job(run_id: str, job_id: str) -> None:
         pass
 
 
-def _handle_pipeline_failure(job, exc_type, exc_value, traceback):
+def _unpack_failure_args(args):
+    if len(args) == 3:
+        return args
+    if len(args) == 4:
+        return args[1:]
+    return (None, args[-2] if len(args) >= 2 else None, args[-1] if args else None)
+
+
+def _handle_pipeline_failure(job, *args):
+    exc_type, exc_value, traceback = _unpack_failure_args(args)
     try:
         run_id = job.kwargs.get("run_id") or (job.args[2] if len(job.args) > 2 else None)
         if run_id:
@@ -92,7 +101,8 @@ def _handle_pipeline_failure(job, exc_type, exc_value, traceback):
         logger.exception("failure callback error")
 
 
-def _handle_resume_failure(job, exc_type, exc_value, traceback):
+def _handle_resume_failure(job, *args):
+    exc_type, exc_value, traceback = _unpack_failure_args(args)
     try:
         run_id = job.kwargs.get("run_id") or (job.args[0] if job.args else None)
         if run_id:

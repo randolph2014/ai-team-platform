@@ -1,7 +1,7 @@
 import { Download, Maximize2, Minimize2, X, FileText, FileCode, FileJson, Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { apiFetch, fetchRunArtifactText, projectQuery, rememberedWorkdir } from '../lib/api';
-import { MarkdownViewer } from './MarkdownViewer';
+import { ReadableArtifact, isCodeFile, isJsonFile, isLogFile, isMarkdownFile } from './ReadableArtifact';
 
 interface ArtifactViewerProps {
   runId: string;
@@ -10,35 +10,11 @@ interface ArtifactViewerProps {
   onClose: () => void;
 }
 
-function isMarkdownFile(filename: string): boolean {
-  return /\.(md|markdown|mdx)$/i.test(filename);
-}
-
-function isJsonFile(filename: string): boolean {
-  return /\.json$/i.test(filename);
-}
-
-function isCodeFile(filename: string): boolean {
-  return /\.(py|js|ts|tsx|jsx|yaml|yml|sh|bash|toml|ini|cfg|conf|sql|html|css|xml|go|rs|java|rb|php|c|cpp|h|hpp)$/i.test(filename);
-}
-
-function isLogFile(filename: string): boolean {
-  return /\.(log|out|err)$/i.test(filename);
-}
-
 function getFileIcon(filename: string) {
   if (isMarkdownFile(filename)) return <FileText size={16} />;
   if (isJsonFile(filename)) return <FileJson size={16} />;
   if (isCodeFile(filename) || isLogFile(filename)) return <FileCode size={16} />;
   return <FileText size={16} />;
-}
-
-function tryFormatJson(text: string): string {
-  try {
-    return JSON.stringify(JSON.parse(text), null, 2);
-  } catch {
-    return text;
-  }
 }
 
 export function ArtifactViewer({ runId, artifactName, projectId, onClose }: ArtifactViewerProps) {
@@ -116,30 +92,7 @@ export function ArtifactViewer({ runId, artifactName, projectId, onClose }: Arti
       );
     }
 
-    if (isMarkdownFile(artifactName)) {
-      return <MarkdownViewer content={content} />;
-    }
-
-    if (isJsonFile(artifactName)) {
-      return (
-        <pre className="viewerCodeBlock">
-          <code className="language-json">{tryFormatJson(content)}</code>
-        </pre>
-      );
-    }
-
-    if (isCodeFile(artifactName) || isLogFile(artifactName)) {
-      const lang = artifactName.split('.').pop() || '';
-      return (
-        <pre className="viewerCodeBlock">
-          <code className={`language-${lang}`}>{content}</code>
-        </pre>
-      );
-    }
-
-    return (
-      <pre className="viewerPlainText">{content}</pre>
-    );
+    return <ReadableArtifact filename={artifactName} content={content} />;
   };
 
   return (

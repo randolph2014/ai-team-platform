@@ -2,17 +2,13 @@ import { ChevronDown, ChevronRight, Loader2, Maximize2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { fetchRunArtifactText, rememberedWorkdir } from '../lib/api';
 import { ArtifactViewer } from './ArtifactViewer';
-import { MarkdownViewer } from './MarkdownViewer';
+import { ReadableArtifact } from './ReadableArtifact';
 
 interface ArtifactContentProps {
   runId: string;
   artifactName: string;
   label?: string;
   projectId?: string;
-}
-
-function isMarkdownFile(filename: string): boolean {
-  return /\.(md|markdown|mdx)$/i.test(filename);
 }
 
 export function ArtifactContent({ runId, artifactName, label, projectId }: ArtifactContentProps) {
@@ -42,15 +38,11 @@ export function ArtifactContent({ runId, artifactName, label, projectId }: Artif
   const renderInlineContent = () => {
     if (!content) return null;
 
-    if (isMarkdownFile(artifactName)) {
-      return (
-        <div className="artifactContentMarkdown">
-          <MarkdownViewer content={content} />
-        </div>
-      );
-    }
-
-    return <pre className="artifactContentPre">{content}</pre>;
+    return (
+      <div className="artifactContentReadable">
+        <ReadableArtifact filename={artifactName} content={content} />
+      </div>
+    );
   };
 
   return (

@@ -1,4 +1,4 @@
-import { AlertTriangle, Bot, Cpu, FileText, GitBranch, Loader2, Play, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
+import { AlertTriangle, Bot, Cpu, FileText, GitBranch, Loader2, Play, Plus, RotateCcw, Save } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   fetchAgentPrompt,
@@ -39,56 +39,63 @@ type ConfigItemMeta = {
   label: string;
   description: string;
   group?: string;
+  defaultValue?: unknown;
+  defaultLabel?: string;
+  valueLabels?: Record<string, string>;
 };
 
 const RUNNER_CONFIG_META: ConfigItemMeta[] = [
   {
     key: 'auto_split_requirements', label: '自动拆分需求', group: '需求拆分',
     description: '开启后，当需求上下文超过阈值时自动拆分为多个子任务，避免单次执行超出上下文窗口',
+    defaultValue: true,
   },
   {
     key: 'context_threshold_chars', label: '上下文阈值', group: '需求拆分',
     description: '触发自动拆分的字符数阈值，也用于决定串行 / 并行执行策略',
+    defaultValue: 100000,
   },
   {
     key: 'agent_timeout_seconds', label: 'Agent 超时', group: '运行控制',
     description: 'Agent 单次执行的最大时间，默认 1800 秒（30 分钟），超时后强制终止进程',
+    defaultValue: 1800,
   },
   {
     key: 'heartbeat_seconds', label: '心跳间隔', group: '运行控制',
     description: '定时发射心跳事件的间隔（秒），用于前端展示 Agent 仍在运行中',
-  },
-  {
-    key: 'stop_parallel_on_first_error', label: '遇错即停', group: '运行控制',
-    description: '并行执行时，任意 Agent 失败则立即停止其他正在运行的 Agent，防止错误扩散',
-  },
-  {
-    key: 'parallel_log_mode', label: '并行日志模式', group: '运行控制',
-    description: '并行执行时日志输出方式：interleaved 交错输出便于实时查看各 Agent 进度',
+    defaultValue: 0,
+    valueLabels: { '0': '关闭' },
   },
   {
     key: 'production_mode', label: '生产模式', group: '安全校验',
     description: '启用后会激活严格校验（强制 worktree、强制 verify 命令），确保生产环境代码安全',
+    defaultValue: false,
   },
   {
     key: 'require_worktree', label: '强制 Worktree', group: '安全校验',
     description: '生产模式下强制要求启用 worktree 隔离，未启用则拒绝执行 pipeline',
+    defaultValue: false,
   },
   {
     key: 'require_verify_cmd', label: '强制验证命令', group: '安全校验',
     description: '生产模式下强制要求配置 quality_gates 验证命令，确保交付代码质量',
+    defaultValue: false,
   },
   {
     key: 'max_input_chars_per_file', label: '文件输入上限', group: '上下文控制',
     description: '单个输入文件传给 Agent 的最大字符数，防止过大文件导致 token 过度消耗',
+    defaultValue: null,
+    defaultLabel: '不限制',
   },
   {
     key: 'max_loopback_feedback_chars', label: '反馈长度上限', group: '上下文控制',
     description: 'QA / Reviewer 反馈给 Developer 的最大字符数，超出部分按 truncate 策略截断',
+    defaultValue: 20000,
   },
   {
     key: 'loopback_truncate_strategy', label: '截断策略', group: '上下文控制',
     description: '反馈超长时的截断方式：smart 智能截取关键部分、head 保留头部、tail 保留尾部',
+    defaultValue: 'smart',
   },
 ];
 
@@ -309,25 +316,27 @@ function materializeDetectedRuntimeDefaults(config: AppConfig, catalog: RuntimeC
   };
 }
 
-function candidateStatus(candidate: RuntimeCandidate): string {
-  if (!candidate.available) return '未安装';
-  if (!candidate.supported) return candidate.unsupported_reason || '暂未支持';
-  return '可添加';
-}
-
 function runtimeDisplayModel(runtime: RuntimeConfig): string {
   return textValue(runtime.model) || textValue(runtime.default_model);
 }
 
-function formatConfigValue(key: string, value: unknown): React.ReactNode {
-  if (value === null || value === undefined) return <span style={{ color: 'var(--text-muted)' }}>未设置</span>;
+function hasOwnConfigValue(config: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(config, key);
+}
+
+function formatConfigValue(item: ConfigItemMeta, value: unknown): React.ReactNode {
+  const primitiveKey = String(value);
+  if (item.valueLabels?.[primitiveKey]) return <span className="configValueText">{item.valueLabels[primitiveKey]}</span>;
+  if (value === null || value === undefined) {
+    return <span style={{ color: 'var(--text-muted)' }}>{item.defaultLabel || '未设置'}</span>;
+  }
   if (typeof value === 'boolean') {
     return value
       ? <span className="configValueBadge configValueBadgeOn">启用</span>
       : <span className="configValueBadge configValueBadgeOff">关闭</span>;
   }
   if (typeof value === 'number') {
-    const label = key.includes('seconds') ? `${value} 秒` : key.includes('chars') ? `${value.toLocaleString()} 字符` : String(value);
+    const label = item.key.includes('seconds') ? `${value} 秒` : item.key.includes('chars') ? `${value.toLocaleString()} 字符` : String(value);
     return <span className="configValueNumber">{label}</span>;
   }
   const str = String(value);
@@ -365,7 +374,8 @@ function renderConfigSection(
           {group && <h3 className="configGroupTitle">{group}</h3>}
           <div className="configDescriptiveTable">
             {items.map((item) => {
-              const value = config[item.key];
+              const configured = hasOwnConfigValue(config, item.key);
+              const value = configured ? config[item.key] : item.defaultValue;
               return (
                 <div key={item.key} className="configDescriptiveRow">
                   <div className="configDescriptiveTop">
@@ -373,7 +383,10 @@ function renderConfigSection(
                       <code>{item.key}</code>
                       <span className="configDescriptiveLabel">{item.label}</span>
                     </div>
-                    <div className="configDescriptiveValue">{formatConfigValue(item.key, value)}</div>
+                    <div className="configDescriptiveValue">
+                      {formatConfigValue(item, value)}
+                      {!configured && item.defaultValue !== undefined && <span className="configValueSource">默认生效</span>}
+                    </div>
                   </div>
                   <p className="configDescriptiveDesc">{item.description}</p>
                 </div>
@@ -392,27 +405,45 @@ export function Settings() {
   const [runtimeCatalog, setRuntimeCatalog] = useState<RuntimeCatalogResponse | null>(null);
   const [agentPrompts, setAgentPrompts] = useState<Record<string, PromptDraft>>({});
   const [loading, setLoading] = useState(true);
+  const [runtimeCatalogLoading, setRuntimeCatalogLoading] = useState(false);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [activeSection, setActiveSection] = useState<SettingsSection>('runtimes');
-  const [selectedCandidateId, setSelectedCandidateId] = useState('');
   const [activeAgentTab, setActiveAgentTab] = useState(0);
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
     setError('');
+    setSaveMessage('');
     try {
-      const [settingsResult, catalogResult] = await Promise.all([
-        fetchSettings(),
-        fetchRuntimeCatalog(),
-      ]);
-      const normalized = materializeDetectedRuntimeDefaults(settingsResult.config, catalogResult);
-      const prompts = await readPromptDrafts(normalized);
+      const settingsResult = await fetchSettings();
+      const baseConfig = normalizeConfig(settingsResult.config);
       setSettings(settingsResult);
-      setRuntimeCatalog(catalogResult);
-      setDraftConfig(normalized);
-      setAgentPrompts(prompts);
+      setRuntimeCatalog(null);
+      setDraftConfig(baseConfig);
+      setAgentPrompts({});
+      setLoading(false);
+
+      let currentConfig = baseConfig;
+      setRuntimeCatalogLoading(true);
+      try {
+        const catalogResult = await fetchRuntimeCatalog();
+        const normalized = materializeDetectedRuntimeDefaults(settingsResult.config, catalogResult);
+        const baseConfigText = JSON.stringify(baseConfig);
+        currentConfig = normalized;
+        setRuntimeCatalog(catalogResult);
+        setDraftConfig((existing) => (
+          JSON.stringify(existing) === baseConfigText ? normalized : existing
+        ));
+      } catch (catalogError: unknown) {
+        setSaveMessage(catalogError instanceof Error ? catalogError.message : 'Runtime 信息加载失败');
+      } finally {
+        setRuntimeCatalogLoading(false);
+      }
+
+      const prompts = await readPromptDrafts(currentConfig);
+      setAgentPrompts((current) => ({ ...prompts, ...current }));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '加载失败');
     } finally {
@@ -437,64 +468,10 @@ export function Settings() {
   const runtimeDisplayEntries = visibleRuntimeIds.map((id) => [id, runtimes[id]] as const);
   const selectableRuntimeIds = visibleRuntimeIds.length > 0 ? visibleRuntimeIds : runtimeIds;
   const runtimeCandidates = runtimeCatalog?.candidates || [];
-  const addableRuntimeCandidates = useMemo(
-    () => runtimeCandidates.filter((candidate) => !runtimes[candidate.id]),
-    [runtimeCandidates, runtimes],
-  );
-
-  useEffect(() => {
-    if (addableRuntimeCandidates.length === 0) {
-      setSelectedCandidateId('');
-      return;
-    }
-    if (!selectedCandidateId || !addableRuntimeCandidates.some((candidate) => candidate.id === selectedCandidateId)) {
-      setSelectedCandidateId(addableRuntimeCandidates[0].id);
-    }
-  }, [addableRuntimeCandidates, selectedCandidateId]);
 
   function updateDraft(section: Partial<AppConfig>) {
     setDraftConfig((current) => ({ ...(current || {}), ...section }));
     setSaveMessage('');
-  }
-
-  function addRuntimeFromCandidate() {
-    const candidate = runtimeCandidates.find((item) => item.id === selectedCandidateId);
-    if (!candidate) {
-      setSaveMessage('请选择 Runtime');
-      return;
-    }
-    if (!candidate.available || !candidate.supported) {
-      setSaveMessage(`Runtime ${candidate.name} 当前不能添加：${candidateStatus(candidate)}`);
-      return;
-    }
-    if (runtimes[candidate.id]) {
-      setSaveMessage(`Runtime ${candidate.name} 已存在`);
-      return;
-    }
-    updateDraft({
-      runtimes: {
-        ...runtimes,
-        [candidate.id]: runtimeFromCandidate(candidate),
-      },
-    });
-  }
-
-  function removeRuntime(id: string) {
-    const runtimeName = runtimes[id]?.name || id;
-    const affectedAgents = agents.filter((agent) => agent.runtime_id === id);
-    const msg = affectedAgents.length > 0
-      ? `确定删除 Runtime「${runtimeName}」？\n${affectedAgents.length} 个 Agent 将被迁移到其他 Runtime。`
-      : `确定删除 Runtime「${runtimeName}」？`;
-    if (!window.confirm(msg)) return;
-    const { [id]: _removed, ...nextRuntimes } = runtimes;
-    const nextVisibleRuntimeIds = Object.keys(nextRuntimes).filter((runtimeId) => !isAutoRuntime(runtimeId, nextRuntimes[runtimeId]));
-    const replacementRuntimeId = nextVisibleRuntimeIds[0] || Object.keys(nextRuntimes)[0] || '';
-    updateDraft({
-      runtimes: nextRuntimes,
-      agents: agents.map((agent) =>
-        agent.runtime_id === id ? { ...agent, runtime_id: replacementRuntimeId } : agent,
-      ),
-    });
   }
 
   function updateAgent(index: number, patch: Partial<AgentConfig>) {
@@ -549,7 +526,7 @@ export function Settings() {
   }
 
   async function handleReset() {
-    if (!window.confirm('确定重置为默认配置？\n当前所有自定义设置将被删除，此操作不可撤销。')) return;
+    if (!window.confirm('确定清除自定义设置？\n系统会重新使用平台默认配置和自动探测结果，运行记录与产物不会被删除。')) return;
     setSaving(true);
     setSaveMessage('');
     try {
@@ -561,7 +538,7 @@ export function Settings() {
       setRuntimeCatalog(catalog);
       setDraftConfig(normalized);
       setAgentPrompts(promptDrafts);
-      setSaveMessage('设置已重置');
+      setSaveMessage('自定义设置已清除');
     } catch (e: unknown) {
       setSaveMessage(e instanceof Error ? e.message : '重置失败');
     } finally {
@@ -646,11 +623,8 @@ export function Settings() {
 
   if (!settings || !draftConfig) return null;
 
-  const selectedCandidate = runtimeCandidates.find((candidate) => candidate.id === selectedCandidateId);
-  const canAddSelectedCandidate = Boolean(
-    selectedCandidate && selectedCandidate.available && selectedCandidate.supported && !runtimes[selectedCandidate.id],
-  );
   const warnings = settings.warnings || [];
+  const showSettingsActions = activeSection === 'agents';
 
   return (
     <div className="page">
@@ -660,8 +634,19 @@ export function Settings() {
           <span className="configSource">
             <FileText size={13} /> {settings.source}{settings.path ? ` · ${settings.path}` : ''}
           </span>
-          <button className="button" onClick={handleReset} disabled={saving}><RotateCcw size={14} /> 重置为默认</button>
-          <button className="button primary" onClick={handleSave} disabled={saving}><Save size={14} /> {saving ? '保存中...' : '保存'}</button>
+          {showSettingsActions && (
+            <>
+              <button
+                className="button"
+                onClick={handleReset}
+                disabled={saving}
+                title="删除数据库中的自定义设置，重新使用平台默认配置和自动探测结果；不会删除运行记录。"
+              >
+                <RotateCcw size={14} /> 清除自定义设置
+              </button>
+              <button className="button primary" onClick={handleSave} disabled={saving}><Save size={14} /> {saving ? '保存中...' : '保存'}</button>
+            </>
+          )}
         </div>
       </header>
 
@@ -690,31 +675,14 @@ export function Settings() {
           {activeSection === 'runtimes' && (
             <div className="settingGroup">
               <div className="configSectionHeader">
-                <h2><Cpu size={18} /> Runtimes<span className="configItemCount">{runtimeDisplayEntries.length} 个 Runtime</span></h2>
+                <h2>
+                  <Cpu size={18} /> Runtimes
+                  <span className="configItemCount">
+                    {runtimeCatalogLoading ? '探测中' : `${runtimeDisplayEntries.length} 个 Runtime`}
+                  </span>
+                </h2>
                 <p className="configSectionSubtitle">展示当前可用的 AI Agent 命令行运行时、版本和模型。</p>
               </div>
-              {addableRuntimeCandidates.length > 0 && (
-                <div className="settingsSectionHeader">
-                  <div></div>
-                  <div className="runtimeAddRow">
-                    <select value={selectedCandidateId} onChange={(e) => setSelectedCandidateId(e.target.value)}>
-                      {addableRuntimeCandidates.map((candidate) => (
-                        <option key={candidate.id} value={candidate.id}>
-                          {candidate.name} · {candidateStatus(candidate)}
-                        </option>
-                      ))}
-                    </select>
-                    <button className="button" onClick={addRuntimeFromCandidate} disabled={!canAddSelectedCandidate}>
-                      <Plus size={14} /> 添加 Runtime
-                    </button>
-                  </div>
-                </div>
-              )}
-              {selectedCandidate && (!selectedCandidate.available || !selectedCandidate.supported) && (
-                <div className="settingsMetaLine" style={{ marginBottom: 12 }}>
-                  {selectedCandidate.name}: {candidateStatus(selectedCandidate)}
-                </div>
-              )}
               <div className="settingsCards">
                 {runtimeDisplayEntries.map(([id, runtime]) => {
                   const candidateRuntime = runtimeCandidates.find((candidate) => candidate.id === id);
@@ -732,9 +700,6 @@ export function Settings() {
                           <span className={`metaTag ${displayRuntime.available === false ? 'metaTagRed' : 'metaTagGreen'}`}>
                             {displayRuntime.available === false ? '不可用' : '可用'}
                           </span>
-                          <button className="iconButton danger" onClick={() => removeRuntime(id)} aria-label="删除 Runtime">
-                            <Trash2 size={14} />
-                          </button>
                         </div>
                       </div>
                       {model && (
@@ -751,7 +716,16 @@ export function Settings() {
                     </div>
                   );
                 })}
-                {runtimeDisplayEntries.length === 0 && <div className="emptyState">暂无可用 Runtime</div>}
+                {runtimeDisplayEntries.length === 0 && (
+                  <div className="emptyState">
+                    {runtimeCatalogLoading ? (
+                      <>
+                        <Loader2 size={18} className="spinner" />
+                        <span>正在探测 Runtime...</span>
+                      </>
+                    ) : '暂无可用 Runtime'}
+                  </div>
+                )}
               </div>
             </div>
           )}
