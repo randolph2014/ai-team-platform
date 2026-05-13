@@ -22,6 +22,7 @@ import { GateNode } from '../components/flow/GateNode';
 import { LoopbackEdge } from '../components/flow/LoopbackEdge';
 import { StageNode } from '../components/flow/StageNode';
 import { fetchPipelines, fetchPipelineTemplates, apiFetch } from '../lib/api';
+import { pipelineStageRuntimeSummary } from '../lib/pipelineDisplay';
 import {
   StageSchema,
   type PipelineConfig,
@@ -718,16 +719,10 @@ export function PipelineEditor({ pipelineId }: { pipelineId?: string }) {
                 <div className="pipelineStats">
                   <span>{tpl.stage_count ?? tpl.stages.length} 个阶段</span>
                   <span>{tpl.human_gate_count ?? 0} 个人工确认</span>
-                  <span>{tpl.estimated_effort || 'M'}</span>
                 </div>
                 <p className="pipelineStageSummary">
-                  {(tpl.stage_summary && tpl.stage_summary.length > 0 ? tpl.stage_summary : tpl.stages).join(' → ')}
+                  {pipelineStageRuntimeSummary(tpl)}
                 </p>
-                {tpl.tags && tpl.tags.length > 0 && (
-                  <div className="tagRow">
-                    {tpl.tags.map((tag) => <span key={tag} className="tagPill">{tag}</span>)}
-                  </div>
-                )}
                 <button
                   className="button"
                   style={{ marginTop: 12 }}

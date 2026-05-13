@@ -31,6 +31,11 @@ class CreateProjectRequest(BaseModel):
     root_path: str
 
 
+class ImportProjectRequest(BaseModel):
+    root_path: str
+    name: Optional[str] = None
+
+
 def _get_allowed_roots() -> List[str]:
     raw = os.environ.get("AI_TEAM_ALLOWED_ROOTS", "").strip()
     if not raw:
@@ -58,6 +63,70 @@ def _validate_root_path(root_path: str) -> str:
         status_code=403,
         detail=f"root_path '{resolved_path}' is not within allowed roots",
     )
+
+
+def _unique_existing_dirs(paths: List[Path]) -> List[Path]:
+    seen = set()
+    results = []
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except Exception:
+            continue
+        key = str(resolved)
+        if key in seen or not resolved.is_dir():
+            continue
+        seen.add(key)
+        results.append(resolved)
+    return results
+
+
+def _browse_roots() -> List[Path]:
+    allowed = _get_allowed_roots()
+    if allowed:
+        return _unique_existing_dirs([Path(root) for root in allowed])
+    return _unique_existing_dirs([Path.home(), Path.cwd()])
+
+
+def _is_browse_root(path: Path) -> bool:
+    roots = _browse_roots()
+    if not roots:
+        return path.parent == path
+    return any(path == root for root in roots)
+
+
+def _browse_parent(path: Path) -> Optional[str]:
+    if _is_browse_root(path):
+        return None
+    parent = path.parent
+    try:
+        if _get_allowed_roots():
+            _validate_root_path(str(parent))
+    except HTTPException:
+        return None
+    return str(parent)
+
+
+def _directory_entry(path: Path) -> Dict[str, str]:
+    return {"name": path.name or str(path), "path": str(path)}
+
+
+def _list_directory_entries(path: Path) -> List[Dict[str, str]]:
+    entries: List[Dict[str, str]] = []
+    try:
+        children = list(path.iterdir())
+    except PermissionError:
+        return entries
+    for child in sorted(children, key=lambda item: item.name.lower()):
+        if child.name.startswith("."):
+            continue
+        try:
+            resolved = child.resolve()
+        except OSError:
+            continue
+        if resolved.is_dir():
+            entries.append(_directory_entry(resolved))
+    return entries
 
 
 def _get_project_repo():
@@ -103,6 +172,23 @@ if router:
         finally:
             await release_connection(conn)
 
+    @router.get("/projects/browse")
+    async def browse_project_directories(path: Optional[str] = None, user: Dict[str, Any] = _get_auth()):
+        if not path:
+            return {
+                "path": None,
+                "parent": None,
+                "entries": [_directory_entry(root) for root in _browse_roots()],
+            }
+        resolved = Path(_validate_root_path(path))
+        if not resolved.is_dir():
+            raise HTTPException(status_code=400, detail=f"path '{resolved}' does not exist or is not a directory")
+        return {
+            "path": str(resolved),
+            "parent": _browse_parent(resolved),
+            "entries": _list_directory_entries(resolved),
+        }
+
     @router.post("/projects")
     async def create_project(body: CreateProjectRequest, user: Dict[str, Any] = _get_auth()):
         resolved = _validate_root_path(body.root_path)
@@ -128,6 +214,35 @@ if router:
         except Exception:
             logger.exception("DB create_project failed")
             raise HTTPException(status_code=500, detail="failed to create project")
+        finally:
+            await release_connection(conn)
+
+    @router.post("/projects/import")
+    async def import_project(body: ImportProjectRequest, user: Dict[str, Any] = _get_auth()):
+        resolved = _validate_root_path(body.root_path)
+        if not Path(resolved).is_dir():
+            raise HTTPException(status_code=400, detail=f"path '{resolved}' does not exist or is not a directory")
+
+        db = try_persistence()
+        if db is None:
+            raise HTTPException(status_code=503, detail="database not available")
+        get_connection, release_connection, *_ = db
+        conn = await get_connection()
+        if conn is None:
+            raise HTTPException(status_code=503, detail="database not available")
+        try:
+            repo = _get_project_repo()
+            existing = await repo.get_by_root_path(conn, resolved)
+            if existing:
+                return existing
+            name = (body.name or "").strip() or Path(resolved).name or resolved
+            project_id = await repo.create(conn, name=name, root_path=resolved)
+            return await repo.get_by_id(conn, project_id)
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("DB import_project failed")
+            raise HTTPException(status_code=500, detail="failed to import project")
         finally:
             await release_connection(conn)
 

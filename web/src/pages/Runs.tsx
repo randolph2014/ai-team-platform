@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowUpDown, ChevronLeft, ChevronRight, Loader2, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
+import { AlertTriangle, ArrowUpDown, ChevronLeft, ChevronRight, Loader2, Plus, Search, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { fetchRuns, rememberedWorkdir } from '../lib/api';
 import { StatusBadge } from '../components/StatusBadge';
@@ -7,7 +7,6 @@ import type { RunListItem } from '../lib/types';
 type SortField = 'started_at' | 'duration_seconds' | 'status' | 'pipeline';
 type SortDir = 'asc' | 'desc';
 
-const STATUS_OPTIONS = ['queued', 'running', 'paused', 'resuming', 'completed', 'failed', 'blocked', 'cancelled', 'archived'] as const;
 const SORT_FIELDS: { field: SortField; label: string }[] = [
   { field: 'started_at', label: '开始时间' },
   { field: 'duration_seconds', label: '耗时' },
@@ -35,38 +34,27 @@ export function Runs({ onNewRun }: { onNewRun: () => void }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [sortField, setSortField] = useState<SortField>('started_at');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
   const loadRuns = useCallback(() => {
     setLoading(true);
     setError('');
-    const status = statusFilter.length === 1 ? statusFilter[0] : undefined;
-    fetchRuns(rememberedWorkdir(), { page, size: PAGE_SIZE, status })
+    fetchRuns(rememberedWorkdir(), { page, size: PAGE_SIZE, status: undefined })
       .then((res) => {
         setRuns(res.items);
         setTotal(res.total);
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [page, statusFilter]);
+  }, [page]);
 
   useEffect(() => {
     loadRuns();
   }, [loadRuns]);
 
-  const toggleStatus = (s: string) => {
-    setStatusFilter((prev) => {
-      const next = prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s];
-      setPage(1);
-      return next;
-    });
-  };
-
   const clearFilters = () => {
     setSearch('');
-    setStatusFilter([]);
     setPage(1);
   };
 
@@ -85,10 +73,6 @@ export function Runs({ onNewRun }: { onNewRun: () => void }) {
       );
     }
 
-    if (statusFilter.length > 0) {
-      result = result.filter((r) => statusFilter.includes(r.status));
-    }
-
     result = [...result].sort((a, b) => {
       const dir = sortDir === 'asc' ? 1 : -1;
       if (sortField === 'started_at') {
@@ -104,9 +88,9 @@ export function Runs({ onNewRun }: { onNewRun: () => void }) {
     });
 
     return result;
-  }, [runs, search, statusFilter, sortField, sortDir]);
+  }, [runs, search, sortField, sortDir]);
 
-  const hasFilters = search.trim() || statusFilter.length > 0;
+  const hasFilters = Boolean(search.trim());
 
   if (error) {
     return (
@@ -147,19 +131,6 @@ export function Runs({ onNewRun }: { onNewRun: () => void }) {
             )}
           </div>
 
-          <div className="runsFilterGroup">
-            <SlidersHorizontal size={14} style={{ color: 'var(--text-secondary)' }} />
-            {STATUS_OPTIONS.map((s) => (
-              <button
-                key={s}
-                className={`runsFilterChip ${statusFilter.includes(s) ? 'runsFilterChipActive' : ''}`}
-                onClick={() => toggleStatus(s)}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-
           <div className="runsSortGroup">
             <span className="runsSortLabel"><ArrowUpDown size={12} /> 排序</span>
             <select
@@ -179,8 +150,8 @@ export function Runs({ onNewRun }: { onNewRun: () => void }) {
 
           {hasFilters && (
             <div className="runsFilterHint">
-              筛选 {filteredSorted.length}/{total} 条
-              <button className="linkButton" onClick={clearFilters} style={{ fontSize: 12, padding: 0 }}>清除过滤</button>
+              匹配 {filteredSorted.length}/{total} 条
+              <button className="linkButton" onClick={clearFilters} style={{ fontSize: 12, padding: 0 }}>清除搜索</button>
             </div>
           )}
         </div>

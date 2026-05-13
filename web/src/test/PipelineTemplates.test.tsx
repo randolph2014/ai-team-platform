@@ -4,12 +4,12 @@ import { Pipelines } from '../pages/Pipelines';
 import { createPipeline, fetchPipelineTemplates, fetchPipelines, updatePipeline } from '../lib/api';
 
 vi.mock('../lib/api', () => ({
-  createPipeline: vi.fn(() => Promise.resolve({ id: 'project-delivery', name: '项目研发流水线' })),
+  createPipeline: vi.fn(() => Promise.resolve({ id: 'project-delivery', name: '研发流水线' })),
   deletePipeline: vi.fn(),
   fetchPipelineTemplates: vi.fn(() => Promise.resolve([
     {
       id: 'project-delivery',
-      name: '项目研发流水线',
+      name: '研发流水线',
       description: '完整研发闭环',
       stages: ['context_scan', 'develop'],
       stage_count: 2,
@@ -18,9 +18,12 @@ vi.mock('../lib/api', () => ({
       stage_summary: ['代码库扫描', '开发实施'],
       tags: ['feature', 'qa'],
       yaml_config: {
-        name: '项目研发流水线',
+        name: '研发流水线',
         description: '完整研发闭环',
         version: '1.0',
+        agents: [
+          { name: 'coder', runtime_id: 'codex' },
+        ],
         stages: [
           { id: 'context_scan', name: '代码库扫描', type: 'context_scan' },
           { id: 'develop', name: '开发实施', agents: ['coder'] },
@@ -44,8 +47,11 @@ describe('Pipeline builtin templates', () => {
     render(<Pipelines />);
 
     fireEvent.click(await screen.findByRole('button', { name: /从模板创建/ }));
-    expect(screen.getByDisplayValue('项目研发流水线')).toBeInTheDocument();
-    expect(screen.getByText('代码库扫描 → 开发实施')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('研发流水线')).toBeInTheDocument();
+    expect(screen.getByText('代码库扫描（系统） → 开发实施（coder/codex）')).toBeInTheDocument();
+    expect(screen.queryByText('feature')).not.toBeInTheDocument();
+    expect(screen.queryByText('qa')).not.toBeInTheDocument();
+    expect(screen.queryByText('L')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
