@@ -27,9 +27,37 @@ class TestBuildCommand(unittest.TestCase):
         from engine.runtimes import build_runtime_command
 
         cmd, cli, mode = build_runtime_command({"cli": "claude"}, "do something")
-        self.assertEqual(cmd[0], "claude")
-        self.assertIn("do something", cmd)
+        self.assertEqual(cmd, ["claude", "-p", "--output-format", "stream-json", "--verbose", "do something"])
         self.assertEqual(mode, "arg")
+
+    @patch("engine.agent_runner.subprocess.Popen")
+    def test_claude_stream_json_smoke_reads_minimal_output(self, mock_popen_cls) -> None:
+        """claude stream-json smoke：命令包含 --verbose 并能读取最小输出"""
+        mock_proc = MagicMock()
+        mock_proc.stdout.readline.side_effect = [
+            json.dumps({"type": "assistant", "message": {"content": [{"text": "ok"}]}}) + "\n",
+            "",
+        ]
+        mock_proc.stdout.read.return_value = ""
+        mock_proc.poll.return_value = 0
+        mock_proc.wait.return_value = 0
+        mock_popen_cls.return_value = mock_proc
+
+        config = {"runtimes": {"P": {"cli": "claude", "model": "m1"}}, "runner": {}}
+        runner = AgentRunner(config)
+        agent = AgentDefinition(name="a1", runtime_id="P")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            output_file = cwd / "out.md"
+            raw_log = cwd / "raw.log"
+            result = runner.run("r1", "s1", agent, {"cli": "claude"}, "ping", cwd, output_file, raw_log)
+            output_text = output_file.read_text(encoding="utf-8")
+
+        command = mock_popen_cls.call_args.args[0]
+        self.assertIn("--verbose", command)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(output_text, "ok\n")
 
     def test_codex_runtime(self) -> None:
         """codex runtime 构建 codex exec 命令"""

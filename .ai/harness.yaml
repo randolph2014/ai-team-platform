@@ -57,6 +57,14 @@ checks:
     timeout_seconds: 60
     severity: error
     blocking: true
+  - id: checks.deprecated-usage
+    title: Deprecated Usage Check
+    type: command
+    file: .ai/harness/checks/deprecated-usage.md
+    command: ".venv/bin/python scripts/verify_project_governance.py --deprecated-registry .ai/harness/checks/deprecated-usage-registry.json"
+    timeout_seconds: 60
+    severity: error
+    blocking: true
 baselines:
   - id: baseline.policy.raise-only
     title: Baseline Raise-only Policy

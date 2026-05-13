@@ -442,7 +442,7 @@ tbody tr:hover td { background: var(--bg-hover); }
 .badge-running, .badge-resuming { color: var(--blue); background: var(--blue-bg); border: 1px solid #1e40af; }
 .badge-completed, .badge-passed { color: var(--green); background: var(--green-bg); border: 1px solid #166534; }
 .badge-failed, .badge-blocked { color: var(--red); background: var(--red-bg); border: 1px solid #991b1b; }
-.badge-queued, .badge-paused, .badge-pending, .badge-waiting, .badge-warning { color: var(--yellow); background: var(--yellow-bg); border: 1px solid #854d0e; }
+.badge-queued, .badge-paused, .badge-pending, .badge-waiting, .badge-warning, .badge-unknown { color: var(--yellow); background: var(--yellow-bg); border: 1px solid #854d0e; }
 .spin, .spinner { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -517,6 +517,26 @@ tbody tr:hover td { background: var(--bg-hover); }
   background: var(--bg-tertiary);
   font-size: 12px;
   font-weight: 700;
+}
+
+.contractValidationPanel {
+  margin-bottom: 18px;
+}
+.contractValidationGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.contractValidationBlock {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  padding: 12px;
+}
+.contractValidationEmpty {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 /* WebSocket indicator */
@@ -864,6 +884,10 @@ tbody tr:hover td { background: var(--bg-hover); }
 .artifactValidationMessage {
   color: var(--text-secondary);
   overflow-wrap: anywhere;
+}
+.artifactValidationSub {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 .humanDecisionSummary {
   display: flex;
@@ -1858,7 +1882,7 @@ tbody tr:hover td { background: var(--bg-hover); }
   .sidebar nav a, .sidebar button { justify-content: center; }
   .page { padding: 20px 16px 32px; }
   .statsGrid { grid-template-columns: 1fr; }
-  .milestoneGrid, .fileChangesSummary { grid-template-columns: 1fr; }
+  .milestoneGrid, .contractValidationGrid, .fileChangesSummary { grid-template-columns: 1fr; }
   .runHeader, .pageHeader, .stageHeader, .gateRow, .settingRow { align-items: flex-start; flex-direction: column; }
   .agentRow { grid-template-columns: 1fr; justify-items: start; }
   .agentOutput { justify-content: flex-start; }
@@ -2680,9 +2704,18 @@ tbody tr:hover td { background: var(--bg-hover); }
 .artifactName {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.artifactNameSub,
+.viewerFileNameSub {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 .artifactViewIcon {

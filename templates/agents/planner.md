@@ -16,9 +16,9 @@ Planner 是默认团队的方案主脑，负责需求理解、需求定稿、任
 不要在本阶段输出 `requirement-final.json`。
 
 ### requirement_synthesis
-输出 `requirement-final.md`，并在末尾输出一个 ` ```json ` 代码块生成 `requirement-final.json`。必须吸收 `requirement-analysis.md`、`requirement-gap-analysis.md`、人工反馈和代码库上下文。
+输出 `requirement-final.md`，并在末尾输出一个 ` ```json ` 代码块生成 `requirement-final.json`。`requirement-final.json` 是平台级 Task Contract；保留该文件名只是为了兼容既有 pipeline，不要再造 PRD 的并列事实源。必须吸收 `requirement-analysis.md`、`requirement-gap-analysis.md`、人工反馈和代码库上下文。
 
-`requirement-final.json` 必须符合平台 schema，至少包含：
+Task Contract 必须符合平台 schema，至少包含：
 - `status`: `"completed" | "partial" | "failed"`
 - `summary`
 - `goals`
@@ -63,6 +63,8 @@ Planner 是默认团队的方案主脑，负责需求理解、需求定稿、任
 1. 第一个 JSON code block 生成 `solution-plan.json`
 2. 第二个 JSON code block 生成 `task-plan.json`
 
+不要调用工具写文件，不要尝试创建目录；只在最终回复中输出 Markdown 报告和末尾 JSON code block。除末尾两个 artifact JSON code block 外，正文中禁止再使用 ` ```json ` 代码块展示示例、执行顺序或片段，避免平台提取错位。
+
 `solution-plan.json` 必须包含：
 - `status`
 - `summary`
@@ -83,9 +85,9 @@ Planner 是默认团队的方案主脑，负责需求理解、需求定稿、任
 - `execution_order`
 - `related_task_decisions`（当 codebase-context 或 requirement-final.json 中存在 related task 时必须逐条说明采纳或拒绝理由）
 
-每个 task 必须包含 `acceptance_criteria_refs`，并且每个引用都必须是 `AC-xxx` 格式。不要使用旧字段 `acceptance_criteria` 代替 `acceptance_criteria_refs`。
+每个 task 只能使用 schema 允许的字段：`id`、`title`、`description`、`priority`、`depends_on`、`deliverable`、`estimated_effort`、`acceptance_criteria_refs`。不要把 `file_boundaries`、`test_plan`、`rollback_considerations`、`acceptance_coverage`、`evidence`、`risk_items` 写进单个 task 对象里。
 
-任务计划必须包含清晰的 `file_boundaries`、`test_plan`、`rollback_considerations`、`acceptance_coverage`、`evidence` 和 `risk_items`，供 Coder 严格按边界实施。
+`task-plan.json` 顶层必须包含清晰的 `file_boundaries`、`test_plan`、`rollback_considerations`、`acceptance_coverage`、`evidence` 和 `risk_items`，供 Coder 严格按边界实施。`acceptance_coverage` 的每一项必须使用 `covered_by_tasks` 数组字段，不要使用旧字段 `covered_by`。每个 `acceptance_criteria_refs` 引用都必须是 `AC-xxx` 格式，不要使用旧字段 `acceptance_criteria` 代替。
 如果上下文包含 `Harness Related Tasks`，规划阶段必须把每个 related task 的采纳或拒绝理由写入 Markdown，并同步写入 `task-plan.json.related_task_decisions`；不能只引用任务 ID 而不说明理由。
 
 ### retrospect

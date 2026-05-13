@@ -5,6 +5,7 @@ import argparse
 import json
 import re
 import sys
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Iterable, List, Optional
 
@@ -22,6 +23,8 @@ SKIP_PATH_PARTS = {
     ".ai/worktrees",
     "web/node_modules",
 }
+DEFAULT_DEPRECATED_REGISTRY = Path(".ai/harness/checks/deprecated-usage-registry.json")
+MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 
 
 class Finding:
@@ -83,6 +86,137 @@ def check_legacy_entry_patterns(root: Path) -> List[Finding]:
             if pattern.search(text):
                 findings.append(Finding("legacy-entry", message, path.relative_to(root)))
                 break
+    return findings
+
+
+def _path_matches_any(rel: str, patterns: list[str]) -> bool:
+    for pattern in patterns:
+        candidates = [pattern]
+        if pattern.startswith("**/"):
+            candidates.append(pattern[3:])
+        if "/**/" in pattern:
+            candidates.append(pattern.replace("/**/", "/"))
+        if any(fnmatch(rel, candidate) for candidate in candidates):
+            return True
+        if any(Path(rel).match(candidate) for candidate in candidates):
+            return True
+    return False
+
+
+def _resolve_registry_path(root: Path, registry_path: Optional[Path] = None) -> Path:
+    path = registry_path or DEFAULT_DEPRECATED_REGISTRY
+    if path.is_absolute():
+        return path
+    return root / path
+
+
+def check_deprecated_usage_registry(root: Path, registry_path: Optional[Path] = None) -> List[Finding]:
+    registry = _resolve_registry_path(root, registry_path)
+    rel_registry = registry.relative_to(root).as_posix() if registry.is_relative_to(root) else registry.as_posix()
+    if not registry.is_file():
+        return [Finding("deprecated-usage", "deprecated usage registry is missing", Path(rel_registry))]
+    try:
+        payload = json.loads(_read(registry))
+    except Exception as exc:
+        return [Finding("deprecated-usage", f"deprecated usage registry is invalid json: {exc}", Path(rel_registry))]
+    if not isinstance(payload, dict) or not isinstance(payload.get("patterns"), list):
+        return [Finding("deprecated-usage", "deprecated usage registry must contain a patterns array", Path(rel_registry))]
+
+    findings: List[Finding] = []
+    compiled = []
+    for index, item in enumerate(payload["patterns"]):
+        if not isinstance(item, dict):
+            findings.append(Finding("deprecated-usage", f"registry pattern #{index + 1} must be an object", Path(rel_registry)))
+            continue
+        pattern_id = str(item.get("id") or f"pattern-{index + 1}")
+        regex = str(item.get("regex") or "")
+        message = str(item.get("message") or "deprecated usage detected")
+        if not regex:
+            findings.append(Finding("deprecated-usage", f"{pattern_id} regex is required", Path(rel_registry)))
+            continue
+        try:
+            compiled.append((
+                pattern_id,
+                re.compile(regex),
+                message,
+                [str(glob) for glob in item.get("globs", ["**/*"])],
+                {str(path) for path in item.get("allowed_paths", [])} | {rel_registry},
+            ))
+        except re.error as exc:
+            findings.append(Finding("deprecated-usage", f"{pattern_id} regex is invalid: {exc}", Path(rel_registry)))
+
+    for path in _text_files(root):
+        rel = path.relative_to(root).as_posix()
+        text = _read(path)
+        for pattern_id, regex, message, globs, allowed_paths in compiled:
+            if not _path_matches_any(rel, globs):
+                continue
+            if rel in allowed_paths or _path_matches_any(rel, list(allowed_paths)):
+                continue
+            if regex.search(text):
+                findings.append(Finding(f"deprecated-usage:{pattern_id}", message, path.relative_to(root)))
+                break
+    return findings
+
+
+def check_traceability_contracts(root: Path) -> List[Finding]:
+    findings: List[Finding] = []
+    schema_expectations = {
+        "engine/schemas/implementation-report.json": ["acceptance_coverage", "evidence", "traceability"],
+        "engine/schemas/test-report.json": ["acceptance_coverage", "evidence", "traceability"],
+        "engine/schemas/review-report.json": ["review_dimensions", "evidence", "risks", "traceability"],
+    }
+    for rel, required_fields in schema_expectations.items():
+        path = root / rel
+        if not path.is_file():
+            findings.append(Finding("traceability-contract", "required schema is missing", Path(rel)))
+            continue
+        try:
+            schema = json.loads(_read(path))
+        except Exception as exc:
+            findings.append(Finding("traceability-contract", f"schema json is invalid: {exc}", Path(rel)))
+            continue
+        required = set(schema.get("required") or [])
+        for field in required_fields:
+            if field not in required:
+                findings.append(Finding("traceability-contract", f"schema must require {field}", Path(rel)))
+        traceability = schema.get("properties", {}).get("traceability", {})
+        if traceability.get("minItems", 0) < 1:
+            findings.append(Finding("traceability-contract", "traceability must require at least one row", Path(rel)))
+        item_props = traceability.get("items", {}).get("properties", {})
+        for field in ("evidence_refs", "files", "tests"):
+            if item_props.get(field, {}).get("minItems", 0) < 1:
+                findings.append(Finding("traceability-contract", f"traceability.{field} must require at least one item", Path(rel)))
+
+    requirement_schema = root / "engine/schemas/requirement-final.json"
+    if requirement_schema.is_file():
+        schema = json.loads(_read(requirement_schema))
+        if schema.get("title") != "Task Contract":
+            findings.append(Finding("task-contract", "requirement-final.json schema title must be Task Contract", Path("engine/schemas/requirement-final.json")))
+    return findings
+
+
+def _local_markdown_target(source: Path, target: str) -> Optional[Path]:
+    raw = target.strip().split("#", 1)[0].split("?", 1)[0]
+    if not raw or raw.startswith("#"):
+        return None
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", raw):
+        return None
+    return (source.parent / raw).resolve(strict=False)
+
+
+def check_markdown_file_links(root: Path, files: Optional[list[str]] = None) -> List[Finding]:
+    findings: List[Finding] = []
+    for rel in files or ["README.md"]:
+        source = root / rel
+        if not source.is_file():
+            continue
+        for match in MARKDOWN_LINK_RE.finditer(_read(source)):
+            target = _local_markdown_target(source, match.group(1))
+            if target is None:
+                continue
+            if not target.exists():
+                findings.append(Finding("markdown-link", f"missing local markdown link target: {match.group(1)}", Path(rel)))
     return findings
 
 
@@ -170,9 +304,12 @@ def check_phase_reports(root: Path) -> List[Finding]:
     return findings
 
 
-def run_checks(root: Path) -> List[Finding]:
+def run_checks(root: Path, deprecated_registry: Optional[Path] = None) -> List[Finding]:
     return [
         *check_legacy_entry_patterns(root),
+        *check_deprecated_usage_registry(root, deprecated_registry),
+        *check_traceability_contracts(root),
+        *check_markdown_file_links(root),
         *check_harness_source_of_truth(root),
         *check_harness_checks_runner_boundary(root),
         *check_project_id_api_boundary(root),
@@ -184,11 +321,13 @@ def run_checks(root: Path) -> List[Finding]:
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Verify ai-team-platform project governance invariants.")
     parser.add_argument("--root", default=".", help="repository root")
+    parser.add_argument("--deprecated-registry", default=None, help="Harness deprecated usage registry path")
     parser.add_argument("--json", action="store_true", help="emit JSON findings")
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
-    findings = run_checks(root)
+    registry_path = Path(args.deprecated_registry) if args.deprecated_registry else None
+    findings = run_checks(root, deprecated_registry=registry_path)
     if args.json:
         print(json.dumps([item.to_dict() for item in findings], ensure_ascii=False, indent=2))
     elif findings:

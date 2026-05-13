@@ -15,7 +15,16 @@
 ## 输出
 输出 `review-report.md` 和 `review-report.json`。请直接输出 Markdown，并在末尾以单个 ` ```json ` 代码块输出 `review-report.json`；runner 会按 pipeline `json_artifacts` 保存该 JSON block。
 
-`review-report.json` 必须包含 `status`、`summary`、`verdict`、`blocking_findings`、`findings`、`evidence`、`risks`、`traceability`。
+`review-report.json` 必须包含 `status`、`summary`、`verdict`、`review_dimensions`、`blocking_findings`、`findings`、`evidence`、`risks`、`traceability`。
+
+`review_dimensions` 必须逐项覆盖固定审查维度，不通过新增默认 Agent 角色来代替维度拆分：
+- `spec`：需求/验收标准覆盖。
+- `regression`：行为回归风险。
+- `architecture`：架构边界、模块职责和数据流。
+- `debt`：废弃代码、重复实现和后续债务。
+- `test`：测试真实性、充分性和证据质量。
+
+每个维度必须写 `dimension`、`status`（`passed` / `failed` / `warning` / `blocked`）和 `evidence`。
 
 `traceability` 必须逐条绑定需求 / 验收点 / 审查证据：
 - `requirement_id`

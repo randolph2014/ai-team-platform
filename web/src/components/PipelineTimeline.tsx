@@ -2,6 +2,7 @@ import { CheckCircle, FileText, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import type { HumanDecisionValue, RunReport, StageRun } from '../lib/types';
 import { rememberedWorkdir, submitHumanDecision } from '../lib/api';
+import { artifactDisplayName, artifactDisplaySubtitle } from '../lib/artifactDisplay';
 import { ArtifactContent } from './ArtifactContent';
 import { ArtifactViewer } from './ArtifactViewer';
 import { StatusBadge } from './StatusBadge';
@@ -172,8 +173,9 @@ function StageCard({ stage, liveLines, runId, workdir, projectId, onStageAction,
                       onClick={() => onArtifactOpen(validation.artifact)}
                       title={`查看 ${validation.artifact}`}
                     >
-                      {validation.artifact}
+                      {artifactDisplayName(validation.artifact)}
                     </button>
+                    {artifactDisplaySubtitle(validation.artifact) ? <span className="artifactValidationSub mono">{artifactDisplaySubtitle(validation.artifact)}</span> : null}
                     {validation.validator ? <span className="stageTag">{validation.validator}</span> : null}
                     {validation.message ? <span className="artifactValidationMessage">{validation.message}</span> : null}
                   </div>

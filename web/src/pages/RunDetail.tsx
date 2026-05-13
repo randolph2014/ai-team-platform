@@ -5,8 +5,9 @@ import { HarnessReportPanel } from '../components/HarnessReportPanel';
 import { PipelineTimeline } from '../components/PipelineTimeline';
 import { StatusBadge } from '../components/StatusBadge';
 import { apiFetch, fetchRun, fetchRunArtifactText, fetchRunDiff, projectQuery, rememberedWorkdir, rememberRunWorkdir, runWebSocketUrl } from '../lib/api';
+import { artifactDisplayName, artifactDisplaySubtitle } from '../lib/artifactDisplay';
 import { parseHarnessReport } from '../lib/harnessSchema';
-import type { HarnessReport, RunEvent, RunReport, StageRun } from '../lib/types';
+import type { ArtifactValidationRun, HarnessReport, RunEvent, RunReport, StageRun } from '../lib/types';
 
 function artifactColor(name: string): string {
   if (/\.(md|markdown)$/i.test(name)) return 'var(--blue)';
@@ -28,8 +29,8 @@ function fileIcon(file: string): string {
 const KEY_MILESTONES = [
   {
     stageId: 'requirement_confirm',
-    label: '需求定稿确认',
-    description: '需求定稿后由人工确认是否进入规划',
+    label: 'Task Contract 确认',
+    description: 'Task Contract 定稿后由人工确认是否进入规划',
   },
   {
     stageId: 'task_plan_confirm',
@@ -86,6 +87,68 @@ function KeyMilestones({ run }: { run: RunReport }) {
             </div>
           );
         })}
+      </div>
+    </section>
+  );
+}
+
+function runtimeArtifactValidations(run: RunReport): ArtifactValidationRun[] {
+  return run.stages.flatMap((stage) => stage.artifact_validations || []);
+}
+
+function ContractValidationPanel({ run }: { run: RunReport }) {
+  const runtimeValidations = runtimeArtifactValidations(run);
+  const currentValidations = run.current_contract_validations || [];
+  const currentStatus = run.current_contract_status || (currentValidations.length ? (currentValidations.some((item) => item.status === 'failed') ? 'failed' : 'passed') : 'unknown');
+  if (!runtimeValidations.length && !currentValidations.length && currentStatus === 'unknown') return null;
+
+  return (
+    <section className="panel contractValidationPanel">
+      <div className="panelHeader">
+        <h2><CheckCircle size={16} /> 当前契约再验证</h2>
+        <StatusBadge status={currentStatus} />
+      </div>
+      <div className="contractValidationGrid">
+        <div className="contractValidationBlock">
+          <div className="stageMetaTitle">运行时校验</div>
+          {runtimeValidations.length ? (
+            <div className="artifactValidationList">
+              {runtimeValidations.map((validation, index) => (
+                <div className="artifactValidationRow" key={`runtime-${validation.artifact}-${index}`}>
+                  <div className="artifactValidationMain">
+                    <span className="artifactValidationArtifact">{artifactDisplayName(validation.artifact)}</span>
+                    {artifactDisplaySubtitle(validation.artifact) ? <span className="artifactValidationSub mono">{artifactDisplaySubtitle(validation.artifact)}</span> : null}
+                    {validation.validator ? <span className="stageTag">{validation.validator}</span> : null}
+                    {validation.message ? <span className="artifactValidationMessage">{validation.message}</span> : null}
+                  </div>
+                  <StatusBadge status={validation.status} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="contractValidationEmpty">无运行时产物校验记录</div>
+          )}
+        </div>
+        <div className="contractValidationBlock">
+          <div className="stageMetaTitle">当前 schema 再验证</div>
+          {currentValidations.length ? (
+            <div className="artifactValidationList">
+              {currentValidations.map((validation, index) => (
+                <div className="artifactValidationRow" key={`current-${validation.artifact}-${index}`}>
+                  <div className="artifactValidationMain">
+                    <span className="artifactValidationArtifact">{artifactDisplayName(validation.artifact)}</span>
+                    {artifactDisplaySubtitle(validation.artifact) ? <span className="artifactValidationSub mono">{artifactDisplaySubtitle(validation.artifact)}</span> : null}
+                    {validation.validator ? <span className="stageTag">{validation.validator}</span> : null}
+                    {validation.message ? <span className="artifactValidationMessage">{validation.message}</span> : null}
+                  </div>
+                  <StatusBadge status={validation.status} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="contractValidationEmpty">当前没有可重新验证的契约产物</div>
+          )}
+        </div>
       </div>
     </section>
   );
@@ -315,6 +378,7 @@ export function RunDetail({ runId }: { runId: string }) {
       </section>
 
       {harnessReport ? <HarnessReportPanel report={harnessReport} /> : null}
+      <ContractValidationPanel run={run} />
       <KeyMilestones run={run} />
 
       {(canCancel || canRetry || canArchive) && (
@@ -450,7 +514,10 @@ export function RunDetail({ runId }: { runId: string }) {
                   title={`点击查看 ${artifact}`}
                 >
                   <span className="artifactDot" style={{ background: artifactColor(artifact) }} />
-                  <span className="artifactName">{artifact}</span>
+                  <span className="artifactName">
+                    {artifactDisplayName(artifact)}
+                    {artifactDisplaySubtitle(artifact) ? <span className="artifactNameSub">{artifactDisplaySubtitle(artifact)}</span> : null}
+                  </span>
                   <Eye size={12} className="artifactViewIcon" />
                 </button>
               ))}

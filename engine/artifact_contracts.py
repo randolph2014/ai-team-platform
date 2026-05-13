@@ -18,6 +18,12 @@ SCHEMA_FILE_MAP: Dict[str, str] = {
     "harness-report.json": "harness-report.json",
 }
 
+ARTIFACT_DISPLAY_NAMES: Dict[str, str] = {
+    "requirement-final.json": "Task Contract",
+}
+
+REQUIRED_REVIEW_DIMENSIONS: Set[str] = {"spec", "regression", "architecture", "debt", "test"}
+
 
 class SchemaValidationError(Exception):
     def __init__(self, artifact: str, errors: List[str]) -> None:
@@ -163,6 +169,21 @@ def validate_review_verdict_consistency(data: Dict[str, Any]) -> List[str]:
     return errors
 
 
+def validate_review_dimensions(data: Dict[str, Any]) -> List[str]:
+    dimensions = data.get("review_dimensions")
+    if not isinstance(dimensions, list):
+        return []
+    seen = {
+        str(item.get("dimension") or "").strip()
+        for item in dimensions
+        if isinstance(item, dict) and str(item.get("dimension") or "").strip()
+    }
+    missing = sorted(REQUIRED_REVIEW_DIMENSIONS - seen)
+    if missing:
+        return [f"review_dimensions missing dimensions: {', '.join(missing)}"]
+    return []
+
+
 def validate_related_task_decisions(data: Dict[str, Any], related_tasks: List[Dict[str, Any]]) -> List[str]:
     if not related_tasks:
         return []
@@ -219,6 +240,7 @@ def validate_artifact(data: Dict[str, Any], artifact_name: str, related_tasks: O
 
     if Path(artifact_name).name == "review-report.json":
         errors.extend(validate_review_verdict_consistency(data))
+        errors.extend(validate_review_dimensions(data))
 
     status = "passed" if not errors else "failed"
     return errors, status
@@ -230,24 +252,94 @@ def validate_required_artifacts(stage: Dict[str, Any], output_dir: Path) -> List
     for artifact in stage.get("required_artifacts") or []:
         path = output_dir / str(artifact)
         if not path.exists():
-            results.append(ArtifactValidationRun(artifact=str(artifact), status="failed", message="required artifact missing"))
+            results.append(ArtifactValidationRun(artifact=str(artifact), status="failed", message="required artifact missing", validator="runtime-schema"))
             continue
         if path.suffix == ".json":
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except Exception as exc:
-                results.append(ArtifactValidationRun(artifact=str(artifact), status="failed", message=f"invalid json: {exc}"))
+                results.append(ArtifactValidationRun(artifact=str(artifact), status="failed", message=f"invalid json: {exc}", validator="runtime-schema"))
                 continue
             if not isinstance(payload, dict):
-                results.append(ArtifactValidationRun(artifact=str(artifact), status="failed", message="json artifact must be an object"))
+                results.append(ArtifactValidationRun(artifact=str(artifact), status="failed", message="json artifact must be an object", validator="runtime-schema"))
                 continue
             errors, status = validate_artifact(payload, str(artifact), related_tasks=related_tasks)
             if errors:
-                results.append(ArtifactValidationRun(artifact=str(artifact), status="failed", message="; ".join(errors[:5])))
+                results.append(ArtifactValidationRun(artifact=str(artifact), status="failed", message="; ".join(errors[:5]), validator="runtime-schema"))
             else:
-                results.append(ArtifactValidationRun(artifact=str(artifact), status="passed", message="schema valid"))
+                results.append(ArtifactValidationRun(artifact=str(artifact), status="passed", message="schema valid", validator="runtime-schema"))
         else:
-            results.append(ArtifactValidationRun(artifact=str(artifact), status="passed", message="exists"))
+            results.append(ArtifactValidationRun(artifact=str(artifact), status="passed", message="exists", validator="runtime-exists"))
+    return results
+
+
+def _artifact_path_within_output(output_dir: Path, artifact: str) -> Optional[Path]:
+    root = output_dir.resolve(strict=False)
+    path = (output_dir / artifact).resolve(strict=False)
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return None
+    return path
+
+
+def current_contract_validations(output_dir: Path, artifacts: Optional[List[str]] = None) -> List[ArtifactValidationRun]:
+    names: List[str] = []
+    if artifacts:
+        for artifact in artifacts:
+            name = str(artifact)
+            if Path(name).name in SCHEMA_FILE_MAP and name not in names:
+                names.append(name)
+    elif output_dir.exists():
+        for path in sorted(output_dir.iterdir(), key=lambda item: item.name):
+            if path.is_file() and path.name in SCHEMA_FILE_MAP:
+                names.append(path.name)
+
+    results: List[ArtifactValidationRun] = []
+    related_tasks = _related_tasks_from_context(output_dir)
+    for artifact in names:
+        path = _artifact_path_within_output(output_dir, artifact)
+        if path is None or not path.exists() or not path.is_file():
+            results.append(
+                ArtifactValidationRun(
+                    artifact=artifact,
+                    status="failed",
+                    message="current schema artifact missing",
+                    validator="current-schema",
+                )
+            )
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            results.append(
+                ArtifactValidationRun(
+                    artifact=artifact,
+                    status="failed",
+                    message=f"invalid json: {exc}",
+                    validator="current-schema",
+                )
+            )
+            continue
+        if not isinstance(payload, dict):
+            results.append(
+                ArtifactValidationRun(
+                    artifact=artifact,
+                    status="failed",
+                    message="json artifact must be an object",
+                    validator="current-schema",
+                )
+            )
+            continue
+        errors, _ = validate_artifact(payload, artifact, related_tasks=related_tasks)
+        results.append(
+            ArtifactValidationRun(
+                artifact=artifact,
+                status="failed" if errors else "passed",
+                message="; ".join(errors[:5]) if errors else "current schema valid",
+                validator="current-schema",
+            )
+        )
     return results
 
 
@@ -267,14 +359,16 @@ def stage_schema_hint(stage: Dict[str, Any]) -> Dict[str, Any]:
 
 def artifact_schema_hint_for(artifact: str) -> Dict[str, Any]:
     schema = load_schema_for_artifact(artifact)
+    display_name = ARTIFACT_DISPLAY_NAMES.get(Path(artifact).name, Path(artifact).name)
     if schema:
         return {
             "artifact": artifact,
+            "display_name": display_name,
             "type": "object",
             "required": sorted(schema.get("required", [])),
             "schema_ref": f"engine/schemas/{SCHEMA_FILE_MAP.get(Path(artifact).name, '')}",
         }
-    return {"artifact": artifact, "type": "object", "required": []}
+    return {"artifact": artifact, "display_name": display_name, "type": "object", "required": []}
 
 
 def validate_requirement_for_planning(data: Dict[str, Any]) -> List[str]:

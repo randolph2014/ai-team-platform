@@ -4,7 +4,7 @@
   "title": "Review Report Artifact",
   "description": "结构化代码审查报告产物，verdict 和 blocking_findings 驱动回流",
   "type": "object",
-  "required": ["status", "summary", "verdict", "blocking_findings", "findings", "evidence", "risks", "traceability"],
+  "required": ["status", "summary", "verdict", "review_dimensions", "blocking_findings", "findings", "evidence", "risks", "traceability"],
   "properties": {
     "status": {
       "type": "string",
@@ -17,6 +17,30 @@
     "verdict": {
       "type": "string",
       "enum": ["Approve", "Request Changes"]
+    },
+    "review_dimensions": {
+      "type": "array",
+      "minItems": 5,
+      "items": {
+        "type": "object",
+        "required": ["dimension", "status", "evidence"],
+        "properties": {
+          "dimension": {
+            "type": "string",
+            "enum": ["spec", "regression", "architecture", "debt", "test"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["passed", "failed", "warning", "blocked"]
+          },
+          "evidence": {"type": "string", "minLength": 1},
+          "finding_refs": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        },
+        "additionalProperties": false
+      }
     },
     "blocking_findings": {
       "type": "array",

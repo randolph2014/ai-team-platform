@@ -111,7 +111,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         },
         {
             "id": "requirement_synthesis",
-            "name": "需求综合定稿",
+            "name": "Task Contract 综合定稿",
             "parallel": False,
             "agents": ["planner"],
             "input": [
@@ -128,7 +128,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         },
         {
             "id": "requirement_confirm",
-            "name": "需求人工确认",
+            "name": "Task Contract 人工确认",
             "type": "human_review",
             "input": ["requirement-final.md"],
             "output_file": "human-decision-requirement.md",
@@ -411,7 +411,7 @@ def load_config(project_root: Path, explicit_config: Optional[str] = None) -> Lo
     else:
         base_config = dict(DEFAULT_CONFIG)
         config_source = "default"
-    quality_gates_explicit = "quality_gates" in base_config
+    quality_gates_explicit = False
 
     # 合并用户个性化配置：唯一数据源 DB
     db_config = _try_load_db_config()

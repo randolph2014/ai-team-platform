@@ -1114,6 +1114,13 @@ class Orchestrator:
                     "status": "completed",
                     "summary": "multi-unit review reports completed",
                     "verdict": "Approve",
+                    "review_dimensions": [
+                        {"dimension": "spec", "status": "passed", "evidence": "multi-unit child reports summarized acceptance coverage"},
+                        {"dimension": "regression", "status": "passed", "evidence": "multi-unit child reports summarized test evidence"},
+                        {"dimension": "architecture", "status": "passed", "evidence": "multi-unit summary did not alter architecture decisions"},
+                        {"dimension": "debt", "status": "passed", "evidence": "multi-unit child reports carried residual risks into summary"},
+                        {"dimension": "test", "status": "passed", "evidence": "multi-unit child test reports summarized"},
+                    ],
                     "blocking_findings": [],
                     "findings": [],
                     "evidence": evidence,
@@ -1730,7 +1737,8 @@ class Orchestrator:
                 continue
             content = output_path.read_text(encoding="utf-8", errors="replace")
             json_blocks = re.findall(r'```json\s*\n(.*?)```', content, re.DOTALL)
-            for i, block in enumerate(json_blocks):
+            parsed_blocks = []
+            for block in json_blocks:
                 block = block.strip()
                 if not block:
                     continue
@@ -1738,10 +1746,18 @@ class Orchestrator:
                     parsed = json.loads(block)
                 except json.JSONDecodeError:
                     continue
+                parsed_blocks.append(parsed)
+
+            if configured_paths:
+                selected_blocks = parsed_blocks[-len(configured_paths):]
+                for json_path, parsed in zip(configured_paths, selected_blocks):
+                    json_path.parent.mkdir(parents=True, exist_ok=True)
+                    json_path.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
+                continue
+
+            for i, parsed in enumerate(parsed_blocks):
                 stem = output_path.stem
-                if i < len(configured_paths):
-                    json_path = configured_paths[i]
-                elif len(json_blocks) > 1:
+                if len(parsed_blocks) > 1:
                     json_path = output_dir / f"{stem}-{i + 1}.json"
                 else:
                     json_path = output_dir / f"{stem}.json"

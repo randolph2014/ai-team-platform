@@ -3,20 +3,20 @@
 quality_gates:
   - name: python-syntax
     type: command
-    command: "python3 -m py_compile $(git diff --name-only --diff-filter=ACM HEAD~1..HEAD 2>/dev/null | grep '\\.py$' | head -20) 2>&1"
+    command: "PYTHON_BIN=python3; [ -x ./.venv/bin/python ] && PYTHON_BIN=./.venv/bin/python; files=$(git diff --name-only --diff-filter=ACM HEAD~1..HEAD 2>/dev/null | grep '\\.py$' | head -20); [ -z \"$files\" ] || $PYTHON_BIN -m py_compile $files 2>&1"
     required: true
     timeout_seconds: 30
 
   - name: pytest
     type: command
-    command: "python3 -m pytest --tb=short -q 2>&1"
+    command: "if [ -x ./.venv/bin/python ]; then ./.venv/bin/python -m pytest --tb=short -q; else python3 -m pytest --tb=short -q; fi 2>&1"
     required: true
     max_retries: 1
     timeout_seconds: 600
 
   - name: coverage
     type: threshold
-    command: "python3 -m pytest --cov --cov-report=term 2>&1 | tail -5"
+    command: "if [ -x ./.venv/bin/python ]; then ./.venv/bin/python -m pytest --cov --cov-report=term; else python3 -m pytest --cov --cov-report=term; fi 2>&1 | tail -5"
     parse: "regex:TOTAL.*?(\\d+)%"
     operator: ">="
     threshold: 80

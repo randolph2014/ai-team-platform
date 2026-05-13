@@ -39,11 +39,14 @@ Reviewer 同时承担 QA 和代码审查职责。请先阅读 Stage Contract 中
 - `status`
 - `summary`
 - `verdict`: `"Approve"` 或 `"Request Changes"`
+- `review_dimensions`
 - `blocking_findings`
 - `findings`
 - `evidence`
 - `risks`
 - `traceability`
+
+`review_dimensions` 必须覆盖 `spec`、`regression`、`architecture`、`debt`、`test` 五个固定维度。每项必须写 `dimension`、`status`（`passed` / `failed` / `warning` / `blocked`）和 `evidence`，用维度拆分审查责任，不新增默认 Agent 角色。
 
 如果存在阻塞问题，必须输出 `Request Changes`，并在 `blocking_findings` 中写入可执行修复建议。
 

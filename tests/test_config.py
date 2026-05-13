@@ -34,6 +34,7 @@ class TestPromptContracts(unittest.TestCase):
             "planner.md": [
                 "requirement-analysis.md",
                 "requirement-final.json",
+                "Task Contract",
                 "task-plan.json",
                 "solution-plan.json",
                 "retrospect-report.json",
@@ -71,6 +72,7 @@ class TestPromptContracts(unittest.TestCase):
             ],
             "code-reviewer.md": [
                 "review-report.json",
+                "review_dimensions",
                 "findings",
                 "evidence",
                 "risks",
@@ -79,6 +81,7 @@ class TestPromptContracts(unittest.TestCase):
             "reviewer.md": [
                 "test-report.json",
                 "review-report.json",
+                "review_dimensions",
                 "verdict",
                 "blocking_findings",
                 "Request Changes",
@@ -386,6 +389,19 @@ class TestLoadConfig(unittest.TestCase):
 
             loaded = load_config(root, explicit_config=str(config_path))
 
+            gate_names = [gate["name"] for gate in loaded.config["quality_gates"]]
+            self.assertIn("python-syntax", gate_names)
+            self.assertIn("pytest", gate_names)
+
+    def test_platform_template_empty_quality_gates_injects_project_defaults(self) -> None:
+        """平台模板的 quality_gates: [] 不应阻止项目语言默认门禁注入。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+
+            loaded = load_config(root)
+
+            self.assertEqual(loaded.source, "platform")
             gate_names = [gate["name"] for gate in loaded.config["quality_gates"]]
             self.assertIn("python-syntax", gate_names)
             self.assertIn("pytest", gate_names)

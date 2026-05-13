@@ -11,10 +11,10 @@ stages:
     name: 代码库扫描
     type: context_scan
   - id: requirement_synthesis
-    name: 需求综合定稿
+    name: Task Contract 综合定稿
     agents: [planner]
   - id: requirement_confirm
-    name: 需求人工确认
+    name: Task Contract 人工确认
     type: human_review
   - id: planning
     name: 方案与任务规划

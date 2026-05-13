@@ -23,7 +23,7 @@ python3 -m pip install -e .
 ai-team run "实现一个需求" --project /path/to/project --yes
 
 # 从 spec 文件读取需求
-ai-team run --spec-file docs/spec.md --project /path/to/project --yes
+ai-team run --spec-file docs/spec_1.1.md --project /path/to/project --yes
 
 # 查看状态
 ai-team status --project /path/to/project
@@ -46,11 +46,11 @@ npm run dev
 
 ```bash
 # Python 测试
-pip install -e ".[dev]"
-pytest
+./.venv/bin/python -m pip install -e ".[dev]"
+./.venv/bin/python -m pytest
 
-# 前端构建
-cd web && npm ci && npm run build
+# 前端测试与构建
+cd web && npm run test && npm run build
 ```
 
 仓库卫生检查：
@@ -77,7 +77,7 @@ docker compose up
 
 ## 文档
 
-- [需求规格说明书 v2.1](docs/spec.md)
+- [需求规格说明书 v1.1](docs/spec_1.1.md)
 - [已认可前端原型](docs/prototypes/ai-team-dashboard/index.html)
 - [前端截图验收](docs/validation/README.md)
 
@@ -86,7 +86,7 @@ docker compose up
 ```
 ai-team-platform/
 ├── docs/                   # 文档
-│   ├── spec.md             # 需求规格
+│   ├── spec_1.1.md         # 需求规格
 │   └── prototypes/         # 前端原型基线
 ├── engine/                 # [Phase 0] 编排引擎
 ├── api/                    # [Phase 0] REST API + WebSocket

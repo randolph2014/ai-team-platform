@@ -1930,6 +1930,64 @@ worktree:
             self.assertFalse((output_dir / "task-plan-1.json").exists())
             self.assertFalse((output_dir / "task-plan-2.json").exists())
 
+    def test_stage_json_artifacts_use_trailing_blocks_when_markdown_has_other_json(self) -> None:
+        response = """# Plan
+
+Intermediate example that must stay in Markdown only:
+
+```json
+[["task-001"]]
+```
+
+```json
+{"status": "completed", "summary": "solution", "decisions": [], "alternatives_considered": [], "impact_scope": [], "configuration_strategy": {}, "risks": [], "rollback_strategy": {}, "verification_strategy": [], "evidence": [], "next_stage_contract": {}}
+```
+
+```json
+{"status": "completed", "summary": "tasks", "tasks": [{"id": "task-001", "title": "t", "description": "d", "priority": "P0", "acceptance_criteria_refs": ["AC-001"]}], "execution_order": [["task-001"]], "file_boundaries": [], "test_plan": [], "rollback_considerations": [], "acceptance_coverage": [], "evidence": [], "next_stage_contract": {}}
+```
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "team.yaml").write_text(
+                f"""
+runtimes:
+  Mock:
+    cli: mock
+    response: {json.dumps(response)}
+agents:
+  - name: planner
+    runtime_id: Mock
+    prompt: agents/planner.md
+pipeline:
+  - id: planning
+    agents: [planner]
+    input: requirement
+    output:
+      planner: task-plan.md
+    json_artifacts:
+      - solution-plan.json
+      - task-plan.json
+    required_artifacts:
+      - solution-plan.json
+      - task-plan.json
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / "agents").mkdir()
+            (root / "agents" / "planner.md").write_text("Plan the work.", encoding="utf-8")
+
+            report = Orchestrator(root, config_path=str(root / "team.yaml")).run("ship it")
+
+            self.assertEqual(report.status, "completed")
+            output_dir = Path(report.output_dir)
+            solution = json.loads((output_dir / "solution-plan.json").read_text(encoding="utf-8"))
+            task_plan = json.loads((output_dir / "task-plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(solution["summary"], "solution")
+            self.assertEqual(task_plan["summary"], "tasks")
+
     def test_artifact_contract_validates_named_required_fields(self) -> None:
         response = """# Plan
 

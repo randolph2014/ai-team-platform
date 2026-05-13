@@ -123,7 +123,12 @@ class TestHealthEndpoint(BaseRoutesTest):
         """GET /health 返回 HTTP 200 和 status ok"""
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "ok"})
+        data = response.json()
+        self.assertEqual(data["status"], "ok")
+        self.assertIn("database", data)
+        self.assertIn("queue", data)
+        self.assertFalse(data["database"]["configured"])
+        self.assertFalse(data["queue"]["configured"])
 
 
 class TestSettingsRoutes(BaseRoutesTest):
@@ -589,20 +594,23 @@ class TestRunsRoutes(BaseRoutesTest):
     def test_create_run_starts_execution(self) -> None:
         """POST /api/runs 创建并启动运行"""
         (self.project_root / ".ai" / "agents" / "dev.md").write_text("You are a dev agent.", encoding="utf-8")
+        output_dir = self.project_root / ".ai" / "team-output" / "api-test-run-001"
 
-        response = self.client.post(
-            "/api/runs",
-            json={
-                "requirement": "测试需求",
-                "workdir": str(self.project_root),
-                "run_id": "api-test-run-001",
-                "yes": True,
-            },
-        )
+        with patch("api.routes.runs.start_run_background", return_value=output_dir) as start_bg:
+            response = self.client.post(
+                "/api/runs",
+                json={
+                    "requirement": "测试需求",
+                    "workdir": str(self.project_root),
+                    "run_id": "api-test-run-001",
+                    "yes": True,
+                },
+            )
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["run_id"], "api-test-run-001")
         self.assertEqual(data["status"], "queued")
+        start_bg.assert_called_once()
 
     def test_create_run_duplicate_id_returns_409(self) -> None:
         """POST /api/runs 重复 run_id 返回 409"""
@@ -1623,10 +1631,25 @@ class TestRunsFallbackToFilesystem(BaseRoutesTest):
     def test_get_run_from_filesystem(self) -> None:
         """GET /api/runs/{id} 从文件系统读取报告"""
         import json
-        from engine.models import RunReport, StageRun
+        from engine.models import ArtifactValidationRun, RunReport, StageRun
 
         output_dir = self.project_root / ".ai" / "team-output" / "fs-test-run"
         output_dir.mkdir(parents=True)
+        (output_dir / "implementation-report.json").write_text(
+            json.dumps(
+                {
+                    "status": "completed",
+                    "summary": "历史运行时通过的旧格式报告",
+                    "changed_files": ["src/app.py"],
+                    "tests_run": [],
+                    "acceptance_coverage": [],
+                    "evidence": [],
+                    "risks": [],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
 
         report = RunReport(
             run_id="fs-test-run",
@@ -1635,8 +1658,22 @@ class TestRunsFallbackToFilesystem(BaseRoutesTest):
             project_root=str(self.project_root),
             output_dir=str(output_dir),
             config_source="project",
+            artifacts=["implementation-report.json"],
             stages=[
-                StageRun(stage_id="develop", stage_name="Develop", status="completed", agents=[])
+                StageRun(
+                    stage_id="develop",
+                    stage_name="Develop",
+                    status="completed",
+                    agents=[],
+                    artifact_validations=[
+                        ArtifactValidationRun(
+                            artifact="implementation-report.json",
+                            status="passed",
+                            message="schema valid",
+                            validator="runtime-schema",
+                        )
+                    ],
+                )
             ],
         )
         report.write(output_dir / "report.json")
@@ -1647,6 +1684,11 @@ class TestRunsFallbackToFilesystem(BaseRoutesTest):
         self.assertEqual(data["run_id"], "fs-test-run")
         self.assertEqual(data["status"], "completed")
         self.assertEqual(len(data["stages"]), 1)
+        self.assertEqual(data["stages"][0]["artifact_validations"][0]["status"], "passed")
+        self.assertEqual(data["current_contract_status"], "failed")
+        self.assertEqual(data["current_contract_validations"][0]["artifact"], "implementation-report.json")
+        self.assertEqual(data["current_contract_validations"][0]["validator"], "current-schema")
+        self.assertIn("traceability", data["current_contract_validations"][0]["message"])
 
     def test_list_runs_from_filesystem(self) -> None:
         """GET /api/runs 从文件系统扫描返回列表"""
@@ -2064,11 +2106,13 @@ class TestProductionWorkdirRejection(BaseRoutesTest):
 
         conn = AsyncMock()
         fake_db = (AsyncMock(return_value=conn), AsyncMock(), None, None, None)
+        output_dir = self.project_root / ".ai" / "team-output" / "prod-test-run"
 
         with patch.dict(os.environ, {"AI_TEAM_ALLOWED_ROOTS": ""}, clear=False), \
              patch("api.routes.runs.is_production_mode", return_value=True), \
              patch("api.routes.runs.try_persistence", return_value=fake_db), \
-             patch("api.routes.runs._get_project_repo", return_value=fake_repo):
+             patch("api.routes.runs._get_project_repo", return_value=fake_repo), \
+             patch("api.routes.runs.start_run_background", return_value=output_dir) as start_bg:
             response = self.client.post(
                 "/api/runs",
                 json={
@@ -2080,6 +2124,7 @@ class TestProductionWorkdirRejection(BaseRoutesTest):
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["run_id"], "prod-test-run")
+        start_bg.assert_called_once()
 
     def test_create_run_rejects_project_id_root_outside_allowed_roots(self) -> None:
         """通过 project_id 解析出的 root_path 仍必须经过 allowlist 校验。"""

@@ -99,6 +99,8 @@ export interface RunReport {
   stages: StageRun[];
   human_decisions?: HumanDecision[];
   artifacts: string[];
+  current_contract_status?: 'passed' | 'failed' | 'unknown' | string;
+  current_contract_validations?: ArtifactValidationRun[];
   warnings?: string[];
   error_message?: string;
   error_detail?: StructuredError;

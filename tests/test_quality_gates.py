@@ -296,6 +296,23 @@ class TestInjectDefaultGates(unittest.TestCase):
             self.assertIn("test", names)
             self.assertIn("npm run build 2>&1", commands)
 
+    def test_python_project_with_web_app_gets_repo_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").touch()
+            (root / "web").mkdir()
+            (root / "web" / "package.json").write_text("{}", encoding="utf-8")
+            (root / "scripts").mkdir()
+            (root / "scripts" / "check_repo_hygiene.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+
+            result = inject_default_gates(root, [])
+
+            names = [g["name"] for g in result]
+            self.assertIn("pytest", names)
+            self.assertIn("web-test", names)
+            self.assertIn("web-build", names)
+            self.assertIn("repo-hygiene", names)
+
     def test_go_project_gets_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1,6 +1,7 @@
 import { Download, Maximize2, Minimize2, X, FileText, FileCode, FileJson, Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { apiFetch, fetchRunArtifactText, projectQuery, rememberedWorkdir } from '../lib/api';
+import { artifactDisplayName, artifactDisplaySubtitle } from '../lib/artifactDisplay';
 import { ReadableArtifact, isCodeFile, isJsonFile, isLogFile, isMarkdownFile } from './ReadableArtifact';
 
 interface ArtifactViewerProps {
@@ -103,7 +104,8 @@ export function ArtifactViewer({ runId, artifactName, projectId, onClose }: Arti
         <header className="viewerHeader">
           <div className="viewerTitle">
             {getFileIcon(artifactName)}
-            <span className="viewerFileName">{artifactName}</span>
+            <span className="viewerFileName">{artifactDisplayName(artifactName)}</span>
+            {artifactDisplaySubtitle(artifactName) ? <span className="viewerFileNameSub">{artifactDisplaySubtitle(artifactName)}</span> : null}
           </div>
           <div className="viewerActions">
             <button className="iconButton" title="下载" onClick={handleDownload}>

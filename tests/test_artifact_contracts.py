@@ -7,6 +7,8 @@ from pathlib import Path
 
 from engine.artifact_contracts import (
     SchemaValidationError,
+    artifact_schema_hint_for,
+    current_contract_validations,
     has_artifact_validation_failure,
     load_schema_for_artifact,
     validate_artifact,
@@ -130,6 +132,7 @@ def _valid_review_report():
         "status": "completed",
         "summary": "审查通过",
         "verdict": "Approve",
+        "review_dimensions": _valid_review_dimensions(),
         "blocking_findings": [],
         "findings": [],
         "evidence": [
@@ -148,6 +151,13 @@ def _valid_review_report_with_changes():
         "status": "completed",
         "summary": "需要修改",
         "verdict": "Request Changes",
+        "review_dimensions": [
+            {"dimension": "spec", "status": "failed", "evidence": "AC-001 缺少验收证据"},
+            {"dimension": "regression", "status": "passed", "evidence": "回归测试已执行"},
+            {"dimension": "architecture", "status": "passed", "evidence": "未发现架构边界破坏"},
+            {"dimension": "debt", "status": "warning", "evidence": "存在后续清理项"},
+            {"dimension": "test", "status": "failed", "evidence": "测试覆盖不足"},
+        ],
         "blocking_findings": [
             {
                 "severity": "Critical",
@@ -183,6 +193,16 @@ def _valid_review_report_with_changes():
     }
 
 
+def _valid_review_dimensions():
+    return [
+        {"dimension": "spec", "status": "passed", "evidence": "验收点均已对照"},
+        {"dimension": "regression", "status": "passed", "evidence": "回归风险已检查"},
+        {"dimension": "architecture", "status": "passed", "evidence": "架构边界未变化"},
+        {"dimension": "debt", "status": "passed", "evidence": "未引入明显技术债"},
+        {"dimension": "test", "status": "passed", "evidence": "测试证据充分"},
+    ]
+
+
 class TestSchemaLoading(unittest.TestCase):
     def test_load_all_schemas(self):
         for name in [
@@ -201,6 +221,14 @@ class TestSchemaLoading(unittest.TestCase):
     def test_unknown_schema_returns_none(self):
         result = load_schema_for_artifact("unknown.json")
         self.assertIsNone(result)
+
+    def test_requirement_final_schema_is_platform_task_contract(self):
+        schema = load_schema_for_artifact("requirement-final.json")
+        hint = artifact_schema_hint_for("requirement-final.json")
+
+        self.assertEqual(schema["title"], "Task Contract")
+        self.assertEqual(hint["display_name"], "Task Contract")
+        self.assertIn("Task Contract", schema["description"])
 
 
 class TestRequirementValidation(unittest.TestCase):
@@ -510,6 +538,23 @@ class TestReviewReportValidation(unittest.TestCase):
         errors, status = validate_artifact(data, "review-report.json")
         self.assertEqual(status, "failed")
 
+    def test_missing_review_dimensions_fails(self):
+        data = _valid_review_report()
+        del data["review_dimensions"]
+        errors, status = validate_artifact(data, "review-report.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("review_dimensions" in e for e in errors))
+
+    def test_review_dimensions_must_cover_all_required_dimensions(self):
+        data = _valid_review_report()
+        data["review_dimensions"] = [
+            {"dimension": "spec", "status": "passed", "evidence": "checked"},
+            {"dimension": "test", "status": "passed", "evidence": "checked"},
+        ]
+        errors, status = validate_artifact(data, "review-report.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("review_dimensions missing dimensions" in e for e in errors))
+
     def test_approve_with_blocking_findings_fails(self):
         data = _valid_review_report()
         data["blocking_findings"] = [{"severity": "Critical", "file_path": "x.py", "description": "bad"}]
@@ -522,6 +567,7 @@ class TestReviewReportValidation(unittest.TestCase):
             "status": "completed",
             "summary": "changes needed",
             "verdict": "Request Changes",
+            "review_dimensions": _valid_review_dimensions(),
             "blocking_findings": [],
             "findings": [],
             "evidence": [{"source": "git diff", "finding": "No critical finding"}],
@@ -537,6 +583,7 @@ class TestReviewReportValidation(unittest.TestCase):
             "status": "completed",
             "summary": "changes needed",
             "verdict": "Request Changes",
+            "review_dimensions": _valid_review_dimensions(),
             "blocking_findings": [],
             "findings": [{"severity": "Critical", "file_path": "x.py", "description": "sql injection"}],
             "evidence": [{"source": "git diff", "finding": "sql injection"}],
@@ -666,6 +713,36 @@ class TestHasArtifactValidationFailure(unittest.TestCase):
 
     def test_empty_results(self):
         self.assertFalse(has_artifact_validation_failure([]))
+
+
+class TestCurrentContractValidation(unittest.TestCase):
+    def test_current_contract_revalidates_historical_schema_valid_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            (output_dir / "implementation-report.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "old runtime-valid report",
+                        "changed_files": ["src/app.py"],
+                        "tests_run": [],
+                        "acceptance_coverage": [],
+                        "evidence": [],
+                        "risks": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            results = current_contract_validations(output_dir, ["implementation-report.json"])
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].artifact, "implementation-report.json")
+        self.assertEqual(results[0].validator, "current-schema")
+        self.assertEqual(results[0].status, "failed")
+        self.assertIn("traceability", results[0].message)
+        self.assertIn("tests_run", results[0].message)
 
 
 class TestSchemaValidationErrors(unittest.TestCase):

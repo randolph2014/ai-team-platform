@@ -72,7 +72,7 @@ function standardStages(): StageConfig[] {
     },
     {
       id: 'requirement_synthesis',
-      name: '需求综合定稿',
+      name: 'Task Contract 综合定稿',
       agents: ['planner'],
       is_parallel: false,
       input: ['requirement', 'codebase-context.md', 'codebase-context.json', 'requirement-analysis.md', 'requirement-gap-analysis.md', 'human-decision-requirement*.json'],
@@ -82,7 +82,7 @@ function standardStages(): StageConfig[] {
     },
     {
       id: 'requirement_confirm',
-      name: '需求人工确认',
+      name: 'Task Contract 人工确认',
       type: 'human_review',
       agents: [],
       is_parallel: false,

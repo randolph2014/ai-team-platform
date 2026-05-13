@@ -99,35 +99,38 @@ class _ContextLogger:
             ctx["agent_name"] = self._agent_name
         return ctx
 
+    def _uses_stdlib_extra(self) -> bool:
+        return isinstance(self._logger, logging.Logger)
+
     def info(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        if _HAS_STRUCTLOG:
-            self._logger.info(msg, *args, **self._extra(), **kwargs)
-        else:
+        if self._uses_stdlib_extra():
             self._logger.info(msg, *args, extra=self._extra(), **kwargs)
+        else:
+            self._logger.info(msg, *args, **self._extra(), **kwargs)
 
     def warning(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        if _HAS_STRUCTLOG:
-            self._logger.warning(msg, *args, **self._extra(), **kwargs)
-        else:
+        if self._uses_stdlib_extra():
             self._logger.warning(msg, *args, extra=self._extra(), **kwargs)
+        else:
+            self._logger.warning(msg, *args, **self._extra(), **kwargs)
 
     def error(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        if _HAS_STRUCTLOG:
-            self._logger.error(msg, *args, **self._extra(), **kwargs)
-        else:
+        if self._uses_stdlib_extra():
             self._logger.error(msg, *args, extra=self._extra(), **kwargs)
+        else:
+            self._logger.error(msg, *args, **self._extra(), **kwargs)
 
     def debug(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        if _HAS_STRUCTLOG:
-            self._logger.debug(msg, *args, **self._extra(), **kwargs)
-        else:
+        if self._uses_stdlib_extra():
             self._logger.debug(msg, *args, extra=self._extra(), **kwargs)
+        else:
+            self._logger.debug(msg, *args, **self._extra(), **kwargs)
 
     def exception(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        if _HAS_STRUCTLOG:
-            self._logger.exception(msg, *args, **self._extra(), **kwargs)
-        else:
+        if self._uses_stdlib_extra():
             self._logger.exception(msg, *args, extra=self._extra(), **kwargs)
+        else:
+            self._logger.exception(msg, *args, **self._extra(), **kwargs)
 
 
 def get_logger(

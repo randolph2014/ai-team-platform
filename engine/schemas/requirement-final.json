@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "requirement-final.json",
-  "title": "Requirement Final Artifact",
-  "description": "结构化定稿需求产物，包含目标、非目标、范围、验收标准和风险",
+  "title": "Task Contract",
+  "description": "平台级 Task Contract，保留 requirement-final.json 文件名作为兼容入口，包含目标、非目标、范围、验收标准和风险",
   "type": "object",
   "required": ["status", "summary", "goals", "non_goals", "scope", "acceptance_criteria", "risks"],
   "properties": {

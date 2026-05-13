@@ -119,6 +119,7 @@ class ArtifactValidationRun(BaseModel):
     artifact: str
     status: Literal["passed", "failed"] = "passed"
     message: str = ""
+    validator: Optional[str] = None
 
 
 HumanDecisionValue = Literal["waiting", "approved", "rejected"]
@@ -268,6 +269,8 @@ class RunReport(BaseModel):
     units: List[RequirementUnitProgress] = Field(default_factory=list)
     human_decisions: List[HumanDecision] = Field(default_factory=list)
     artifacts: List[str] = Field(default_factory=list)
+    current_contract_status: Literal["passed", "failed", "unknown"] = "unknown"
+    current_contract_validations: List[ArtifactValidationRun] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     error_message: Optional[str] = None
     error_detail: Optional[StructuredError] = None

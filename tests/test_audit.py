@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -66,6 +67,34 @@ class TestAuditLogging(unittest.TestCase):
                 self.assertEqual(entry["actor"], "api-user")
         finally:
             audit_mod._AUDIT_DB_AVAILABLE = original
+
+    def test_write_audit_db_converts_created_at_for_asyncpg(self):
+        import asyncio
+        import engine.audit as audit_mod
+
+        conn = AsyncMock()
+
+        async def fake_get_connection():
+            return conn
+
+        entry = {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "action": "create_run",
+            "actor": "api-user",
+            "resource_type": "run",
+            "resource_id": "run-1",
+            "detail": {"ok": True},
+            "ip_address": None,
+            "user_agent": None,
+            "created_at": "2026-05-13T14:56:05.930330+00:00",
+        }
+
+        with patch("persistence.connection.get_connection", side_effect=fake_get_connection), \
+             patch("persistence.connection.release_connection", new_callable=AsyncMock):
+            asyncio.run(audit_mod._write_audit_db(entry))
+
+        created_at = conn.execute.await_args.args[-1]
+        self.assertIsInstance(created_at, datetime)
 
     def test_record_audit_sync(self):
         import engine.audit as audit_mod

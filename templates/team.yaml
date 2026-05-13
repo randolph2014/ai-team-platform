@@ -117,7 +117,7 @@ pipeline:
         - requirement-gap-analysis.md
 
     - id: requirement_synthesis
-      name: "需求综合定稿"
+      name: "Task Contract 综合定稿"
       parallel: false
       agents: [planner]
       input:
@@ -136,7 +136,7 @@ pipeline:
         - requirement-final.json
 
     - id: requirement_confirm
-      name: "需求人工确认"
+      name: "Task Contract 人工确认"
       type: human_review
       input: [requirement-final.md]
       output_file: human-decision-requirement.md

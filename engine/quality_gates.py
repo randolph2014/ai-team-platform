@@ -80,24 +80,76 @@ def _detect_language(project_root: Path) -> Optional[str]:
     return None
 
 
-def inject_default_gates(project_root: Path, existing_gates: List[Dict]) -> List[Dict]:
-    if existing_gates:
-        return existing_gates
-    lang = _detect_language(project_root)
-    if not lang:
-        return existing_gates
+def _detect_languages(project_root: Path) -> List[str]:
+    languages: List[str] = []
+    for lang, markers in _LANG_MARKERS.items():
+        if any((project_root / marker).exists() for marker in markers):
+            languages.append(lang)
+    return languages
+
+
+def _template_gates_for_language(lang: str) -> List[Dict]:
     template_path = _TEMPLATES_DIR / f"{lang}.yaml"
     if not template_path.exists():
-        return existing_gates
+        return []
     try:
         data = yaml.safe_load(template_path.read_text(encoding="utf-8")) or {}
         defaults = data.get("quality_gates", [])
-        if defaults:
-            logger.info("Injected %d default quality gates for %s project", len(defaults), lang)
-        return defaults
+        return defaults if isinstance(defaults, list) else []
     except Exception:
         logger.warning("Failed to load default quality gates template for %s", lang)
+        return []
+
+
+def _repo_default_gates(project_root: Path) -> List[Dict]:
+    gates: List[Dict] = []
+    if (project_root / "web" / "package.json").exists():
+        gates.extend([
+            {
+                "name": "web-test",
+                "type": "command",
+                "command": "cd web && npm run test 2>&1",
+                "required": True,
+                "max_retries": 1,
+                "timeout_seconds": 600,
+            },
+            {
+                "name": "web-build",
+                "type": "command",
+                "command": "cd web && npm run build 2>&1",
+                "required": True,
+                "max_retries": 1,
+                "timeout_seconds": 600,
+            },
+        ])
+    if (project_root / "scripts" / "check_repo_hygiene.sh").exists():
+        gates.append({
+            "name": "repo-hygiene",
+            "type": "command",
+            "command": "bash scripts/check_repo_hygiene.sh 2>&1",
+            "required": True,
+            "timeout_seconds": 120,
+        })
+    return gates
+
+
+def inject_default_gates(project_root: Path, existing_gates: List[Dict]) -> List[Dict]:
+    if existing_gates:
         return existing_gates
+    languages = _detect_languages(project_root)
+    if not languages:
+        return existing_gates
+    defaults: List[Dict] = []
+    for lang in languages:
+        defaults.extend(_template_gates_for_language(lang))
+    defaults.extend(_repo_default_gates(project_root))
+    if defaults:
+        logger.info("Injected %d default quality gates for project", len(defaults))
+        return defaults
+    lang = _detect_language(project_root)
+    if lang:
+        logger.warning("No default quality gates found for %s project", lang)
+    return existing_gates
 
 
 def _path_within(path: Path, root: Path) -> bool:

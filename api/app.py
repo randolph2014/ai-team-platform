@@ -11,6 +11,55 @@ from fastapi import Body, Depends, HTTPException, Request
 logger = logging.getLogger(__name__)
 
 
+def _database_health() -> dict:
+    url = os.environ.get("DATABASE_URL") or os.environ.get("AI_TEAM_DB_URL")
+    result = {"configured": bool(url), "reachable": False}
+    if not url:
+        return result
+    try:
+        import asyncpg
+        from persistence.connection import run_sync
+
+        async def _check() -> None:
+            conn = await asyncpg.connect(dsn=url, timeout=1)
+            try:
+                await conn.execute("SELECT 1")
+            finally:
+                await conn.close()
+
+        run_sync(_check())
+        result["reachable"] = True
+    except Exception as exc:
+        result["error"] = str(exc)
+    return result
+
+
+def _queue_health() -> dict:
+    url = os.environ.get("AI_TEAM_REDIS_URL", "").strip()
+    result = {"configured": bool(url), "redis_reachable": False, "workers": 0}
+    if not url:
+        return result
+    conn = None
+    try:
+        from redis import Redis
+        from rq import Worker
+
+        conn = Redis.from_url(url, socket_connect_timeout=1, socket_timeout=1)
+        conn.ping()
+        workers = Worker.all(connection=conn)
+        result["redis_reachable"] = True
+        result["workers"] = len(workers)
+    except Exception as exc:
+        result["error"] = str(exc)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return result
+
+
 @asynccontextmanager
 async def _lifespan(app):
     from engine.production_guard import ProductionGuard, is_production_mode
@@ -139,7 +188,11 @@ def create_app():
 
     @app.get("/health")
     def health():
-        return {"status": "ok"}
+        return {
+            "status": "ok",
+            "database": _database_health(),
+            "queue": _queue_health(),
+        }
 
     @app.get("/metrics")
     def metrics(user: dict = Depends(get_current_user)):

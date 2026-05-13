@@ -83,10 +83,13 @@ class TestHealthNoAuth(_AuthTestBase):
 
     def test_health_no_token_no_env(self) -> None:
         """GET /health returns 200 even when auth is not configured."""
-        with patch.dict(os.environ, {}, clear=False):
+        with patch.dict(os.environ, {}, clear=True):
             response = self.client.get("/health")
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {"status": "ok"})
+            data = response.json()
+            self.assertEqual(data["status"], "ok")
+            self.assertEqual(data["database"], {"configured": False, "reachable": False})
+            self.assertEqual(data["queue"], {"configured": False, "redis_reachable": False, "workers": 0})
 
 
 class TestAuthDisabled(_AuthTestBase):

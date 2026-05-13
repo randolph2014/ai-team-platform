@@ -27,6 +27,14 @@ def _is_db_available() -> bool:
     return _AUDIT_DB_AVAILABLE
 
 
+def _db_created_at(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return datetime.now(timezone.utc)
+
+
 async def _write_audit_db(entry: Dict[str, Any]) -> None:
     try:
         from persistence.connection import get_connection, release_connection
@@ -45,7 +53,7 @@ async def _write_audit_db(entry: Dict[str, Any]) -> None:
                 json.dumps(entry.get("detail"), ensure_ascii=False),
                 entry.get("ip_address"),
                 entry.get("user_agent"),
-                entry["created_at"],
+                _db_created_at(entry["created_at"]),
             )
         finally:
             await release_connection(conn)

@@ -5,8 +5,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from engine.artifact_contracts import current_contract_validations
 from engine.config import ConfigError, find_project_root, reject_deprecated_project_team_config
-from engine.models import HumanDecision, InvalidStatusTransition, RunReport, normalize_run_status, validate_run_transition
+from engine.models import HumanDecision, InvalidStatusTransition, RunReport, model_to_dict, normalize_run_status, validate_run_transition
 from engine.orchestrator import find_run_reports, load_report
 from engine.production_guard import is_production_mode
 
@@ -213,6 +214,22 @@ def _load_reports_by_id(project_root: Path, status: Optional[str] = None) -> Dic
     return reports
 
 
+def _attach_current_contract_validation(payload: Dict[str, Any], output_dir: Optional[str]) -> Dict[str, Any]:
+    result = dict(payload)
+    if not output_dir:
+        result.setdefault("current_contract_status", "unknown")
+        result.setdefault("current_contract_validations", [])
+        return result
+
+    validations = current_contract_validations(Path(output_dir), [str(item) for item in result.get("artifacts", [])])
+    result["current_contract_validations"] = [model_to_dict(item) for item in validations]
+    if validations:
+        result["current_contract_status"] = "failed" if any(item.status == "failed" for item in validations) else "passed"
+    else:
+        result["current_contract_status"] = "unknown"
+    return result
+
+
 def _db_detail_is_stale(db_result: Dict[str, Any], report: Optional[RunReport]) -> bool:
     if report is None:
         return False
@@ -409,9 +426,10 @@ if router:
             fs_report = _load_report_for_run(Path(project_root), run_id)
 
         if fs_report is not None and (db_result is None or _db_detail_is_stale(db_result, fs_report)):
-            return fs_report.model_dump(mode="json")
+            return _attach_current_contract_validation(fs_report.model_dump(mode="json"), fs_report.output_dir)
         if db_result is not None:
-            return db_result
+            output_dir = db_result.get("output_dir") or (fs_report.output_dir if fs_report is not None else None)
+            return _attach_current_contract_validation(db_result, output_dir)
         raise HTTPException(status_code=404, detail="run not found")
 
     @router.get("/runs/{run_id}/diff")

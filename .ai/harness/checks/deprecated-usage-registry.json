@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "patterns": [
+    {
+      "id": "deprecated.project-team-config-path",
+      "message": "legacy project team config path must not appear as a supported fact source",
+      "regex": "\\.ai/team\\.yaml",
+      "severity": "error",
+      "globs": ["**/*.md", "**/*.py", "**/*.ts", "**/*.tsx", "**/*.yaml", "**/*.yml", "**/*.json"],
+      "allowed_paths": [
+        ".ai/harness/checks/deprecated-usage-registry.json",
+        ".ai/harness/checks/deprecated-usage.md"
+      ]
+    },
+    {
+      "id": "deprecated.project-root-ai-config-wording",
+      "message": "legacy project-root config wording must not reappear",
+      "regex": "project_root/\\.ai",
+      "severity": "error",
+      "globs": ["**/*.md", "**/*.py", "**/*.ts", "**/*.tsx", "**/*.yaml", "**/*.yml", "**/*.json"],
+      "allowed_paths": [
+        ".ai/harness/checks/deprecated-usage-registry.json"
+      ]
+    },
+    {
+      "id": "deprecated.project-config-chinese-wording",
+      "message": "legacy Chinese project config wording must not reappear",
+      "regex": "项目级配置\\s*放在",
+      "severity": "error",
+      "globs": ["**/*.md", "**/*.py", "**/*.ts", "**/*.tsx", "**/*.yaml", "**/*.yml", "**/*.json"],
+      "allowed_paths": [
+        ".ai/harness/checks/deprecated-usage-registry.json"
+      ]
+    },
+    {
+      "id": "deprecated.team-yaml-priority-wording",
+      "message": "legacy priority wording must not reappear",
+      "regex": "team\\.yaml，会优先",
+      "severity": "error",
+      "globs": ["**/*.md", "**/*.py", "**/*.ts", "**/*.tsx", "**/*.yaml", "**/*.yml", "**/*.json"],
+      "allowed_paths": [
+        ".ai/harness/checks/deprecated-usage-registry.json"
+      ]
+    },
+    {
+      "id": "deprecated.init-quality-gates-wording",
+      "message": "legacy init wording must not reappear",
+      "regex": "initialize project with\\s+quality gates",
+      "severity": "error",
+      "globs": ["**/*.md", "**/*.py", "**/*.ts", "**/*.tsx", "**/*.yaml", "**/*.yml", "**/*.json"],
+      "allowed_paths": [
+        ".ai/harness/checks/deprecated-usage-registry.json"
+      ]
+    },
+    {
+      "id": "deprecated.explicit-team-yaml-path-wording",
+      "message": "legacy explicit path wording must not reappear",
+      "regex": "explicit\\s+team\\.yaml\\s+path",
+      "severity": "error",
+      "globs": ["**/*.md", "**/*.py", "**/*.ts", "**/*.tsx", "**/*.yaml", "**/*.yml", "**/*.json"],
+      "allowed_paths": [
+        ".ai/harness/checks/deprecated-usage-registry.json"
+      ]
+    },
+    {
+      "id": "deprecated.existing-quality-gates-wording",
+      "message": "legacy existing quality gates wording must not reappear",
+      "regex": "已存在\\s+quality_gates\\s+配置",
+      "severity": "error",
+      "globs": ["**/*.md", "**/*.py", "**/*.ts", "**/*.tsx", "**/*.yaml", "**/*.yml", "**/*.json"],
+      "allowed_paths": [
+        ".ai/harness/checks/deprecated-usage-registry.json"
+      ]
+    }
+  ]
+}

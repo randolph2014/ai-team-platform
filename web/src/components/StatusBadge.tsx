@@ -14,6 +14,8 @@ const labels: Record<string, string> = {
   skipped: '已跳过',
   cancelled: '已取消',
   archived: '已归档',
+  passed: '通过',
+  unknown: '未知',
 };
 
 export function StatusBadge({ status }: { status: RunStatus | string }) {

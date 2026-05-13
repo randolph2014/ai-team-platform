@@ -15,7 +15,7 @@ RUNTIME_SPECS: Dict[str, Dict[str, Any]] = {
         "name": "Claude Code",
         "cli": "claude",
         "env": "CLAUDE",
-        "args": ["-p", "--output-format", "stream-json"],
+        "args": ["-p", "--output-format", "stream-json", "--verbose"],
         "prompt_mode": "arg",
         "model_arg_style": "long",
         "launch_header": "claude (stream-json)",
