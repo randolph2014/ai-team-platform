@@ -32,7 +32,7 @@
           "deliverable": {
             "type": "object",
             "properties": {
-              "type": {"type": "string", "enum": ["file", "test", "doc", "config"]},
+              "type": {"type": "string", "enum": ["file", "test", "doc", "config", "markdown"]},
               "path": {"type": "string"},
               "description": {"type": "string"}
             },

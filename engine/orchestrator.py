@@ -332,10 +332,11 @@ class Orchestrator:
             self.bus.emit("run:completed", report.run_id, status=report.status, summary={"duration": report.duration_seconds})
             if report.status == "completed" and self._has_approved_acceptance(report):
                 self._record_task_board_event(report, output_dir, "accepted", "acceptance_confirm")
-            self._write_report(report, output_dir)
-            generate_release_readiness(report, output_dir)
             if report.status == "completed":
                 self._cleanup_checkpoint(output_dir)
+            self._refresh_artifacts(report, output_dir)
+            generate_release_readiness(report, output_dir)
+            self._write_report(report, output_dir)
             return report
         except Exception as exc:
             report.status = "failed"
@@ -345,8 +346,9 @@ class Orchestrator:
             record_run("failed")
             logger.error("pipeline run failed: %s", exc)
             self.bus.emit("run:completed", report.run_id, status="failed", summary={"error": str(exc)})
-            self._write_report(report, output_dir)
+            self._refresh_artifacts(report, output_dir)
             generate_release_readiness(report, output_dir)
+            self._write_report(report, output_dir)
             if worktree_path and worktree_manager and self.config.get("worktree", {}).get("auto_cleanup_on_failure", False):
                 worktree_manager.cleanup(worktree_path)
             return report
@@ -1610,6 +1612,7 @@ class Orchestrator:
         gates = self.config.get("quality_gates", [])
         retry_count = 0
         stage_runs = [stage_run]
+        self._prepare_quality_gate_dependency_links(cwd)
         while True:
             gate_results = run_quality_gates(gates, cwd, report.run_id, self.bus, retry_count=retry_count)
             stage_run.quality_gates.extend(gate_results)
@@ -1632,6 +1635,25 @@ class Orchestrator:
             if retry_stage.status != "completed":
                 return stage_runs
             stage_run = retry_stage
+
+    def _prepare_quality_gate_dependency_links(self, cwd: Path) -> None:
+        if cwd.resolve(strict=False) == self.project_root.resolve(strict=False):
+            return
+        for relative in (Path(".venv"), Path("web") / "node_modules"):
+            source = self.project_root / relative
+            target = cwd / relative
+            if not source.exists() or target.exists() or target.is_symlink():
+                continue
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.symlink_to(source, target_is_directory=source.is_dir())
+            except OSError as exc:
+                get_logger("orchestrator").warning(
+                    "failed to link quality gate dependency %s -> %s: %s",
+                    target,
+                    source,
+                    exc,
+                )
 
     def _render_prompt(self, stage: Dict[str, Any], agent: AgentDefinition, output_dir: Path, cwd: Path, extra_feedback: str = "") -> str:
         warnings = self.config_warnings
@@ -1749,7 +1771,14 @@ class Orchestrator:
                 parsed_blocks.append(parsed)
 
             if configured_paths:
-                selected_blocks = parsed_blocks[-len(configured_paths):]
+                for json_path in configured_paths:
+                    if json_path.exists() and json_path.is_file():
+                        json_path.unlink()
+                selected_blocks = (
+                    parsed_blocks[-len(configured_paths):]
+                    if len(parsed_blocks) >= len(configured_paths)
+                    else parsed_blocks
+                )
                 for json_path, parsed in zip(configured_paths, selected_blocks):
                     json_path.parent.mkdir(parents=True, exist_ok=True)
                     json_path.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1874,7 +1903,40 @@ class Orchestrator:
                 return f"{artifact_name} schema invalid: {'; '.join(errors[:5])}"
             return None
 
-        if stage_id == "plan":
+        def _stage_config() -> Dict[str, Any]:
+            for candidate in stages or []:
+                if candidate.get("id") == stage_id:
+                    return candidate
+            return {}
+
+        def _check_input_artifacts(stage: Dict[str, Any]) -> Optional[str]:
+            for item in _as_list(stage.get("input")):
+                if not isinstance(item, str) or item in {"requirement", "git-diff"}:
+                    continue
+                if "*" in item:
+                    for path in sorted(artifact_dir.glob(item)):
+                        if path.is_file() and load_schema_for_artifact(path.name):
+                            rel = str(path.relative_to(artifact_dir))
+                            err = _check_schema(rel)
+                            if err:
+                                return err
+                    continue
+                if not load_schema_for_artifact(Path(item).name):
+                    continue
+                path = artifact_dir / item
+                if not path.exists():
+                    return f"{item} input artifact missing"
+                err = _check_schema(item)
+                if err:
+                    return err
+            return None
+
+        stage = _stage_config()
+        input_error = _check_input_artifacts(stage)
+        if input_error:
+            return input_error
+
+        if stage_id in {"plan", "planning", "planning_draft", "planning_finalize"}:
             path = artifact_dir / "requirement-final.json"
             if path.exists():
                 try:

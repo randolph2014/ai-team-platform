@@ -35,6 +35,8 @@ class TestPromptContracts(unittest.TestCase):
                 "requirement-analysis.md",
                 "requirement-final.json",
                 "Task Contract",
+                "plan-draft.json",
+                "plan-review.json",
                 "task-plan.json",
                 "solution-plan.json",
                 "retrospect-report.json",
@@ -47,7 +49,7 @@ class TestPromptContracts(unittest.TestCase):
                 "verification_strategy",
                 "file_boundaries",
             ],
-            "challenger.md": ["requirement-gap-analysis.md", "P0", "open_questions", "过度设计"],
+            "challenger.md": ["requirement-gap-analysis.md", "plan-review.json", "P0", "open_questions", "过度设计"],
             "coder.md": [
                 "implementation-report.json",
                 "git diff",
@@ -116,6 +118,35 @@ class TestPromptContracts(unittest.TestCase):
             content = (prompt_dir / filename).read_text(encoding="utf-8")
             for needle in needles:
                 self.assertNotIn(needle, content, f"{filename} should not reference unavailable artifact: {needle}")
+
+    def test_implementation_prompts_pin_report_json_shape(self) -> None:
+        prompt_dir = Path("templates/agents")
+        required_shape_markers = [
+            '"tests_run": [',
+            '"acceptance_coverage": [',
+            '"evidence": [',
+            '"risks": [',
+            '"traceability": [',
+            "不要输出 `acceptance_results`",
+            "不要输出对象形式的 `traceability`",
+            "不要输出 `task_id`",
+        ]
+        for filename in ("coder.md", "tech-lead.md"):
+            content = (prompt_dir / filename).read_text(encoding="utf-8")
+            for marker in required_shape_markers:
+                self.assertIn(marker, content, f"{filename} missing implementation-report shape marker: {marker}")
+
+    def test_planner_prompt_pins_solution_plan_json_shape(self) -> None:
+        content = Path("templates/agents/planner.md").read_text(encoding="utf-8")
+        required_shape_markers = [
+            "solution-plan.json 的 `decisions` 每项只能包含 `topic`、`decision`、可选 `rationale`",
+            "不要在 `solution-plan.json.decisions[]` 使用 `id`、`summary`、`accepted_inputs`、`rejected_inputs`",
+            "`impact_scope` 必须是字符串数组",
+            '"decisions": [{"topic": "方案边界", "decision": "只总结 README 验证命令", "rationale": "用户限定信息源"}]',
+            '"impact_scope": ["README.md"]',
+        ]
+        for marker in required_shape_markers:
+            self.assertIn(marker, content, f"planner.md missing solution-plan shape marker: {marker}")
 
 
 class TestProjectPromptOverride(unittest.TestCase):
@@ -284,6 +315,14 @@ class TestNormalizeConfig(unittest.TestCase):
         self.assertEqual(result["runner"]["context_threshold_chars"], 100000)
         self.assertTrue(result["runner"]["auto_split_requirements"])
 
+    def test_runner_input_artifact_truncation_default_is_normalized(self) -> None:
+        """默认限制单个输入产物大小，避免真实 Agent 因巨型上下文自动压缩丢失输出契约"""
+        result = normalize_config({"providers": {}})
+        self.assertEqual(result["runner"]["max_input_chars_per_file"], 60000)
+
+        explicit_null = normalize_config({"providers": {}, "runner": {"max_input_chars_per_file": None}})
+        self.assertEqual(explicit_null["runner"]["max_input_chars_per_file"], 60000)
+
 
 class TestRuntimeConfig(unittest.TestCase):
     def test_get_existing_runtime(self) -> None:
@@ -360,6 +399,19 @@ class TestLoadConfig(unittest.TestCase):
             config_path.write_text("providers:\n  Mock:\n    cli: mock\nagents: []\npipeline: []\n", encoding="utf-8")
             loaded = load_config(root, explicit_config=str(config_path))
             self.assertIn("Mock", loaded.config["runtimes"])
+
+    def test_explicit_platform_template_path_still_injects_project_defaults(self) -> None:
+        """resume/API 回传平台模板路径时，不能把模板里的 quality_gates: [] 当作用户禁用默认门禁。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+
+            loaded = load_config(root, explicit_config=str(DEFAULT_TEAM_FILE))
+
+            self.assertEqual(loaded.source, "platform")
+            gate_names = [gate["name"] for gate in loaded.config["quality_gates"]]
+            self.assertIn("python-syntax", gate_names)
+            self.assertIn("pytest", gate_names)
 
     def test_explicit_empty_quality_gates_disables_default_injection(self) -> None:
         """显式 quality_gates: [] 表示禁用默认质量门禁。"""
@@ -537,7 +589,9 @@ class TestDefaultAgentCollaborationWorkflow(unittest.TestCase):
                 "requirement_analysis",
                 "requirement_synthesis",
                 "requirement_confirm",
-                "planning",
+                "planning_draft",
+                "plan_challenge",
+                "planning_finalize",
                 "task_plan_confirm",
                 "develop",
                 "qa",
@@ -548,7 +602,9 @@ class TestDefaultAgentCollaborationWorkflow(unittest.TestCase):
             ],
         )
         self.assertLess(stage_ids.index("context_scan"), stage_ids.index("requirement_synthesis"))
-        self.assertLess(stage_ids.index("context_scan"), stage_ids.index("planning"))
+        self.assertLess(stage_ids.index("context_scan"), stage_ids.index("planning_draft"))
+        self.assertLess(stage_ids.index("planning_draft"), stage_ids.index("plan_challenge"))
+        self.assertLess(stage_ids.index("plan_challenge"), stage_ids.index("planning_finalize"))
 
         gates = {stage["id"]: stage for stage in stages if stage.get("type") == "human_review"}
         self.assertEqual(set(gates), {"requirement_confirm", "task_plan_confirm", "acceptance_confirm"})
@@ -640,6 +696,10 @@ class TestDefaultAgentCollaborationWorkflow(unittest.TestCase):
 
         loaded = load_config(Path.cwd())
         stages = {stage["id"]: stage for stage in loaded.config["pipeline"]}
+        stage_ids = [stage["id"] for stage in loaded.config["pipeline"]]
+
+        self.assertLess(stage_ids.index("planning_draft"), stage_ids.index("plan_challenge"))
+        self.assertLess(stage_ids.index("plan_challenge"), stage_ids.index("planning_finalize"))
 
         expected = {
             "context_scan": {
@@ -649,9 +709,20 @@ class TestDefaultAgentCollaborationWorkflow(unittest.TestCase):
                 "json_artifacts": ["requirement-final.json"],
                 "required_artifacts": ["requirement-final.md", "requirement-final.json"],
             },
-            "planning": {
+            "planning_draft": {
+                "json_artifacts": ["plan-draft.json"],
+                "required_artifacts": ["plan-draft.md", "plan-draft.json"],
+                "input": ["requirement-final.json", "codebase-context.json"],
+            },
+            "plan_challenge": {
+                "json_artifacts": ["plan-review.json"],
+                "required_artifacts": ["plan-review.md", "plan-review.json"],
+                "input": ["requirement-final.json", "plan-draft.json", "codebase-context.json"],
+            },
+            "planning_finalize": {
                 "json_artifacts": ["solution-plan.json", "task-plan.json"],
                 "required_artifacts": ["task-plan.md", "solution-plan.json", "task-plan.json"],
+                "input": ["requirement-final.json", "plan-draft.json", "plan-review.json"],
             },
             "develop": {
                 "json_artifacts": ["implementation-report.json"],

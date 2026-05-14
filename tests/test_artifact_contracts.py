@@ -55,6 +55,58 @@ def _valid_task_plan():
     }
 
 
+def _valid_solution_plan():
+    return {
+        "status": "completed",
+        "summary": "使用现有编排器扩展交接契约",
+        "decisions": [{"topic": "交接事实源", "decision": "pipeline 配置定义输入输出"}],
+        "alternatives_considered": [{"option": "只改 prompt", "reason_rejected": "无法机械校验"}],
+        "impact_scope": ["engine/config.py", "templates/team.yaml"],
+        "configuration_strategy": {"source_of_truth": "pipeline", "notes": "schema 定义内容结构"},
+        "risks": [{"risk": "stage 名称变化影响旧配置", "impact": "旧 run 兼容性", "mitigation": "保留兼容说明"}],
+        "rollback_strategy": {"scope": "pipeline", "strategy": "恢复旧 planning stage"},
+        "verification_strategy": [{"command": "pytest tests/test_config.py -q", "expected": "pass"}],
+        "evidence": [{"source": "templates/team.yaml", "finding": "定义 stage input/output"}],
+        "next_stage_contract": {"required_inputs_for_coder": ["task-plan.json"]},
+    }
+
+
+def _valid_plan_draft():
+    return {
+        "status": "completed",
+        "summary": "方案草案",
+        "decisions": [{"topic": "pipeline", "decision": "拆出 challenge 阶段"}],
+        "tasks_preview": [
+            {"id": "task-001", "title": "补齐 handoff schema", "acceptance_criteria_refs": ["AC-001"]}
+        ],
+        "file_boundaries": [{"task_id": "task-001", "allowed_files": ["engine/artifact_contracts.py"]}],
+        "test_plan": [{"task_id": "task-001", "command": "pytest tests/test_artifact_contracts.py -q"}],
+        "risks": [{"risk": "schema 过松", "impact": "错误输出通过", "mitigation": "增加 required 字段"}],
+        "evidence": [{"source": "engine/config.py", "finding": "pipeline 已声明 required_artifacts"}],
+        "next_stage_contract": {"required_inputs_for_challenger": ["plan-draft.json"]},
+    }
+
+
+def _valid_plan_review():
+    return {
+        "status": "completed",
+        "verdict": "Approve",
+        "summary": "方案可进入定稿",
+        "blocking_findings": [],
+        "findings": [
+            {
+                "severity": "Suggestion",
+                "description": "补充 schema 测试",
+                "recommendation": "增加缺失字段失败用例",
+            }
+        ],
+        "open_questions": [],
+        "required_changes": [],
+        "evidence": [{"source": "plan-draft.json", "finding": "草案包含文件边界和测试计划"}],
+        "next_stage_contract": {"required_inputs_for_planner": ["plan-review.json"]},
+    }
+
+
 def _valid_traceability():
     return [
         {
@@ -207,6 +259,9 @@ class TestSchemaLoading(unittest.TestCase):
     def test_load_all_schemas(self):
         for name in [
             "requirement-final.json",
+            "solution-plan.json",
+            "plan-draft.json",
+            "plan-review.json",
             "task-plan.json",
             "test-report.json",
             "review-report.json",
@@ -229,6 +284,27 @@ class TestSchemaLoading(unittest.TestCase):
         self.assertEqual(schema["title"], "Task Contract")
         self.assertEqual(hint["display_name"], "Task Contract")
         self.assertIn("Task Contract", schema["description"])
+
+    def test_implementation_schema_hint_includes_array_property_shapes(self):
+        hint = artifact_schema_hint_for("implementation-report.json")
+
+        self.assertEqual(hint["properties"]["traceability"]["type"], "array")
+        self.assertIn("requirement_id", hint["properties"]["traceability"]["items_required"])
+        self.assertIn("acceptance_id", hint["properties"]["traceability"]["items_required"])
+        self.assertEqual(hint["properties"]["acceptance_coverage"]["type"], "array")
+        self.assertIn("acceptance_id", hint["properties"]["acceptance_coverage"]["items_required"])
+
+    def test_schema_hint_includes_nested_array_item_shapes(self):
+        hint = artifact_schema_hint_for("requirement-final.json")
+
+        rejected_inputs = hint["properties"]["decisions"]["items_properties"]["rejected_inputs"]
+
+        self.assertEqual(rejected_inputs["type"], "array")
+        self.assertEqual(rejected_inputs["items_type"], "object")
+        self.assertIn("input", rejected_inputs["items_required"])
+        self.assertIn("reason", rejected_inputs["items_required"])
+        self.assertEqual(rejected_inputs["items_properties"]["input"]["type"], "string")
+        self.assertEqual(rejected_inputs["items_properties"]["reason"]["type"], "string")
 
 
 class TestRequirementValidation(unittest.TestCase):
@@ -323,6 +399,17 @@ class TestTaskPlanValidation(unittest.TestCase):
         self.assertEqual(status, "passed", f"Errors: {errors}")
         self.assertEqual(errors, [])
 
+    def test_markdown_deliverable_type_passes(self):
+        data = _valid_task_plan()
+        data["tasks"][0]["deliverable"] = {
+            "type": "markdown",
+            "path": "implementation-report.md",
+            "description": "文档总结",
+        }
+        errors, status = validate_artifact(data, "task-plan.json")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
     def test_missing_tasks_fails(self):
         data = _valid_task_plan()
         del data["tasks"]
@@ -367,6 +454,45 @@ class TestTaskPlanValidation(unittest.TestCase):
         data["tasks"][0]["priority"] = "P5"
         errors, status = validate_artifact(data, "task-plan.json")
         self.assertEqual(status, "failed")
+
+
+class TestPlanningHandoffValidation(unittest.TestCase):
+    def test_valid_solution_plan_passes(self):
+        errors, status = validate_artifact(_valid_solution_plan(), "solution-plan.json")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
+    def test_solution_plan_missing_verification_strategy_fails(self):
+        data = _valid_solution_plan()
+        del data["verification_strategy"]
+        errors, status = validate_artifact(data, "solution-plan.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("verification_strategy" in e for e in errors))
+
+    def test_valid_plan_draft_passes(self):
+        errors, status = validate_artifact(_valid_plan_draft(), "plan-draft.json")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
+    def test_plan_draft_requires_next_stage_contract(self):
+        data = _valid_plan_draft()
+        del data["next_stage_contract"]
+        errors, status = validate_artifact(data, "plan-draft.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("next_stage_contract" in e for e in errors))
+
+    def test_valid_plan_review_passes(self):
+        errors, status = validate_artifact(_valid_plan_review(), "plan-review.json")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
+    def test_plan_review_request_changes_requires_required_changes(self):
+        data = _valid_plan_review()
+        data["verdict"] = "Request Changes"
+        data["required_changes"] = []
+        errors, status = validate_artifact(data, "plan-review.json")
+        self.assertEqual(status, "failed")
+        self.assertTrue(any("required_changes" in e for e in errors))
 
 
 class TestRelatedTaskArtifactReasons(unittest.TestCase):
@@ -420,6 +546,34 @@ class TestImplementationReportValidation(unittest.TestCase):
         self.assertEqual(status, "passed", f"Errors: {errors}")
         self.assertEqual(errors, [])
 
+    def test_read_only_implementation_report_allows_empty_changed_files(self):
+        data = _valid_implementation_report()
+        data["changed_files"] = []
+        errors, status = validate_artifact(data, "implementation-report.json")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
+    def test_read_only_implementation_report_allows_empty_tests_run(self):
+        data = _valid_implementation_report()
+        data["tests_run"] = []
+        errors, status = validate_artifact(data, "implementation-report.json")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
+    def test_implementation_evidence_supports_acceptance_reference(self):
+        data = _valid_implementation_report()
+        data["evidence"][0]["supports"] = "AC-001"
+        errors, status = validate_artifact(data, "implementation-report.json")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
+    def test_implementation_test_result_allows_output_excerpt(self):
+        data = _valid_implementation_report()
+        data["tests_run"][0]["output_excerpt"] = "1 passed"
+        errors, status = validate_artifact(data, "implementation-report.json")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
     def test_missing_traceability_fails(self):
         data = _valid_implementation_report()
         del data["traceability"]
@@ -455,6 +609,42 @@ class TestTestReportValidation(unittest.TestCase):
         self.assertEqual(status, "passed", f"Errors: {errors}")
         self.assertEqual(errors, [])
 
+    def test_blocked_command_allows_null_metrics_and_metadata(self):
+        data = _valid_test_report()
+        data["status"] = "partial"
+        data["commands"][0] = {
+            "id": "CMD-001",
+            "command": "./.venv/bin/python -m pytest",
+            "exit_code": None,
+            "duration": None,
+            "result": "blocked",
+            "note": "sandbox blocked access to the linked virtualenv",
+        }
+        data["results"][0]["status"] = "blocked"
+
+        errors, status = validate_artifact(data, "test-report.json")
+
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
+    def test_evidence_supports_acceptance_reference(self):
+        data = _valid_test_report()
+        data["evidence"][0]["supports"] = "AC-001"
+
+        errors, status = validate_artifact(data, "test-report.json")
+
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
+    def test_traceability_passed_status_is_accepted_as_verified_alias(self):
+        data = _valid_test_report()
+        data["traceability"][0]["status"] = "passed"
+
+        errors, status = validate_artifact(data, "test-report.json")
+
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
     def test_missing_commands_fails(self):
         data = _valid_test_report()
         del data["commands"]
@@ -468,18 +658,33 @@ class TestTestReportValidation(unittest.TestCase):
         self.assertEqual(status, "failed")
         self.assertTrue(any("exit_code" in e for e in errors))
 
-    def test_command_missing_duration_fails(self):
+    def test_command_missing_duration_passes_for_manual_review(self):
         data = _valid_test_report()
         del data["commands"][0]["duration"]
         errors, status = validate_artifact(data, "test-report.json")
-        self.assertEqual(status, "failed")
-        self.assertTrue(any("duration" in e for e in errors))
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
 
-    def test_result_missing_duration_fails(self):
+    def test_command_result_success_is_accepted_as_passed_alias(self):
+        data = _valid_test_report()
+        data["commands"][0]["result"] = "success"
+        errors, status = validate_artifact(data, "test-report.json")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
+    def test_result_missing_duration_passes_for_manual_review(self):
         data = _valid_test_report()
         del data["results"][0]["duration"]
         errors, status = validate_artifact(data, "test-report.json")
-        self.assertEqual(status, "failed")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
+
+    def test_result_null_duration_passes_for_manual_review(self):
+        data = _valid_test_report()
+        data["results"][0]["duration"] = None
+        errors, status = validate_artifact(data, "test-report.json")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+        self.assertEqual(errors, [])
 
     def test_result_invalid_status_fails(self):
         data = _valid_test_report()
@@ -742,7 +947,7 @@ class TestCurrentContractValidation(unittest.TestCase):
         self.assertEqual(results[0].validator, "current-schema")
         self.assertEqual(results[0].status, "failed")
         self.assertIn("traceability", results[0].message)
-        self.assertIn("tests_run", results[0].message)
+        self.assertIn("acceptance_coverage", results[0].message)
 
 
 class TestSchemaValidationErrors(unittest.TestCase):

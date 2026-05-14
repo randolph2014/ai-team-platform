@@ -25,12 +25,10 @@
     },
     "changed_files": {
       "type": "array",
-      "minItems": 1,
       "items": {"type": "string"}
     },
     "tests_run": {
       "type": "array",
-      "minItems": 1,
       "items": {
         "type": "object",
         "required": ["command", "exit_code", "duration", "result"],
@@ -39,7 +37,8 @@
           "exit_code": {"type": "integer"},
           "duration": {"type": "number", "minimum": 0},
           "result": {"type": "string", "enum": ["passed", "failed", "skipped", "blocked"]},
-          "message": {"type": "string"}
+          "message": {"type": "string"},
+          "output_excerpt": {"type": "string"}
         },
         "additionalProperties": false
       }
@@ -66,7 +65,8 @@
         "required": ["source", "finding"],
         "properties": {
           "source": {"type": "string", "minLength": 1},
-          "finding": {"type": "string", "minLength": 1}
+          "finding": {"type": "string", "minLength": 1},
+          "supports": {"type": "string"}
         },
         "additionalProperties": false
       }
@@ -93,7 +93,7 @@
         "properties": {
           "requirement_id": {"type": "string", "minLength": 1},
           "acceptance_id": {"type": "string", "pattern": "^AC-"},
-          "status": {"type": "string", "enum": ["verified", "failed", "partial", "blocked"]},
+          "status": {"type": "string", "enum": ["verified", "passed", "failed", "partial", "blocked"]},
           "evidence_refs": {
             "type": "array",
             "minItems": 1,

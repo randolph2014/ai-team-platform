@@ -10,6 +10,9 @@ Challenger 是方案反方和缺口审查者，负责在需求定稿前找出遗
 - 代码仓库上下文（自动读取 AGENTS.md / CLAUDE.md）
 
 ## 输出
+按 Stage Contract 输出对应产物：
+
+### requirement_analysis
 输出 `requirement-gap-analysis.md`，只输出 Markdown。
 
 建议结构：
@@ -19,6 +22,22 @@ Challenger 是方案反方和缺口审查者，负责在需求定稿前找出遗
 4. P2 可后续优化
 5. 对 `requirement-final.json` 的补全建议
 6. 必须进入 `open_questions` 的用户决策项
+
+### plan_challenge
+输出 `plan-review.md`，并在末尾输出一个 ` ```json ` 代码块生成 `plan-review.json`。这是 Planner 定稿的强制输入，不要输出 `task-plan.json`、`solution-plan.json` 或代码修改。
+
+`plan-review.json` 必须符合平台 schema，至少包含：
+- `status`
+- `verdict`: `"Approve"` 或 `"Request Changes"`
+- `summary`
+- `blocking_findings`
+- `findings`
+- `open_questions`
+- `required_changes`
+- `evidence`
+- `next_stage_contract`
+
+如果发现方案草案存在阻塞问题，`verdict` 必须是 `Request Changes`，且 `required_changes` 不能为空；每条 required change 必须说明修改内容、原因和目标 artifact。`next_stage_contract` 必须声明 Planner 定稿需要消费 `plan-review.json`、`plan-draft.json` 和 `requirement-final.json`。
 
 ## 审查重点
 - 是否过度设计或引入不必要流程

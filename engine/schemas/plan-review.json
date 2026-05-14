@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "plan-review.json",
+  "title": "Plan Review Artifact",
+  "description": "Challenger 对方案草案的结构化审查结果，供 Planner 定稿时强制消费",
+  "type": "object",
+  "required": [
+    "status",
+    "verdict",
+    "summary",
+    "blocking_findings",
+    "findings",
+    "open_questions",
+    "required_changes",
+    "evidence",
+    "next_stage_contract"
+  ],
+  "properties": {
+    "status": {"type": "string", "enum": ["completed", "failed", "partial"]},
+    "verdict": {"type": "string", "enum": ["Approve", "Request Changes"]},
+    "summary": {"type": "string", "minLength": 1},
+    "blocking_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "description", "recommendation"],
+        "properties": {
+          "severity": {"type": "string", "enum": ["Critical", "Warning"]},
+          "description": {"type": "string", "minLength": 1},
+          "recommendation": {"type": "string", "minLength": 1},
+          "artifact": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "description", "recommendation"],
+        "properties": {
+          "severity": {"type": "string", "enum": ["Critical", "Warning", "Suggestion"]},
+          "description": {"type": "string", "minLength": 1},
+          "recommendation": {"type": "string", "minLength": 1},
+          "artifact": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["question", "impact"],
+        "properties": {
+          "question": {"type": "string", "minLength": 1},
+          "impact": {"type": "string", "minLength": 1},
+          "options": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      }
+    },
+    "required_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["description", "reason"],
+        "properties": {
+          "description": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1},
+          "target_artifact": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "finding"],
+        "properties": {
+          "source": {"type": "string", "minLength": 1},
+          "finding": {"type": "string", "minLength": 1},
+          "supports": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "next_stage_contract": {"type": "object"}
+  },
+  "additionalProperties": false
+}

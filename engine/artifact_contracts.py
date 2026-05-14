@@ -10,6 +10,9 @@ SCHEMAS_DIR = Path(__file__).parent / "schemas"
 
 SCHEMA_FILE_MAP: Dict[str, str] = {
     "requirement-final.json": "requirement-final.json",
+    "solution-plan.json": "solution-plan.json",
+    "plan-draft.json": "plan-draft.json",
+    "plan-review.json": "plan-review.json",
     "task-plan.json": "task-plan.json",
     "implementation-report.json": "implementation-report.json",
     "test-report.json": "test-report.json",
@@ -39,7 +42,9 @@ def _load_schema(schema_name: str) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _validate_type(value: Any, expected_type: str) -> bool:
+def _validate_type(value: Any, expected_type: Any) -> bool:
+    if isinstance(expected_type, list):
+        return any(_validate_type(value, candidate) for candidate in expected_type)
     if expected_type == "object":
         return isinstance(value, dict)
     if expected_type == "array":
@@ -52,7 +57,17 @@ def _validate_type(value: Any, expected_type: str) -> bool:
         return isinstance(value, (int, float)) and not isinstance(value, bool)
     if expected_type == "boolean":
         return isinstance(value, bool)
+    if expected_type == "null":
+        return value is None
     return True
+
+
+def _schema_type_names(field_type: Any) -> Set[str]:
+    if isinstance(field_type, list):
+        return {str(item) for item in field_type}
+    if field_type:
+        return {str(field_type)}
+    return set()
 
 
 def _validate_schema(data: Any, schema: Dict[str, Any], path_prefix: str = "$") -> List[str]:
@@ -75,12 +90,16 @@ def _validate_schema(data: Any, schema: Dict[str, Any], path_prefix: str = "$") 
         value = data[field_name]
         field_path = f"{path_prefix}.{field_name}"
         field_type = field_schema.get("type")
+        field_types = _schema_type_names(field_type)
 
         if field_type and not _validate_type(value, field_type):
             errors.append(f"{field_path}: expected {field_type}, got {type(value).__name__}")
             continue
 
-        if field_type == "string":
+        if value is None:
+            continue
+
+        if "string" in field_types:
             if "enum" in field_schema and value not in field_schema["enum"]:
                 errors.append(f"{field_path}: value '{value}' not in {field_schema['enum']}")
             if "minLength" in field_schema and len(value) < field_schema["minLength"]:
@@ -90,23 +109,24 @@ def _validate_schema(data: Any, schema: Dict[str, Any], path_prefix: str = "$") 
                 if not re.search(field_schema["pattern"], value):
                     errors.append(f"{field_path}: does not match pattern '{field_schema['pattern']}'")
 
-        if field_type == "integer" or field_type == "number":
+        if "integer" in field_types or "number" in field_types:
             if "minimum" in field_schema and value < field_schema["minimum"]:
                 errors.append(f"{field_path}: value {value} below minimum {field_schema['minimum']}")
 
-        if field_type == "array":
+        if "array" in field_types:
             items_schema = field_schema.get("items", {})
             if "minItems" in field_schema and len(value) < field_schema["minItems"]:
                 errors.append(f"{field_path}: array too short (min {field_schema['minItems']})")
             for i, item in enumerate(value):
                 item_path = f"{field_path}[{i}]"
                 item_type = items_schema.get("type")
+                item_types = _schema_type_names(item_type)
                 if item_type and not _validate_type(item, item_type):
                     errors.append(f"{item_path}: expected {item_type}, got {type(item).__name__}")
                     continue
-                if item_type == "object" and isinstance(item, dict):
+                if "object" in item_types and isinstance(item, dict):
                     errors.extend(_validate_schema(item, items_schema, item_path))
-                elif item_type == "string":
+                elif "string" in item_types and item is not None:
                     if "enum" in items_schema and item not in items_schema["enum"]:
                         errors.append(f"{item_path}: value '{item}' not in {items_schema['enum']}")
                     if "pattern" in items_schema:
@@ -114,7 +134,7 @@ def _validate_schema(data: Any, schema: Dict[str, Any], path_prefix: str = "$") 
                         if not re.search(items_schema["pattern"], str(item)):
                             errors.append(f"{item_path}: does not match pattern '{items_schema['pattern']}'")
 
-        if field_type == "object" and isinstance(value, dict) and "properties" in field_schema:
+        if "object" in field_types and isinstance(value, dict) and "properties" in field_schema:
             errors.extend(_validate_schema(value, field_schema, field_path))
 
     if additional_properties is False:
@@ -184,6 +204,15 @@ def validate_review_dimensions(data: Dict[str, Any]) -> List[str]:
     return []
 
 
+def validate_plan_review_consistency(data: Dict[str, Any]) -> List[str]:
+    if data.get("verdict") != "Request Changes":
+        return []
+    required_changes = data.get("required_changes")
+    if not isinstance(required_changes, list) or not required_changes:
+        return ["required_changes must not be empty when verdict is 'Request Changes'"]
+    return []
+
+
 def validate_related_task_decisions(data: Dict[str, Any], related_tasks: List[Dict[str, Any]]) -> List[str]:
     if not related_tasks:
         return []
@@ -241,6 +270,9 @@ def validate_artifact(data: Dict[str, Any], artifact_name: str, related_tasks: O
     if Path(artifact_name).name == "review-report.json":
         errors.extend(validate_review_verdict_consistency(data))
         errors.extend(validate_review_dimensions(data))
+
+    if Path(artifact_name).name == "plan-review.json":
+        errors.extend(validate_plan_review_consistency(data))
 
     status = "passed" if not errors else "failed"
     return errors, status
@@ -366,9 +398,49 @@ def artifact_schema_hint_for(artifact: str) -> Dict[str, Any]:
             "display_name": display_name,
             "type": "object",
             "required": sorted(schema.get("required", [])),
+            "properties": _schema_properties_hint(schema),
             "schema_ref": f"engine/schemas/{SCHEMA_FILE_MAP.get(Path(artifact).name, '')}",
         }
     return {"artifact": artifact, "display_name": display_name, "type": "object", "required": []}
+
+
+def _schema_properties_hint(schema: Dict[str, Any]) -> Dict[str, Any]:
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(properties, dict):
+        return {}
+    return {str(name): _schema_property_hint(prop) for name, prop in properties.items() if isinstance(prop, dict)}
+
+
+def _schema_property_hint(schema: Dict[str, Any], depth: int = 0, max_depth: int = 3) -> Dict[str, Any]:
+    hint: Dict[str, Any] = {"type": schema.get("type", "unknown")}
+    enum = schema.get("enum")
+    if isinstance(enum, list):
+        hint["enum"] = enum
+    if schema.get("type") == "array":
+        items = schema.get("items") if isinstance(schema.get("items"), dict) else {}
+        hint["items_type"] = items.get("type", "unknown")
+        item_required = items.get("required")
+        if isinstance(item_required, list):
+            hint["items_required"] = sorted(str(item) for item in item_required)
+        item_properties = items.get("properties")
+        if isinstance(item_properties, dict):
+            hint["items_properties"] = {
+                str(name): _schema_property_hint(prop, depth + 1, max_depth)
+                for name, prop in item_properties.items()
+                if isinstance(prop, dict) and depth < max_depth
+            }
+    elif schema.get("type") == "object":
+        required = schema.get("required")
+        if isinstance(required, list):
+            hint["required"] = sorted(str(item) for item in required)
+        properties = schema.get("properties")
+        if isinstance(properties, dict) and depth < max_depth:
+            hint["properties"] = {
+                str(name): _schema_property_hint(prop, depth + 1, max_depth)
+                for name, prop in properties.items()
+                if isinstance(prop, dict)
+            }
+    return hint
 
 
 def validate_requirement_for_planning(data: Dict[str, Any]) -> List[str]:

@@ -22,6 +22,7 @@ DEFAULT_TEAM_FILE = TEMPLATES_ROOT / "team.yaml"
 USER_CONFIG_FILE = PLATFORM_ROOT / ".user-config.yaml"
 SKILL_ROOT = Path.home() / ".agents" / "skills" / "ai-team"
 DEPRECATED_PROJECT_TEAM_FILE = Path(".ai") / "team.yaml"
+DEFAULT_MAX_INPUT_CHARS_PER_FILE = 60000
 
 
 SIMPLIFIED_DEFAULT_AGENTS: List[Dict[str, Any]] = [
@@ -138,8 +139,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "reject_to": "requirement_synthesis",
         },
         {
-            "id": "planning",
-            "name": "方案与任务规划",
+            "id": "planning_draft",
+            "name": "方案草案",
             "parallel": False,
             "agents": ["planner"],
             "input": [
@@ -148,6 +149,43 @@ DEFAULT_CONFIG: Dict[str, Any] = {
                 "codebase-context.md",
                 "codebase-context.json",
                 "human-decision-requirement.json",
+                "human-decision-task-plan*.json",
+            ],
+            "output": {"planner": "plan-draft.md"},
+            "json_artifacts": ["plan-draft.json"],
+            "required_artifacts": ["plan-draft.md", "plan-draft.json"],
+        },
+        {
+            "id": "plan_challenge",
+            "name": "方案挑战",
+            "parallel": False,
+            "agents": ["challenger"],
+            "input": [
+                "requirement-final.md",
+                "requirement-final.json",
+                "codebase-context.md",
+                "codebase-context.json",
+                "plan-draft.md",
+                "plan-draft.json",
+            ],
+            "output": {"challenger": "plan-review.md"},
+            "json_artifacts": ["plan-review.json"],
+            "required_artifacts": ["plan-review.md", "plan-review.json"],
+        },
+        {
+            "id": "planning_finalize",
+            "name": "方案与任务规划定稿",
+            "parallel": False,
+            "agents": ["planner"],
+            "input": [
+                "requirement-final.md",
+                "requirement-final.json",
+                "codebase-context.md",
+                "codebase-context.json",
+                "plan-draft.md",
+                "plan-draft.json",
+                "plan-review.md",
+                "plan-review.json",
                 "human-decision-task-plan*.json",
             ],
             "output": {"planner": "task-plan.md"},
@@ -163,7 +201,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "decision_file": "human-decision-task-plan.json",
             "allow_auto_approve": False,
             "requires_reason_on_reject": True,
-            "reject_to": "planning",
+            "reject_to": "planning_finalize",
         },
         {
             "id": "develop",
@@ -300,7 +338,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         },
     ],
     "runner": {
-        "max_input_chars_per_file": None,
+        "max_input_chars_per_file": DEFAULT_MAX_INPUT_CHARS_PER_FILE,
         "max_loopback_feedback_chars": 20000,
         "loopback_truncate_strategy": "smart",  # smart | head | tail
         "agent_timeout_seconds": 1800,
@@ -388,18 +426,21 @@ def load_config(project_root: Path, explicit_config: Optional[str] = None) -> Lo
 
     # explicit_config 仅用于测试或 run-scoped 物化配置；历史项目级 team 配置入口必须拒绝。
     if explicit_config:
-        reject_deprecated_project_team_config(project_root, explicit_config)
         path = Path(explicit_config).expanduser()
         if not path.is_absolute():
             path = project_root / path
-        if path.exists():
-            config = _read_yaml(path)
-            quality_gates_explicit = "quality_gates" in config
-            if "providers" in config or any(isinstance(agent, dict) and "provider" in agent for agent in config.get("agents", [])):
-                warnings.append("DEPRECATED: providers/agent.provider 已迁移为 runtimes/agent.runtime_id，请保存配置以写回新结构。")
-            normalized = normalize_config(config, project_root)
-            _post_process_gates(project_root, normalized, inject_defaults=not quality_gates_explicit)
-            return LoadedConfig(config=normalized, source="project", path=str(path), warnings=warnings)
+        if path.resolve(strict=False) == DEFAULT_TEAM_FILE.resolve(strict=False):
+            explicit_config = None
+        else:
+            reject_deprecated_project_team_config(project_root, path)
+            if path.exists():
+                config = _read_yaml(path)
+                quality_gates_explicit = "quality_gates" in config
+                if "providers" in config or any(isinstance(agent, dict) and "provider" in agent for agent in config.get("agents", [])):
+                    warnings.append("DEPRECATED: providers/agent.provider 已迁移为 runtimes/agent.runtime_id，请保存配置以写回新结构。")
+                normalized = normalize_config(config, project_root)
+                _post_process_gates(project_root, normalized, inject_defaults=not quality_gates_explicit)
+                return LoadedConfig(config=normalized, source="project", path=str(path), warnings=warnings)
 
     # 始终使用平台模板作为基础配置
     base_config: Dict[str, Any] = {}
@@ -580,6 +621,8 @@ def normalize_config(config: Dict[str, Any], project_root: Optional[Path] = None
     normalized["pipeline_settings"] = pipeline_settings
 
     runner = dict(normalized.get("runner") or {})
+    if runner.get("max_input_chars_per_file") is None:
+        runner["max_input_chars_per_file"] = DEFAULT_MAX_INPUT_CHARS_PER_FILE
     runner.setdefault("context_threshold_chars", 100000)
     runner.setdefault("auto_split_requirements", True)
     normalized["runner"] = runner

@@ -91,6 +91,7 @@ worktree:
 runner:
   auto_split_requirements: true
   context_threshold_chars: 100000
+  max_input_chars_per_file: 60000
 
 pipeline:
   execution_mode: parallel
@@ -145,8 +146,8 @@ pipeline:
       requires_reason_on_reject: true
       reject_to: requirement_synthesis
 
-    - id: planning
-      name: "方案与任务规划"
+    - id: planning_draft
+      name: "方案草案"
       parallel: false
       agents: [planner]
       input:
@@ -155,6 +156,47 @@ pipeline:
         - codebase-context.md
         - codebase-context.json
         - human-decision-requirement.json
+        - human-decision-task-plan*.json
+      output:
+        planner: plan-draft.md
+      json_artifacts:
+        - plan-draft.json
+      required_artifacts:
+        - plan-draft.md
+        - plan-draft.json
+
+    - id: plan_challenge
+      name: "方案挑战"
+      parallel: false
+      agents: [challenger]
+      input:
+        - requirement-final.md
+        - requirement-final.json
+        - codebase-context.md
+        - codebase-context.json
+        - plan-draft.md
+        - plan-draft.json
+      output:
+        challenger: plan-review.md
+      json_artifacts:
+        - plan-review.json
+      required_artifacts:
+        - plan-review.md
+        - plan-review.json
+
+    - id: planning_finalize
+      name: "方案与任务规划定稿"
+      parallel: false
+      agents: [planner]
+      input:
+        - requirement-final.md
+        - requirement-final.json
+        - codebase-context.md
+        - codebase-context.json
+        - plan-draft.md
+        - plan-draft.json
+        - plan-review.md
+        - plan-review.json
         - human-decision-task-plan*.json
       output:
         planner: task-plan.md
@@ -174,7 +216,7 @@ pipeline:
       decision_file: human-decision-task-plan.json
       allow_auto_approve: false
       requires_reason_on_reject: true
-      reject_to: planning
+      reject_to: planning_finalize
 
     - id: develop
       name: "开发实施"

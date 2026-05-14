@@ -1,0 +1,106 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "plan-draft.json",
+  "title": "Plan Draft Artifact",
+  "description": "Planner 输出的待挑战方案草案，供 Challenger 审查后再进入最终任务规划",
+  "type": "object",
+  "required": [
+    "status",
+    "summary",
+    "decisions",
+    "tasks_preview",
+    "file_boundaries",
+    "test_plan",
+    "risks",
+    "evidence",
+    "next_stage_contract"
+  ],
+  "properties": {
+    "status": {"type": "string", "enum": ["completed", "failed", "partial"]},
+    "summary": {"type": "string", "minLength": 1},
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["topic", "decision"],
+        "properties": {
+          "topic": {"type": "string", "minLength": 1},
+          "decision": {"type": "string", "minLength": 1},
+          "rationale": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "tasks_preview": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "acceptance_criteria_refs"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "title": {"type": "string", "minLength": 1},
+          "description": {"type": "string"},
+          "acceptance_criteria_refs": {
+            "type": "array",
+            "items": {"type": "string", "pattern": "^AC-"}
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "file_boundaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "allowed_files"],
+        "properties": {
+          "task_id": {"type": "string", "minLength": 1},
+          "allowed_files": {"type": "array", "items": {"type": "string"}},
+          "forbidden_scope": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "test_plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "command"],
+        "properties": {
+          "task_id": {"type": "string", "minLength": 1},
+          "command": {"type": "string", "minLength": 1},
+          "covers": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["risk", "impact"],
+        "properties": {
+          "risk": {"type": "string", "minLength": 1},
+          "impact": {"type": "string", "minLength": 1},
+          "mitigation": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "finding"],
+        "properties": {
+          "source": {"type": "string", "minLength": 1},
+          "finding": {"type": "string", "minLength": 1},
+          "supports": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "next_stage_contract": {"type": "object"}
+  },
+  "additionalProperties": false
+}

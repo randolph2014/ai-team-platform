@@ -123,4 +123,6 @@ def build_stage_context(
                 parts.append(_artifact_section(path, max_chars=max_chars))
             else:
                 parts.extend([f"## Missing Artifact: `{item}`", "Declared in stage input but not found in the artifact directory.", ""])
+    if schema_hint:
+        parts.extend(["## Output Schema Reminder", "```json", json.dumps(schema_hint, ensure_ascii=False, indent=2), "```", ""])
     return "\n".join(parts).rstrip() + "\n"

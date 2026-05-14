@@ -10,7 +10,7 @@ from unittest.mock import patch
 from engine.config import load_config, resolve_prompt_path, agent_map
 from engine.context_scanner import ContextScanner, is_sensitive_path
 from engine.human_gate import normalize_decision
-from engine.models import HumanDecision
+from engine.models import AgentRun, HumanDecision, StageRun
 from engine.orchestrator import Orchestrator, load_report, find_run_reports
 from engine.quality_gates import run_quality_gate
 
@@ -97,7 +97,10 @@ worktree:
             self.assertEqual(report.status, "completed")
             self.assertEqual(report.config_source, "project")
             self.assertIn("tech-lead-output.md", report.artifacts)
+            self.assertIn("release-readiness.json", report.artifacts)
             self.assertTrue((Path(report.output_dir) / "report.json").exists())
+            saved_report = load_report(Path(report.output_dir) / "report.json")
+            self.assertIn("release-readiness.json", saved_report.artifacts)
 
     def test_orchestrator_does_not_complete_when_pr_delivery_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -369,6 +372,32 @@ worktree:
             stage_run = develop_stages[0]
             self.assertEqual(len(stage_run.quality_gates), 1)
             self.assertEqual(stage_run.quality_gates[0].status, "passed")
+
+    def test_quality_gate_dependency_links_use_project_deps_for_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "test-config.yaml").write_text(
+                """
+runtimes: {}
+agents: []
+pipeline: []
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".venv").mkdir()
+            (root / "web" / "node_modules").mkdir(parents=True)
+            worktree = root / ".ai" / "worktrees" / "run-1"
+            (worktree / "web").mkdir(parents=True)
+            orchestrator = Orchestrator(root, config_path=str(root / "test-config.yaml"))
+
+            orchestrator._prepare_quality_gate_dependency_links(worktree)
+
+            self.assertTrue((worktree / ".venv").is_symlink())
+            self.assertEqual((worktree / ".venv").resolve(), (root / ".venv").resolve())
+            self.assertTrue((worktree / "web" / "node_modules").is_symlink())
+            self.assertEqual((worktree / "web" / "node_modules").resolve(), (root / "web" / "node_modules").resolve())
 
     def test_validate_production_config_no_production_mode(self) -> None:
         """validate_production_config: 非生产模式不抛出异常"""
@@ -1988,6 +2017,61 @@ worktree:
             self.assertEqual(solution["summary"], "solution")
             self.assertEqual(task_plan["summary"], "tasks")
 
+    def test_stage_json_artifacts_remove_stale_configured_artifacts_when_block_invalid(self) -> None:
+        response = """# Plan
+
+```json
+{"status": "completed", "summary": "new solution", "decisions": [], "alternatives_considered": [], "impact_scope": [], "configuration_strategy": {}, "risks": [], "rollback_strategy": {}, "verification_strategy": [], "evidence": [], "next_stage_contract": {}}
+```
+
+```json
+{"status": "completed", "summary": "broken task", "description": "unescaped "quote""}
+```
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "team.yaml").write_text(
+                """
+runtimes: {}
+agents: []
+pipeline: []
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            orchestrator = Orchestrator(root, config_path=str(root / "team.yaml"))
+            output_dir = root / "out"
+            output_dir.mkdir()
+            (output_dir / "task-plan.json").write_text(
+                json.dumps({"status": "completed", "summary": "stale", "tasks": [], "execution_order": []}),
+                encoding="utf-8",
+            )
+            output_file = output_dir / "task-plan.md"
+            output_file.write_text(response, encoding="utf-8")
+            stage_run = StageRun(
+                stage_id="planning",
+                stage_name="Planning",
+                agents=[
+                    AgentRun(
+                        agent_name="planner",
+                        runtime_id="Mock",
+                        status="completed",
+                        output_file=str(output_file),
+                    )
+                ],
+            )
+
+            orchestrator._extract_json_artifacts(
+                output_dir,
+                stage_run,
+                {"json_artifacts": ["solution-plan.json", "task-plan.json"]},
+            )
+
+            solution = json.loads((output_dir / "solution-plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(solution["summary"], "new solution")
+            self.assertFalse((output_dir / "task-plan.json").exists())
+
     def test_artifact_contract_validates_named_required_fields(self) -> None:
         response = """# Plan
 
@@ -2265,6 +2349,60 @@ worktree:
             self.assertEqual(artifact, {"status": "completed", "summary": "single", "kind": "single", "value": 1})
             self.assertFalse((output_dir / "legacy-output-1.json").exists())
 
+    def test_stage_entry_validates_declared_input_json_artifact_schema(self) -> None:
+        invalid_draft_response = """# Draft
+
+```json
+{"status": "completed", "summary": "missing next stage", "decisions": [], "tasks_preview": [], "file_boundaries": [], "test_plan": [], "risks": [], "evidence": []}
+```
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "team.yaml").write_text(
+                f"""
+runtimes:
+  Draft:
+    cli: mock
+    response: {json.dumps(invalid_draft_response)}
+  Challenge:
+    cli: mock
+    response: "challenge should not run"
+agents:
+  - name: planner
+    runtime_id: Draft
+    prompt: agents/planner.md
+  - name: challenger
+    runtime_id: Challenge
+    prompt: agents/challenger.md
+pipeline:
+  - id: seed_draft
+    agents: [planner]
+    input: requirement
+    output:
+      planner: plan-draft.md
+    json_artifacts:
+      - plan-draft.json
+  - id: plan_challenge
+    agents: [challenger]
+    input:
+      - plan-draft.json
+    output:
+      challenger: plan-review.md
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / "agents").mkdir()
+            (root / "agents" / "planner.md").write_text("Write draft.", encoding="utf-8")
+            (root / "agents" / "challenger.md").write_text("Challenge draft.", encoding="utf-8")
+
+            report = Orchestrator(root, config_path=str(root / "team.yaml")).run("ship it")
+
+            self.assertEqual(report.status, "failed")
+            self.assertIn("plan-draft.json schema invalid", report.error_message or "")
+            self.assertEqual([stage.stage_id for stage in report.stages], ["seed_draft"])
+
     def test_stage_context_includes_contract_and_confirmed_artifacts(self) -> None:
         from engine.stage_context import build_stage_context
 
@@ -2290,6 +2428,28 @@ worktree:
             self.assertIn("Artifact: `requirement-final.json`", context)
             self.assertIn('"summary":"req"', context)
             self.assertIn('"summary":"plan"', context)
+
+    def test_stage_context_repeats_schema_after_artifacts(self) -> None:
+        from engine.stage_context import build_stage_context
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            (output_dir / "large.md").write_text("x" * 1000, encoding="utf-8")
+
+            context = build_stage_context(
+                stage={"id": "develop", "name": "开发实施", "required_artifacts": ["implementation-report.json"]},
+                output_dir=output_dir,
+                cwd=root,
+                input_items=["large.md"],
+                schema_hint={"required": ["status", "summary"]},
+                max_chars=80,
+            )
+
+            self.assertIn("[truncated]", context)
+            self.assertLess(context.rfind("## Output Schema Reminder"), context.rfind("```json"))
+            self.assertGreater(context.rfind("## Output Schema Reminder"), context.rfind("Artifact: `large.md`"))
 
     def test_stage_context_git_diff_includes_staged_changes(self) -> None:
         from engine.stage_context import build_stage_context
