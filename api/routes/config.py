@@ -10,7 +10,7 @@ from engine.config import (
     load_config,
     validate_production_config,
 )
-from engine.runtimes import discover_runtime_candidates, runtime_available
+from engine.runtimes import discover_runtime_candidates, resolve_auto_cli, runtime_available
 from .settings import _mask_sensitive
 
 try:
@@ -49,6 +49,14 @@ if router:
         for runtime_id, runtime in configured.items():
             item = dict(runtime)
             candidate = candidates_by_id.get(runtime_id) or candidates_by_id.get(str(item.get("cli", "")))
+            if item.get("cli", "auto") == "auto":
+                resolved_cli = resolve_auto_cli()
+                item["resolved_cli"] = resolved_cli
+                item["resolution_message"] = (
+                    f"auto resolves to {resolved_cli}" if resolved_cli else "auto could not find claude, codex, or opencode"
+                )
+                if resolved_cli:
+                    candidate = candidates_by_id.get(resolved_cli) or candidate
             if candidate:
                 item.setdefault("path", candidate.get("path"))
                 item.setdefault("version", candidate.get("version"))

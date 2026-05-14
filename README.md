@@ -32,6 +32,29 @@ ai-team status --project /path/to/project
 ai-team serve --host 127.0.0.1 --port 8000
 ```
 
+本地 API + DB + Redis + Worker：
+
+```bash
+# 依赖本机已启动 PostgreSQL 和 Redis
+# 若手工启动 Redis，不要在仓库根目录启动；指定仓库外工作目录以避免生成 ./dump.rdb
+# mkdir -p /tmp/ai-team-redis
+# redis-server --dir /tmp/ai-team-redis --dbfilename dump.rdb
+export AI_TEAM_DB_URL=postgresql://ai_team:ai_team@127.0.0.1:5432/ai_team
+export AI_TEAM_REDIS_URL=redis://127.0.0.1:6379/0
+
+# 执行数据库迁移
+./.venv/bin/python -c "import asyncio; from persistence.migration import run_migrations; asyncio.run(run_migrations())"
+
+# 终端 1：启动 API
+./.venv/bin/ai-team serve --host 127.0.0.1 --port 8000
+
+# 终端 2：启动 RQ worker
+./.venv/bin/python -m engine.tasks
+
+# 健康检查应看到 database.reachable=true、queue.redis_reachable=true、queue.workers>=1
+curl -fsS http://127.0.0.1:8000/health
+```
+
 前端：
 
 ```bash

@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from engine.artifact_contracts import validate_artifact
 from engine.models import (
-    AgentRun,
     HumanDecision,
     QualityGateRun,
     RunReport,
@@ -19,6 +19,7 @@ def _make_report(
     status="completed",
     stages=None,
     artifacts=None,
+    human_decisions=None,
 ) -> RunReport:
     return RunReport(
         run_id="test-run-001",
@@ -29,7 +30,12 @@ def _make_report(
         config_source="default",
         stages=stages or [],
         artifacts=artifacts or [],
+        human_decisions=human_decisions or [],
     )
+
+
+def _check(result, name):
+    return next(item for item in result["checks"] if item["name"] == name)
 
 
 class TestReleaseReadiness(unittest.TestCase):
@@ -39,32 +45,95 @@ class TestReleaseReadiness(unittest.TestCase):
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def test_ready_when_all_pass(self):
-        stage = StageRun(
-            stage_id="develop",
-            stage_name="Develop",
-            status="completed",
-            quality_gates=[
-                QualityGateRun(name="lint", type="command", status="passed", required=True),
-            ],
-            human_decision=HumanDecision(stage_id="acceptance_confirm", decision="approved"),
-            type="human_review",
-        )
-        report = _make_report(stages=[stage])
+        stages = [
+            StageRun(
+                stage_id="develop",
+                stage_name="Develop",
+                status="completed",
+                quality_gates=[
+                    QualityGateRun(name="lint", type="command", status="passed", required=True),
+                ],
+            ),
+            StageRun(
+                stage_id="acceptance_confirm",
+                stage_name="Acceptance",
+                status="completed",
+                human_decision=HumanDecision(stage_id="acceptance_confirm", decision="approved"),
+                type="human_review",
+            ),
+        ]
+        report = _make_report(stages=stages)
         result = generate_release_readiness(report, self.output_dir)
-        self.assertTrue(result["ready"])
-        self.assertTrue(result["checks"]["quality_gates"]["passed"])
-        self.assertTrue(result["checks"]["human_approvals"]["passed"])
-        self.assertTrue(result["checks"]["artifacts"]["passed"])
+        self.assertEqual(result["verdict"], "Ready")
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(_check(result, "quality_gates")["status"], "passed")
+        self.assertEqual(_check(result, "human_approvals")["status"], "passed")
+        self.assertEqual(_check(result, "artifacts")["status"], "passed")
         readiness_file = self.output_dir / "release-readiness.json"
         self.assertTrue(readiness_file.exists())
         parsed = json.loads(readiness_file.read_text(encoding="utf-8"))
-        self.assertTrue(parsed["ready"])
+        self.assertEqual(parsed["verdict"], "Ready")
+
+    def test_generated_artifact_matches_current_schema(self):
+        stage = StageRun(
+            stage_id="acceptance_confirm",
+            stage_name="Acceptance",
+            status="completed",
+            type="human_review",
+            human_decision=HumanDecision(stage_id="acceptance_confirm", decision="approved"),
+        )
+        report = _make_report(stages=[stage])
+        result = generate_release_readiness(report, self.output_dir)
+
+        errors, status = validate_artifact(result, "release-readiness.json")
+
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+
+    def test_human_approvals_use_decision_history_when_stage_decision_missing(self):
+        stages = [
+            StageRun(
+                stage_id="requirement_confirm",
+                stage_name="Requirement Confirm",
+                status="completed",
+                type="human_review",
+            ),
+            StageRun(
+                stage_id="task_plan_confirm",
+                stage_name="Task Plan Confirm",
+                status="completed",
+                type="human_review",
+            ),
+            StageRun(
+                stage_id="acceptance_confirm",
+                stage_name="Acceptance",
+                status="waiting",
+                type="human_review",
+                human_decision=HumanDecision(stage_id="acceptance_confirm", decision="waiting"),
+            ),
+        ]
+        report = _make_report(
+            status="paused",
+            stages=stages,
+            human_decisions=[
+                HumanDecision(stage_id="requirement_confirm", decision="approved"),
+                HumanDecision(stage_id="task_plan_confirm", decision="approved"),
+            ],
+        )
+
+        result = generate_release_readiness(report, self.output_dir)
+
+        self.assertEqual(_check(result, "human_approvals")["status"], "failed")
+        issues = [item["issue"] for item in result["blocking_issues"]]
+        self.assertIn("human review acceptance_confirm is waiting", issues)
+        self.assertNotIn("human review requirement_confirm is pending", issues)
+        self.assertNotIn("human review task_plan_confirm is pending", issues)
 
     def test_not_ready_when_run_failed(self):
         report = _make_report(status="failed")
         result = generate_release_readiness(report, self.output_dir)
-        self.assertFalse(result["ready"])
-        self.assertEqual(result["run_status"], "failed")
+        self.assertEqual(result["verdict"], "Not Ready")
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(_check(result, "run_status")["status"], "failed")
 
     def test_not_ready_when_gate_failed(self):
         stage = StageRun(
@@ -77,9 +146,28 @@ class TestReleaseReadiness(unittest.TestCase):
         )
         report = _make_report(stages=[stage])
         result = generate_release_readiness(report, self.output_dir)
-        self.assertFalse(result["ready"])
-        self.assertFalse(result["checks"]["quality_gates"]["passed"])
-        self.assertEqual(len(result["checks"]["quality_gates"]["failures"]), 1)
+        self.assertEqual(result["verdict"], "Not Ready")
+        self.assertEqual(_check(result, "quality_gates")["status"], "failed")
+        self.assertIn("quality gate test failed in stage qa", [item["issue"] for item in result["blocking_issues"]])
+
+    def test_not_ready_when_completed_develop_has_no_quality_gate_evidence(self):
+        stage = StageRun(
+            stage_id="develop",
+            stage_name="Develop",
+            status="completed",
+            quality_gates=[],
+        )
+        report = _make_report(stages=[stage])
+
+        result = generate_release_readiness(report, self.output_dir)
+
+        self.assertEqual(result["verdict"], "Not Ready")
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(_check(result, "quality_gates")["status"], "failed")
+        self.assertIn(
+            "quality gate evidence is missing for completed stage develop",
+            [item["issue"] for item in result["blocking_issues"]],
+        )
 
     def test_not_ready_when_human_approval_missing(self):
         stage = StageRun(
@@ -91,9 +179,9 @@ class TestReleaseReadiness(unittest.TestCase):
         )
         report = _make_report(stages=[stage])
         result = generate_release_readiness(report, self.output_dir)
-        self.assertFalse(result["ready"])
-        self.assertFalse(result["checks"]["human_approvals"]["passed"])
-        self.assertEqual(len(result["checks"]["human_approvals"]["missing"]), 1)
+        self.assertEqual(result["verdict"], "Not Ready")
+        self.assertEqual(_check(result, "human_approvals")["status"], "failed")
+        self.assertIn("human review acceptance_confirm is pending", [item["issue"] for item in result["blocking_issues"]])
 
     def test_not_ready_when_human_rejected(self):
         stage = StageRun(
@@ -105,14 +193,15 @@ class TestReleaseReadiness(unittest.TestCase):
         )
         report = _make_report(stages=[stage])
         result = generate_release_readiness(report, self.output_dir)
-        self.assertFalse(result["ready"])
+        self.assertEqual(result["verdict"], "Not Ready")
+        self.assertIn("human review acceptance_confirm is rejected", [item["issue"] for item in result["blocking_issues"]])
 
     def test_not_ready_when_artifact_missing(self):
         report = _make_report(artifacts=["missing-file.txt"])
         result = generate_release_readiness(report, self.output_dir)
-        self.assertFalse(result["ready"])
-        self.assertFalse(result["checks"]["artifacts"]["passed"])
-        self.assertEqual(len(result["checks"]["artifacts"]["missing"]), 1)
+        self.assertEqual(result["verdict"], "Not Ready")
+        self.assertEqual(_check(result, "artifacts")["status"], "failed")
+        self.assertIn("artifact missing-file.txt is missing", [item["issue"] for item in result["blocking_issues"]])
 
     def test_optional_gate_failure_does_not_block(self):
         stage = StageRun(
@@ -125,7 +214,7 @@ class TestReleaseReadiness(unittest.TestCase):
         )
         report = _make_report(stages=[stage])
         result = generate_release_readiness(report, self.output_dir)
-        self.assertTrue(result["checks"]["quality_gates"]["passed"])
+        self.assertEqual(_check(result, "quality_gates")["status"], "passed")
 
     def test_stages_count(self):
         stages = [
@@ -135,5 +224,4 @@ class TestReleaseReadiness(unittest.TestCase):
         ]
         report = _make_report(stages=stages)
         result = generate_release_readiness(report, self.output_dir)
-        self.assertEqual(result["stages_completed"], 2)
-        self.assertEqual(result["stages_total"], 3)
+        self.assertIn("2/3 stages completed", result["summary"])

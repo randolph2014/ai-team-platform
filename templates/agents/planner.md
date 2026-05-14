@@ -84,6 +84,11 @@ Task Contract 必须符合平台 schema，至少包含：
 
 草案必须基于 `requirement-final.json`、`codebase-context.json` 和人工反馈。`tasks_preview` 必须只写候选任务摘要，最终任务 ID、执行顺序和完整验收覆盖留到 `planning_finalize`。`next_stage_contract` 必须声明给 Challenger 的必需输入，例如 `plan-draft.json`、`requirement-final.json` 和 `codebase-context.json`。
 
+`plan-draft.json` 字段形状必须严格遵守 schema：
+- plan-draft.json 的 `tasks_preview` 每项必须包含 `id`、`title`、`acceptance_criteria_refs`。
+- 不要在 `plan-draft.json.tasks_preview[]` 使用 `priority` 或 `scope`；候选任务的范围写入 `description` 或 `file_boundaries`。
+- 合法示例片段：`"tasks_preview": [{"id": "T-1", "title": "从 README.md 提取验证命令", "acceptance_criteria_refs": ["AC-001"]}]`
+
 ### planning_finalize
 输出 `task-plan.md`，并在末尾按顺序输出两个 ` ```json ` 代码块：
 1. 第一个 JSON code block 生成 `solution-plan.json`
@@ -109,9 +114,16 @@ Task Contract 必须符合平台 schema，至少包含：
 `solution-plan.json` 字段形状必须严格遵守 schema：
 - solution-plan.json 的 `decisions` 每项只能包含 `topic`、`decision`、可选 `rationale`。
 - 不要在 `solution-plan.json.decisions[]` 使用 `id`、`summary`、`accepted_inputs`、`rejected_inputs`；这些字段属于其他 artifact，会导致 schema 失败。
+- `alternatives_considered` 每项必须使用 `option`，不要使用 `alternative`。
+- `alternatives_considered` 每项必须使用 `reason_rejected`，不要使用 `rejected_reason`。
 - `impact_scope` 必须是字符串数组，不要写成对象。
+- `configuration_strategy`、`rollback_strategy` 必须是对象，不要写成字符串。
+- `verification_strategy` 必须是对象数组，每项包含 `command` 和 `expected`，不要写成字符串。
 - 合法示例片段：`"decisions": [{"topic": "方案边界", "decision": "只总结 README 验证命令", "rationale": "用户限定信息源"}]`
 - 合法示例片段：`"impact_scope": ["README.md"]`
+- 合法示例片段：`"alternatives_considered": [{"option": "按验证类型拆分", "reason_rejected": "纯只读任务无需拆分"}]`
+- 合法示例片段：`"configuration_strategy": {"required_changes": []}`
+- 合法示例片段：`"verification_strategy": [{"command": "人工对照 README.md", "expected": "覆盖全部验证命令"}]`
 
 `task-plan.json` 必须符合平台 schema，至少包含：
 - `status`

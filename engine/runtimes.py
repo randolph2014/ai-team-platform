@@ -72,6 +72,8 @@ TRANSIENT_RUNTIME_KEYS = {
     "supported",
     "unsupported_reason",
     "launch_header",
+    "resolved_cli",
+    "resolution_message",
     "provider",
     "source",
 }

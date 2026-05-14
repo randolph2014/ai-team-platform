@@ -26,11 +26,26 @@ def _decode_claude_stream_line(line: str) -> str:
     except Exception:
         return line
     if isinstance(payload, dict):
-        if payload.get("type") == "assistant":
-            message = payload.get("message") or {}
-            content = message.get("content") or []
-            parts = [item.get("text", "") for item in content if isinstance(item, dict)]
-            return "".join(parts) or line
+        payload_type = payload.get("type")
+        if payload_type in {"result", "system", "user"}:
+            return ""
+        if payload_type == "assistant":
+            message = payload.get("message")
+            if not isinstance(message, dict):
+                return ""
+            content = message.get("content")
+            if not isinstance(content, list):
+                return ""
+            parts = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+            if parts:
+                return "".join(parts)
+            return ""
         if "content" in payload and isinstance(payload["content"], str):
             return payload["content"]
     return line

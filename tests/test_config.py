@@ -142,11 +142,39 @@ class TestPromptContracts(unittest.TestCase):
             "solution-plan.json 的 `decisions` 每项只能包含 `topic`、`decision`、可选 `rationale`",
             "不要在 `solution-plan.json.decisions[]` 使用 `id`、`summary`、`accepted_inputs`、`rejected_inputs`",
             "`impact_scope` 必须是字符串数组",
+            "`alternatives_considered` 每项必须使用 `reason_rejected`，不要使用 `rejected_reason`",
+            "`alternatives_considered` 每项必须使用 `option`，不要使用 `alternative`",
+            "`configuration_strategy`、`rollback_strategy` 必须是对象",
+            "`verification_strategy` 必须是对象数组",
             '"decisions": [{"topic": "方案边界", "decision": "只总结 README 验证命令", "rationale": "用户限定信息源"}]',
             '"impact_scope": ["README.md"]',
+            '"alternatives_considered": [{"option": "按验证类型拆分", "reason_rejected": "纯只读任务无需拆分"}]',
+            '"configuration_strategy": {"required_changes": []}',
+            '"verification_strategy": [{"command": "人工对照 README.md", "expected": "覆盖全部验证命令"}]',
         ]
         for marker in required_shape_markers:
             self.assertIn(marker, content, f"planner.md missing solution-plan shape marker: {marker}")
+
+    def test_planner_prompt_pins_plan_draft_json_shape(self) -> None:
+        content = Path("templates/agents/planner.md").read_text(encoding="utf-8")
+        required_shape_markers = [
+            "plan-draft.json 的 `tasks_preview` 每项必须包含 `id`、`title`、`acceptance_criteria_refs`",
+            "不要在 `plan-draft.json.tasks_preview[]` 使用 `priority` 或 `scope`",
+            '"tasks_preview": [{"id": "T-1", "title": "从 README.md 提取验证命令", "acceptance_criteria_refs": ["AC-001"]}]',
+        ]
+        for marker in required_shape_markers:
+            self.assertIn(marker, content, f"planner.md missing plan-draft shape marker: {marker}")
+
+    def test_challenger_prompt_pins_plan_review_json_shape(self) -> None:
+        content = Path("templates/agents/challenger.md").read_text(encoding="utf-8")
+        required_shape_markers = [
+            "plan-review.json 的 `findings` 和 `blocking_findings` 严禁使用 `id`、`blocking`",
+            "`severity` 只能是 `Critical`、`Warning`、`Suggestion`",
+            "不要使用 `P0`、`P1`、`P2` 作为 JSON severity",
+            '"findings": [{"severity": "Suggestion", "description": "低风险建议", "recommendation": "保留当前方案"}]',
+        ]
+        for marker in required_shape_markers:
+            self.assertIn(marker, content, f"challenger.md missing plan-review shape marker: {marker}")
 
 
 class TestProjectPromptOverride(unittest.TestCase):

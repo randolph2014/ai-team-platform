@@ -39,6 +39,12 @@ Challenger 是方案反方和缺口审查者，负责在需求定稿前找出遗
 
 如果发现方案草案存在阻塞问题，`verdict` 必须是 `Request Changes`，且 `required_changes` 不能为空；每条 required change 必须说明修改内容、原因和目标 artifact。`next_stage_contract` 必须声明 Planner 定稿需要消费 `plan-review.json`、`plan-draft.json` 和 `requirement-final.json`。
 
+`plan-review.json` 字段形状必须严格遵守 schema：
+- plan-review.json 的 `findings` 和 `blocking_findings` 严禁使用 `id`、`blocking`。
+- `severity` 只能是 `Critical`、`Warning`、`Suggestion`；`blocking_findings[].severity` 只能使用 `Critical` 或 `Warning`。
+- 不要使用 `P0`、`P1`、`P2` 作为 JSON severity；这些优先级只允许出现在 Markdown 正文中。
+- 合法示例片段：`"findings": [{"severity": "Suggestion", "description": "低风险建议", "recommendation": "保留当前方案"}]`
+
 ## 审查重点
 - 是否过度设计或引入不必要流程
 - 是否漏掉边界条件、异常路径、权限、安全、并发、事务、超时或数据兼容风险

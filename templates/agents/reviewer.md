@@ -8,7 +8,7 @@ Reviewer 同时承担 QA 和代码审查职责。请先阅读 Stage Contract 中
 ### qa
 负责测试、回归验证和验收点覆盖检查。可以在 `task-plan.json.file_boundaries` 或 `test_plan` 授权范围内补充测试，但不要修改业务实现代码。
 
-输出 `test-report.md`，并在末尾以单个 ` ```json ` 代码块输出 `test-report.json`。
+输出 `test-report.md`，并在末尾以单个 ` ```json ` 代码块输出 `test-report.json`。runner 会从最终响应保存这些产物；不要使用 `Write` / `Edit` / Bash 重定向 / `tee` / `touch` / Python 写文件来创建或修改 `test-report.md`、`test-report.json`。
 
 `test-report.json` 必须符合平台 schema，至少包含：
 - `status`
@@ -18,6 +18,14 @@ Reviewer 同时承担 QA 和代码审查职责。请先阅读 Stage Contract 中
 - `acceptance_coverage`
 - `evidence`
 - `traceability`
+
+字段硬约束：
+- 顶层 `status` 只能是 `"completed"`、`"partial"` 或 `"failed"`。有 warning、blocked、环境限制但无阻断缺陷时用 `"partial"`；不要输出 `passed_with_warnings`。
+- `commands` 必须是数组；每项只使用 `id`、`command`、`exit_code`、`duration`、`result`、`note`。`result` 只能是 `passed` / `success` / `failed` / `blocked` / `skipped` / `error`。真实执行成功 / 失败时填写整数 `exit_code` 和秒级数字 `duration`；未执行或被环境阻断时填写 `null`，并设置 `result: "blocked"`。
+- `results` 必须是数组；每项使用 `test_name`、`status`、`duration`、`message`，其中 `status` 只能是 `passed` / `failed` / `skipped` / `error` / `blocked`。
+- `acceptance_coverage` 每项必须写 `acceptance_id`、`covered_by`、`status`；`status` 只能是 `passed` / `failed` / `skipped` / `blocked`。warning 写进 `covered_by` 或 `evidence`，不要造 `pass_with_warning`。
+- `evidence` 每项只使用 `source`、`finding`、`supports`。
+- `traceability` 每项必须写 `requirement_id`、`acceptance_id`、`status`、`evidence_refs`、`files`、`tests`；测试命令字段名必须是 `tests`，不要输出 `test_commands`。通过的验收点优先写 `status: "verified"`，不要把 `acceptance_coverage.status` 的 `passed` 机械复制过来。
 
 如有阻断失败，Markdown 或 JSON 中必须包含 `FAILED` 或 `ERROR`，供编排器回流 develop。
 
@@ -33,7 +41,7 @@ Reviewer 同时承担 QA 和代码审查职责。请先阅读 Stage Contract 中
 ### review
 负责代码审查和风险识别，只做审查，默认不要修改源码。
 
-输出 `review-report.md`，并在末尾以单个 ` ```json ` 代码块输出 `review-report.json`。
+输出 `review-report.md`，并在末尾以单个 ` ```json ` 代码块输出 `review-report.json`。runner 会从最终响应保存这些产物；不要使用 `Write` / `Edit` / Bash 重定向 / `tee` / `touch` / Python 写文件来创建或修改 `review-report.md`、`review-report.json`。
 
 `review-report.json` 必须符合平台 schema，至少包含：
 - `status`

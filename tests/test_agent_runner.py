@@ -59,6 +59,16 @@ class TestBuildCommand(unittest.TestCase):
         self.assertEqual(result.status, "completed")
         self.assertEqual(output_text, "ok\n")
 
+    def test_claude_stream_decoder_suppresses_non_text_events(self) -> None:
+        non_text_events = [
+            {"type": "system", "subtype": "init", "cwd": "/tmp/project"},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "content": "is_error: true"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read", "input": {}}]}},
+        ]
+
+        for event in non_text_events:
+            self.assertEqual(_decode_claude_stream_line(json.dumps(event)), "")
+
     def test_codex_runtime(self) -> None:
         """codex runtime 构建 codex exec 命令"""
         from engine.runtimes import build_runtime_command
@@ -206,6 +216,18 @@ class TestDecodeClaudeStreamLine(unittest.TestCase):
         """无效 JSON 直接返回原文"""
         self.assertEqual(_decode_claude_stream_line("{invalid"), "{invalid")
 
+    def test_assistant_thinking_only_event_is_suppressed(self) -> None:
+        """assistant thinking-only 流事件不写入最终 Markdown 输出"""
+        payload = json.dumps(
+            {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "internal"}]}}
+        )
+        self.assertEqual(_decode_claude_stream_line(payload), "")
+
+    def test_result_event_is_suppressed(self) -> None:
+        """result 汇总事件不重复写入最终 Markdown 输出"""
+        payload = json.dumps({"type": "result", "result": "# duplicated final answer"})
+        self.assertEqual(_decode_claude_stream_line(payload), "")
+
 
 class TestResolveAutoCli(unittest.TestCase):
     @patch("shutil.which", return_value="/usr/local/bin/claude")
@@ -276,20 +298,20 @@ class TestDecodeClaudeStreamLineExtended(unittest.TestCase):
         payload = json.dumps({"foo": "bar", "baz": 123})
         self.assertEqual(_decode_claude_stream_line(payload), payload)
 
-    def test_dict_with_type_not_assistant_and_no_content(self) -> None:
-        """dict 有 type 但不是 assistant，且无 content 字段"""
+    def test_system_event_is_suppressed(self) -> None:
+        """system 事件只保留在 raw log，不能污染最终产物"""
         payload = json.dumps({"type": "system", "data": "info"})
-        self.assertEqual(_decode_claude_stream_line(payload), payload)
+        self.assertEqual(_decode_claude_stream_line(payload), "")
 
     def test_assistant_type_empty_content(self) -> None:
-        """assistant 类型但 content 为空列表，返回原文"""
+        """assistant 非文本事件不能污染最终产物"""
         payload = json.dumps({"type": "assistant", "message": {"content": []}})
-        self.assertEqual(_decode_claude_stream_line(payload), payload)
+        self.assertEqual(_decode_claude_stream_line(payload), "")
 
     def test_assistant_type_no_message(self) -> None:
-        """assistant 类型但无 message 字段"""
+        """assistant 无 message 时不写入最终产物"""
         payload = json.dumps({"type": "assistant"})
-        self.assertEqual(_decode_claude_stream_line(payload), payload)
+        self.assertEqual(_decode_claude_stream_line(payload), "")
 
     def test_content_field_non_string(self) -> None:
         """dict 有 content 字段但不是字符串，返回原文"""

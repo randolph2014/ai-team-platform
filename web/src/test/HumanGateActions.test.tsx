@@ -39,8 +39,9 @@ function runReport(stages: StageRun[]): RunReport {
   };
 }
 
-function renderTimeline(stages: StageRun[] = [stage()]) {
-  render(<PipelineTimeline run={runReport(stages)} onStageAction={vi.fn()} />);
+function renderTimeline(stages: StageRun[] = [stage()], onStageAction = vi.fn()) {
+  render(<PipelineTimeline run={runReport(stages)} onStageAction={onStageAction} />);
+  return onStageAction;
 }
 
 describe('Human gate actions', () => {
@@ -108,6 +109,16 @@ describe('Human gate actions', () => {
       });
     });
     expect(resumeRunMock).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the run after a human decision is submitted', async () => {
+    const onStageAction = renderTimeline();
+
+    fireEvent.click(screen.getByRole('button', { name: /通过/ }));
+
+    await waitFor(() => {
+      expect(onStageAction).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('shows artifact validation failures, human decisions, and loopback target on a stage card', () => {

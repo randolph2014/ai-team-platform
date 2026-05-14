@@ -430,6 +430,34 @@ class TestConfigRoutes(BaseRoutesTest):
         self.assertTrue(candidates["codex"]["supported"])
         self.assertNotIn("hermes", candidates)
 
+    def test_get_runtimes_reports_auto_runtime_resolution(self) -> None:
+        """GET /api/config/runtimes 明确暴露 auto 当前会解析到哪个 CLI。"""
+        from engine.config import normalize_config
+        from engine.runtimes import clear_runtime_candidate_cache
+
+        self.set_settings_store(normalize_config({
+            "runtimes": {"auto": {"name": "Auto", "cli": "auto"}},
+            "agents": [],
+            "pipeline": [],
+        }))
+        clear_runtime_candidate_cache()
+
+        def fake_which(name: str):
+            if name == "codex":
+                return "/usr/local/bin/codex"
+            return None
+
+        with patch("engine.runtimes.shutil.which", side_effect=fake_which), \
+             patch("engine.runtimes.detect_cli_version", return_value="codex 1.0"):
+            response = self.client.get("/api/config/runtimes", params={"workdir": str(self.project_root)})
+
+        self.assertEqual(response.status_code, 200)
+        runtime = response.json()["runtimes"]["auto"]
+        self.assertTrue(runtime["available"])
+        self.assertEqual(runtime["resolved_cli"], "codex")
+        self.assertEqual(runtime["path"], "/usr/local/bin/codex")
+        self.assertEqual(runtime["version"], "codex 1.0")
+
     def test_get_runtimes_masks_sensitive_fields(self) -> None:
         """GET /api/config/runtimes 不泄露 runtime 敏感字段"""
         from engine.config import normalize_config
