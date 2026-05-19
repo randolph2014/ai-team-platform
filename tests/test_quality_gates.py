@@ -138,6 +138,53 @@ class TestQualityGateExecutionPolicy(unittest.TestCase):
         self.assertIn("missing", result.output or "")
         self.assertNotIn("secret", result.output or "")
 
+    def test_default_env_filters_platform_service_vars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {
+                "AI_TEAM_DB_URL": "postgresql://platform/db",
+                "AI_TEAM_REDIS_URL": "redis://platform/0",
+                "DATABASE_URL": "postgresql://generic/db",
+                "REDIS_URL": "redis://generic/0",
+            },
+            clear=False,
+        ):
+            root = Path(tmp)
+            keys = "['AI_TEAM_DB_URL','AI_TEAM_REDIS_URL','DATABASE_URL','REDIS_URL']"
+            result = run_quality_gate(
+                {
+                    "name": "env-clean",
+                    "type": "command",
+                    "command": f'"{sys.executable}" -c "import os; print(\',\'.join(os.getenv(k, \'missing\') for k in {keys}))"',
+                    "required": True,
+                    "timeout_seconds": 5,
+                },
+                root,
+                "run-policy",
+            )
+
+        self.assertEqual(result.status, "passed")
+        self.assertIn("missing,missing,missing,missing", result.output or "")
+
+    def test_gate_env_can_explicitly_restore_filtered_var(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"DATABASE_URL": "postgresql://platform/db"}, clear=False):
+            root = Path(tmp)
+            result = run_quality_gate(
+                {
+                    "name": "env-override",
+                    "type": "command",
+                    "command": f'"{sys.executable}" -c "import os; print(os.getenv(\'DATABASE_URL\', \'missing\'))"',
+                    "required": True,
+                    "timeout_seconds": 5,
+                    "env": {"DATABASE_URL": "postgresql://gate/db"},
+                },
+                root,
+                "run-policy",
+            )
+
+        self.assertEqual(result.status, "passed")
+        self.assertIn("postgresql://gate/db", result.output or "")
+
 
 class TestQualityGateThreshold(unittest.TestCase):
     def test_threshold_success(self) -> None:
@@ -223,6 +270,20 @@ class TestQualityGateMaxRetries(unittest.TestCase):
         self.assertIn("pylint", feedback)
         self.assertIn("syntax error", feedback)
         self.assertIn("第 1 次重试", feedback)
+
+    def test_render_gate_feedback_preserves_scope_constraints(self) -> None:
+        results = [
+            QualityGateRun(name="pytest", type="command", status="failed", required=True, command="pytest", exit_code=1, output="failed"),
+        ]
+        feedback = render_gate_feedback(
+            results,
+            retry_count=1,
+            scope_note="- T-1: allowed_files=README.md; forbidden_scope=禁止修改任何文件",
+        )
+
+        self.assertIn("已确认任务边界", feedback)
+        self.assertIn("forbidden_scope=禁止修改任何文件", feedback)
+        self.assertIn("如果修复需要越过授权边界", feedback)
 
 
 class TestValidateGatesConfig(unittest.TestCase):

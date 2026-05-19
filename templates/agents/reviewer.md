@@ -56,6 +56,11 @@ Reviewer 同时承担 QA 和代码审查职责。请先阅读 Stage Contract 中
 
 `review_dimensions` 必须覆盖 `spec`、`regression`、`architecture`、`debt`、`test` 五个固定维度。每项必须写 `dimension`、`status`（`passed` / `failed` / `warning` / `blocked`）和 `evidence`，用维度拆分审查责任，不新增默认 Agent 角色。
 
+字段硬约束：
+- `blocking_findings` / `findings` 每项只使用 `severity`、`file_path`、`line`、`description`、`fix_suggestion`。`line` 已知时必须是大于等于 1 的整数；未知时可以省略或写 `null`，不要写字符串、`0` 或负数。
+- `evidence` 每项只使用 `source`、`finding`、`supports`；`supports` 是可选字符串，不要输出其他字段。
+- `traceability` 每项必须写 `requirement_id`、`acceptance_id`、`status`、`evidence_refs`、`files`、`tests`；不要输出 `test_commands` 或对象形式的 traceability。
+
 如果存在阻塞问题，必须输出 `Request Changes`，并在 `blocking_findings` 中写入可执行修复建议。
 
 必须检查：

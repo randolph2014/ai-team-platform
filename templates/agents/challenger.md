@@ -26,6 +26,8 @@ Challenger 是方案反方和缺口审查者，负责在需求定稿前找出遗
 ### plan_challenge
 输出 `plan-review.md`，并在末尾输出一个 ` ```json ` 代码块生成 `plan-review.json`。这是 Planner 定稿的强制输入，不要输出 `task-plan.json`、`solution-plan.json` 或代码修改。
 
+不要调用 Write/Edit/Bash 或任何工具写入 `plan-review.md`、`plan-review.json`；平台会从你的最终回复中提取 artifact。只在最终回复中输出 Markdown 报告，并在末尾输出一个合法 JSON code block。正文中不要再放其他 ` ```json ` 代码块。
+
 `plan-review.json` 必须符合平台 schema，至少包含：
 - `status`
 - `verdict`: `"Approve"` 或 `"Request Changes"`

@@ -211,9 +211,11 @@ class Orchestrator:
 
         # Resume 模式：恢复已完成的 stages
         completed_stages: List[str] = []
+        completed_stage_runs: Dict[str, StageRun] = {}
         if checkpoint:
             completed_stages = checkpoint.get("completed_stages", [])
             logger.info("从 checkpoint 恢复，已完成 stages: %s", completed_stages)
+            completed_stage_runs = self._completed_stage_runs_for_resume(output_dir, completed_stages, report)
 
         self._write_report(report, output_dir)
         self.bus.emit("run:started", run_id, pipeline_id=self.config.get("metadata", {}).get("name"), requirement=requirement)
@@ -276,6 +278,7 @@ class Orchestrator:
                     execution_mode,
                     human_decision=human_decision,
                     resume=resume,
+                    resume_stage_runs=completed_stage_runs,
                 )
             else:
                 sequence_status = self._run_stage_sequence(
@@ -292,6 +295,7 @@ class Orchestrator:
                     execution_mode=execution_mode,
                     human_decision=human_decision,
                     resume=resume,
+                    resume_stage_runs=completed_stage_runs,
                 )
             if sequence_status == "waiting":
                 report.status = "paused"
@@ -372,9 +376,11 @@ class Orchestrator:
         unit_progress: Optional[RequirementUnitProgress] = None,
         human_decision: Optional[HumanDecision] = None,
         external_reject_targets: Optional[set[str]] = None,
+        resume_stage_runs: Optional[Dict[str, StageRun]] = None,
     ) -> str:
         stage_index_by_id = {stage.get("id"): index for index, stage in enumerate(stages)}
         external_reject_targets = external_reject_targets or set()
+        resume_stage_runs = resume_stage_runs or {}
         loop_counts: Dict[str, int] = {}
         loopback_errors: Dict[str, List[str]] = {}
         index = 0
@@ -394,9 +400,13 @@ class Orchestrator:
 
             if skip_completed and stage_id in completed_stages:
                 logger.info("跳过已完成的 stage: %s", stage_id)
-                report.stages.append(
-                    StageRun(stage_id=stage_id, stage_name=stage.get("name", stage_id), status="completed", type=stage.get("type", "agent"))
-                )
+                stage_run = resume_stage_runs.get(stage_id)
+                if stage_run:
+                    report.stages.append(self._copy_stage_run(stage_run))
+                else:
+                    report.stages.append(
+                        StageRun(stage_id=stage_id, stage_name=stage.get("name", stage_id), status="completed", type=stage.get("type", "agent"))
+                    )
                 index += 1
                 continue
 
@@ -710,6 +720,7 @@ class Orchestrator:
         execution_mode: Optional[str],
         human_decision: Optional[HumanDecision],
         resume: bool,
+        resume_stage_runs: Optional[Dict[str, StageRun]] = None,
     ) -> str:
         pre_stages, unit_stages, post_stages = self._partition_multi_unit_stages(stages)
 
@@ -730,6 +741,7 @@ class Orchestrator:
                 resume=resume,
                 checkpoint_mode="multi-unit",
                 checkpoint_units=report.units,
+                resume_stage_runs=resume_stage_runs,
             )
             if status == "waiting":
                 return status
@@ -750,6 +762,7 @@ class Orchestrator:
                 execution_mode,
                 human_decision=self._decision_for_stages(human_decision, unit_stages),
                 resume=resume,
+                resume_stage_runs=resume_stage_runs,
             )
             if status == "waiting":
                 return status
@@ -780,6 +793,7 @@ class Orchestrator:
                 checkpoint_mode="multi-unit",
                 checkpoint_units=report.units,
                 external_reject_targets=unit_stage_ids,
+                resume_stage_runs=resume_stage_runs,
             )
             if status == "waiting":
                 return status
@@ -843,6 +857,7 @@ class Orchestrator:
         execution_mode: Optional[str],
         human_decision: Optional[HumanDecision],
         resume: bool,
+        resume_stage_runs: Optional[Dict[str, StageRun]] = None,
     ) -> str:
         unit_stages = self._unit_stages(stages)
         if not unit_stages:
@@ -901,6 +916,7 @@ class Orchestrator:
                     checkpoint_units=report.units,
                     unit_progress=progress,
                     human_decision=human_decision,
+                    resume_stage_runs=resume_stage_runs,
                 )
             except Exception:
                 progress.status = "failed"
@@ -1201,6 +1217,35 @@ class Orchestrator:
             decisions.append(decision)
         return decisions
 
+    def _completed_stage_runs_for_resume(
+        self,
+        output_dir: Path,
+        completed_stages: List[str],
+        report: RunReport,
+    ) -> Dict[str, StageRun]:
+        if not completed_stages:
+            return {}
+        report_path = output_dir / "report.json"
+        if not report_path.exists():
+            return {}
+        try:
+            previous_report = load_report(report_path)
+        except Exception as exc:
+            report.warnings.append(f"resume report.json could not be loaded and completed stage details were not restored: {exc}")
+            return {}
+
+        completed_ids = {str(stage_id) for stage_id in completed_stages}
+        stage_runs: Dict[str, StageRun] = {}
+        for stage_run in previous_report.stages:
+            if stage_run.stage_id in completed_ids and stage_run.status in {"completed", "skipped"}:
+                stage_runs[stage_run.stage_id] = stage_run
+        return stage_runs
+
+    def _copy_stage_run(self, stage_run: StageRun) -> StageRun:
+        if hasattr(stage_run, "model_copy"):
+            return stage_run.model_copy(deep=True)
+        return stage_run.copy(deep=True)
+
     def _save_checkpoint(
         self,
         output_dir: Path,
@@ -1298,6 +1343,7 @@ class Orchestrator:
         log_stage_start(report.run_id, stage_id)
         self.bus.emit("stage:started", report.run_id, stage_id=stage_id, stage_name=stage_run.stage_name, iteration=stage_run.iteration)
         try:
+            self._prepare_quality_gate_dependency_links(cwd)
             harness_report = run_harness_verification(
                 self.project_root,
                 run_id=report.run_id,
@@ -1625,7 +1671,11 @@ class Orchestrator:
                 stage_run.error_message = "Required quality gate failed"
                 return stage_runs
             retry_count += 1
-            feedback = render_gate_feedback(gate_results, retry_count)
+            feedback = render_gate_feedback(
+                gate_results,
+                retry_count,
+                scope_note=self._render_task_scope_note(output_dir),
+            )
             feedback_file = output_dir / f"quality-feedback-{retry_count}.md"
             feedback_file.write_text(feedback, encoding="utf-8")
             self.bus.emit("loopback:triggered", report.run_id, from_stage="quality_gates", to_stage="develop", iteration=retry_count + 1)
@@ -1635,6 +1685,32 @@ class Orchestrator:
             if retry_stage.status != "completed":
                 return stage_runs
             stage_run = retry_stage
+
+    def _render_task_scope_note(self, output_dir: Path) -> str:
+        task_plan_path = output_dir / "task-plan.json"
+        if not task_plan_path.exists():
+            return "task-plan.json 不存在；质量门禁回环不得扩大当前 stage 已确认的修改范围。"
+        try:
+            data = json.loads(task_plan_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return f"task-plan.json 无法解析：{exc}；质量门禁回环不得扩大当前 stage 已确认的修改范围。"
+
+        boundaries = data.get("file_boundaries") or []
+        if not isinstance(boundaries, list) or not boundaries:
+            return "task-plan.json 未声明 file_boundaries；质量门禁回环不得扩大已确认任务范围。"
+
+        lines = []
+        for item in boundaries:
+            if not isinstance(item, dict):
+                continue
+            allowed = item.get("allowed_files") or []
+            if not isinstance(allowed, list):
+                allowed = [str(allowed)]
+            allowed_text = ", ".join(str(path) for path in allowed) if allowed else "无"
+            forbidden = str(item.get("forbidden_scope") or "未声明")
+            task_id = str(item.get("task_id") or "unknown")
+            lines.append(f"- {task_id}: allowed_files={allowed_text}; forbidden_scope={forbidden}")
+        return "\n".join(lines) if lines else "task-plan.json 的 file_boundaries 无有效条目；质量门禁回环不得扩大已确认任务范围。"
 
     def _prepare_quality_gate_dependency_links(self, cwd: Path) -> None:
         if cwd.resolve(strict=False) == self.project_root.resolve(strict=False):

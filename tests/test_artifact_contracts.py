@@ -798,6 +798,25 @@ class TestReviewReportValidation(unittest.TestCase):
         errors, status = validate_artifact(data, "review-report.json")
         self.assertEqual(status, "passed", f"Errors: {errors}")
 
+    def test_review_finding_line_may_be_null_when_unknown(self):
+        data = _valid_review_report()
+        data["findings"] = [
+            {
+                "severity": "Warning",
+                "file_path": "implementation-report.json",
+                "line": None,
+                "description": "report-level issue without a stable line number",
+            }
+        ]
+        errors, status = validate_artifact(data, "review-report.json")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+
+    def test_review_evidence_supports_is_optional_string(self):
+        data = _valid_review_report()
+        data["evidence"][0]["supports"] = "AC-001 verified"
+        errors, status = validate_artifact(data, "review-report.json")
+        self.assertEqual(status, "passed", f"Errors: {errors}")
+
     def test_invalid_verdict_value_fails(self):
         data = _valid_review_report()
         data["verdict"] = "Maybe"

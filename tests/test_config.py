@@ -168,6 +168,8 @@ class TestPromptContracts(unittest.TestCase):
     def test_challenger_prompt_pins_plan_review_json_shape(self) -> None:
         content = Path("templates/agents/challenger.md").read_text(encoding="utf-8")
         required_shape_markers = [
+            "不要调用 Write/Edit/Bash 或任何工具写入 `plan-review.md`、`plan-review.json`",
+            "只在最终回复中输出 Markdown 报告，并在末尾输出一个合法 JSON code block",
             "plan-review.json 的 `findings` 和 `blocking_findings` 严禁使用 `id`、`blocking`",
             "`severity` 只能是 `Critical`、`Warning`、`Suggestion`",
             "不要使用 `P0`、`P1`、`P2` 作为 JSON severity",

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from engine.models import RunReport
 from engine.orchestrator import Orchestrator
 
 
@@ -80,6 +81,51 @@ class TestHarnessVerifyStage(HarnessOrchestratorTempProject):
 
         self.assertEqual(report.status, "completed")
         self.assertEqual(report.stages[0].status, "completed")
+
+    def test_harness_verify_links_project_dependencies_for_worktree_command_checks(self) -> None:
+        python_bin = self.root / ".venv" / "bin" / "python"
+        python_bin.parent.mkdir(parents=True)
+        python_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        python_bin.chmod(0o755)
+        self.write_harness(
+            "schema_version: '1.0'\n"
+            "checks:\n"
+            "  - id: command.project-python\n"
+            "    type: command\n"
+            "    severity: error\n"
+            "    blocking: true\n"
+            "    command: .venv/bin/python -c \"print('linked')\"\n"
+            "    timeout_seconds: 10\n"
+        )
+        worktree = self.root / "worktree-run"
+        worktree.mkdir()
+        output_dir = self.root / ".ai" / "runs" / "run-worktree"
+        stage = {
+            "id": "harness_verify",
+            "name": "Harness 验证",
+            "type": "harness_verify",
+            "output_file": "harness-report.json",
+            "required_artifacts": ["harness-report.json"],
+        }
+        report = RunReport(
+            run_id="run-worktree",
+            requirement="verify harness",
+            project_root=str(self.root),
+            output_dir=str(output_dir),
+            config_source="customized",
+        )
+
+        stage_run = Orchestrator(self.root, config_path=str(self.config_path))._run_harness_verify_stage(
+            stage,
+            report,
+            output_dir,
+            worktree,
+        )
+
+        self.assertEqual(stage_run.status, "completed")
+        self.assertTrue((worktree / ".venv").is_symlink())
+        self.assertEqual((worktree / ".venv").resolve(), (self.root / ".venv").resolve())
+        self.assertTrue((output_dir / "harness-report.json").exists())
 
 
 if __name__ == "__main__":

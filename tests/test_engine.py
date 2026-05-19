@@ -373,6 +373,72 @@ worktree:
             self.assertEqual(len(stage_run.quality_gates), 1)
             self.assertEqual(stage_run.quality_gates[0].status, "passed")
 
+    def test_resume_preserves_completed_stage_quality_gate_evidence(self) -> None:
+        """resume 跳过已完成阶段时，不能丢失该阶段的质量门禁证据。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ai").mkdir()
+            (root / "test-config.yaml").write_text(
+                """
+runtimes:
+  Mock:
+    cli: mock
+    response: "done"
+agents:
+  - name: dev
+    runtime_id: Mock
+    role: developer
+    prompt: agents/dev.md
+pipeline:
+  - id: develop
+    name: Develop
+    agents: [dev]
+    input: requirement
+    output:
+      dev: tech-lead-output.md
+  - id: accept
+    name: Accept
+    type: human_review
+    allow_auto_approve: true
+quality_gates:
+  - name: lint
+    type: command
+    command: "python3 -c \\"print('pass')\\""
+    required: true
+    max_retries: 0
+worktree:
+  enabled: false
+""",
+                encoding="utf-8",
+            )
+            (root / ".ai" / "agents").mkdir()
+            (root / ".ai" / "agents" / "dev.md").write_text("You are dev.", encoding="utf-8")
+
+            with patch("sys.stdin.isatty", return_value=False):
+                waiting = Orchestrator(root, config_path=str(root / "test-config.yaml")).run(
+                    "ship it",
+                    run_id="resume-preserve-gates",
+                    yes=False,
+                )
+            self.assertEqual(waiting.status, "paused")
+            output_dir = Path(waiting.output_dir)
+            before_resume = load_report(output_dir / "report.json")
+            before_develop = next(stage for stage in before_resume.stages if stage.stage_id == "develop")
+            self.assertEqual(len(before_develop.quality_gates), 1)
+            self.assertEqual(before_develop.quality_gates[0].status, "passed")
+
+            resumed = Orchestrator(root, config_path=str(root / "test-config.yaml")).run(
+                "ship it",
+                run_id="resume-preserve-gates",
+                resume=True,
+                yes=True,
+            )
+
+            self.assertEqual(resumed.status, "completed")
+            after_develop = next(stage for stage in resumed.stages if stage.stage_id == "develop")
+            self.assertEqual(len(after_develop.quality_gates), 1)
+            self.assertEqual(after_develop.quality_gates[0].status, "passed")
+
     def test_quality_gate_dependency_links_use_project_deps_for_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

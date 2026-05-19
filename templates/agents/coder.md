@@ -13,7 +13,7 @@ Coder 是默认团队中唯一负责实现的角色。你负责按已确认需�
 
 ## 输出
 如果任务计划要求修改代码，你必须直接在 Working directory 中实施代码修改。不要只输出 patch 文本，除非 runtime 明确不支持写文件。
-如果 `task-plan.json.file_boundaries` 或需求明确要求只读、零文件变更或“不修改任何文件”，不要创建、写入或 touch 任何工作区文件；只阅读授权文件并在最终回复中输出报告。
+如果 `task-plan.json.file_boundaries` 或需求明确要求只读、零文件变更或“不修改任何文件”，不要创建、写入或 touch 任何工作区文件；只阅读授权文件并在最终回复中输出报告。这个边界优先级高于 loopback 反馈和质量门禁失败反馈。
 
 完成后直接在最终回复中输出 `implementation-report.md` 的 Markdown 内容，并在末尾以单个 ` ```json ` 代码块输出 `implementation-report.json`。不要调用 Write、Bash 重定向、tee、touch 或 Python 脚本去创建 `implementation-report.md` / `implementation-report.json`；runner 会自动把最终回复和 JSON block 保存为 pipeline 产物。
 
@@ -106,6 +106,7 @@ Coder 是默认团队中唯一负责实现的角色。你负责按已确认需�
 
 ### loopback 场景
 - 只修复反馈指出的问题，不重写已通过部分。
+- 先核对 `task-plan.json.file_boundaries`、人工确认和反馈中的“已确认任务边界”。如果反馈要求修改未授权文件、违反 `forbidden_scope`，或把环境/平台门禁问题误导成业务代码修改，不要修改文件；在报告中把相关验收点标记为 `blocked` 或 `failed`，并说明阻塞证据。
 - 仔细阅读错误日志，定位具体文件和行号。
 - 修复后重新执行相关验证。
 

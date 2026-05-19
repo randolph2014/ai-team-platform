@@ -28,6 +28,14 @@ OPS = {
 }
 
 _PIPE_ESCAPE_PATTERN = re.compile(r"\|\|\s*true")
+_DEFAULT_ENV_DENYLIST = frozenset(
+    {
+        "AI_TEAM_DB_URL",
+        "AI_TEAM_REDIS_URL",
+        "DATABASE_URL",
+        "REDIS_URL",
+    }
+)
 
 _LANG_MARKERS = {
     "python": ["pyproject.toml", "setup.py", "setup.cfg"],
@@ -173,17 +181,24 @@ def _policy_failure(policy: Optional[QualityGateExecutionPolicy], cwd: Path, tim
     return None
 
 
-def _policy_env(policy: Optional[QualityGateExecutionPolicy]) -> Optional[Dict[str, str]]:
-    if policy is None or policy.env_allowlist is None:
-        return None
-    return {key: os.environ[key] for key in policy.env_allowlist if key in os.environ}
+def _command_env(gate: Dict, policy: Optional[QualityGateExecutionPolicy]) -> Dict[str, str]:
+    if policy is not None and policy.env_allowlist is not None:
+        env = {key: os.environ[key] for key in policy.env_allowlist if key in os.environ}
+    else:
+        env = {key: value for key, value in os.environ.items() if key not in _DEFAULT_ENV_DENYLIST}
+
+    configured = gate.get("env")
+    if isinstance(configured, dict):
+        for key, value in configured.items():
+            env[str(key)] = str(value)
+    return env
 
 
 def _run_command(
     command: str,
     cwd: Path,
     timeout: Optional[int],
-    policy: Optional[QualityGateExecutionPolicy] = None,
+    env: Dict[str, str],
 ) -> Tuple[int, str]:
     try:
         result = subprocess.run(
@@ -194,7 +209,7 @@ def _run_command(
             text=True,
             timeout=timeout,
             check=False,
-            env=_policy_env(policy),
+            env=env,
         )
         output = "\n".join(part for part in [result.stdout, result.stderr] if part)
         return result.returncode, output
@@ -256,7 +271,7 @@ def run_quality_gate(
         result.status = "failed" if required else "warning"
         result.output = "Missing gate command"
     else:
-        exit_code, output = _run_command(command, gate_cwd, timeout, execution_policy)
+        exit_code, output = _run_command(command, gate_cwd, timeout, _command_env(gate, execution_policy))
         result.exit_code = exit_code
         if output_limit >= 0 and len(output) > output_limit:
             result.output = output[-output_limit:]
@@ -327,9 +342,17 @@ def max_retry_count_for_failures(gates: Iterable[Dict], results: Iterable[Qualit
     return max_retries
 
 
-def render_gate_feedback(results: Iterable[QualityGateRun], retry_count: int) -> str:
+def render_gate_feedback(results: Iterable[QualityGateRun], retry_count: int, scope_note: str = "") -> str:
     failed = [result for result in results if result.required and result.status == "failed"]
     lines = [f"## 质量门禁失败反馈（第 {retry_count} 次重试）", ""]
+    if scope_note:
+        lines.extend(
+            [
+                "### 已确认任务边界",
+                scope_note.strip(),
+                "",
+            ]
+        )
     for result in failed:
         lines.extend(
             [
@@ -343,5 +366,5 @@ def render_gate_feedback(results: Iterable[QualityGateRun], retry_count: int) ->
                 "",
             ]
         )
-    lines.append("请只修复以上失败项，修复后重新提交。")
+    lines.append("请只在已确认 task-plan 和人工确认允许的范围内处理以上失败项；如果修复需要越过授权边界，请不要修改文件，并在实施报告中标记为阻塞。")
     return "\n".join(lines)
