@@ -35,6 +35,8 @@ dump.rdb
 .ai/worktrees/
 .ai/runs/
 .ai/team-output/
+.ai/harness/task-board.json
+.ai/harness/.task-board.lock
 .user-config.yaml
 .playwright-mcp/
 

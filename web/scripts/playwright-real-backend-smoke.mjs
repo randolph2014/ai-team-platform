@@ -198,7 +198,7 @@ try {
   await page.getByRole('heading', { name: '执行记录' }).waitFor();
   await page.getByText(`#${runId}`).waitFor();
   await page.getByText('真实端到端 smoke: 展示 Harness 阻断报告').waitFor();
-  await page.getByText('blocked').first().waitFor();
+  await page.getByText('已阻断').first().waitFor();
 
   await page.getByText(`#${runId}`).click();
   await page.waitForURL(`**/runs/${runId}`);

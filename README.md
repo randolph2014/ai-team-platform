@@ -81,7 +81,7 @@ cd web && npm ci && npm run build
 # 真实前后端浏览器 smoke（启动 FastAPI + Vite，不 mock API）
 cd web && npm run smoke:real-backend
 
-# 真实全栈浏览器 smoke（启动 Postgres + Redis/RQ + worker + FastAPI + Vite）
+# 真实全栈浏览器 smoke（启动 Postgres + Redis/RQ + worker + FastAPI + Vite；需要 Docker CLI/Daemon，可在 CI 或具备 Docker 的本机运行）
 cd web && npm run smoke:real-stack
 ```
 

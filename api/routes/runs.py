@@ -188,6 +188,7 @@ def _report_to_summary(report: RunReport) -> Dict[str, Any]:
         "run_id": report.run_id,
         "status": normalize_run_status(report.status),
         "pipeline": report.config_path,
+        "project_root": report.project_root,
         "output_dir": report.output_dir,
         "started_at": report.started_at,
         "completed_at": report.completed_at,

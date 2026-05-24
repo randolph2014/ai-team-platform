@@ -286,10 +286,12 @@ class TestPersistenceContracts(unittest.TestCase):
     def tearDown(self) -> None:
         from persistence import connection
 
-        connection._pools.clear()
+        connection._conn_pool_by_id.clear()
         connection._pool = None
+        connection._pool_loop = None
+        connection._pool_dsn = None
 
-    def test_run_sync_closes_loop_local_pool_between_calls(self) -> None:
+    def test_run_sync_reuses_background_loop_pool_between_calls(self) -> None:
         from persistence import connection
 
         class FakePool:
@@ -298,24 +300,32 @@ class TestPersistenceContracts(unittest.TestCase):
                 self.release = AsyncMock()
                 self.close = AsyncMock()
 
-        pools = [FakePool(), FakePool()]
+        pool = FakePool()
 
         async def use_connection() -> str:
             conn = await connection.get_connection()
             await connection.release_connection(conn)
             return "ok"
 
-        connection._pools.clear()
         connection._pool = None
+        connection._pool_loop = None
+        connection._pool_dsn = None
+        connection._conn_pool_by_id.clear()
         with patch.dict(os.environ, {"AI_TEAM_DB_URL": "postgresql://example/test"}, clear=False), \
-             patch("persistence.connection.asyncpg.create_pool", new=AsyncMock(side_effect=pools)) as create_pool:
+             patch("persistence.connection.asyncpg.create_pool", new=AsyncMock(return_value=pool)) as create_pool:
             self.assertEqual(connection.run_sync(use_connection()), "ok")
             self.assertEqual(connection.run_sync(use_connection()), "ok")
 
-        self.assertEqual(create_pool.await_count, 2)
-        self.assertEqual(pools[0].close.await_count, 1)
-        self.assertEqual(pools[1].close.await_count, 1)
-        self.assertEqual(connection._pools, {})
+        self.assertEqual(create_pool.await_count, 1)
+        self.assertEqual(pool.acquire.await_count, 2)
+        self.assertEqual(pool.release.await_count, 2)
+        self.assertEqual(pool.close.await_count, 0)
+        self.assertIs(connection._pool, pool)
+        self.assertIs(connection._pool_loop, connection._sync_loop)
+        self.assertEqual(connection._conn_pool_by_id, {})
+
+        connection.run_sync(connection.close_pool())
+        self.assertEqual(pool.close.await_count, 1)
         self.assertIsNone(connection._pool)
 
     def test_save_report_persists_complete_run_context(self) -> None:
