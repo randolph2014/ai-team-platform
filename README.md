@@ -81,8 +81,14 @@ cd web && npm ci && npm run build
 # 真实前后端浏览器 smoke（启动 FastAPI + Vite，不 mock API）
 cd web && npm run smoke:real-backend
 
-# 真实全栈浏览器 smoke（启动 Postgres + Redis/RQ + worker + FastAPI + Vite；需要 Docker CLI/Daemon，可在 CI 或具备 Docker 的本机运行）
+# 真实全栈浏览器 smoke
+# 默认启动隔离的 Postgres + Redis/RQ + worker + FastAPI + Vite；需要 Docker CLI/Daemon。
 cd web && npm run smoke:real-stack
+
+# 无 Docker 的本机可显式复用一次性/非生产 Postgres 与 Redis；脚本会清理本次 smoke 的 run/project/Redis job 记录。
+PLAYWRIGHT_REAL_STACK_DATABASE_URL=postgresql://ai_team:ai_team@127.0.0.1:5432/ai_team \
+PLAYWRIGHT_REAL_STACK_REDIS_URL=redis://127.0.0.1:6379/0 \
+  npm run smoke:real-stack
 ```
 
 仓库卫生检查：

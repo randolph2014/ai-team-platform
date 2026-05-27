@@ -10,9 +10,17 @@ import { chromium } from 'playwright';
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(scriptDir, '..');
 const repoRoot = resolve(webRoot, '..');
-const runId = 'real-stack-smoke-run';
 const postgresImage = process.env.PLAYWRIGHT_REAL_STACK_POSTGRES_IMAGE || 'postgres:17';
 const redisImage = process.env.PLAYWRIGHT_REAL_STACK_REDIS_IMAGE || 'redis:7-alpine';
+const externalDatabaseUrl = process.env.PLAYWRIGHT_REAL_STACK_DATABASE_URL || '';
+const externalRedisUrl = process.env.PLAYWRIGHT_REAL_STACK_REDIS_URL || '';
+const useExternalServices = Boolean(externalDatabaseUrl || externalRedisUrl);
+
+if (useExternalServices && (!externalDatabaseUrl || !externalRedisUrl)) {
+  throw new Error(
+    'Set both PLAYWRIGHT_REAL_STACK_DATABASE_URL and PLAYWRIGHT_REAL_STACK_REDIS_URL to run against external services.',
+  );
+}
 
 function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
@@ -50,18 +58,96 @@ function execFileAsync(command, args, options = {}) {
   });
 }
 
-async function waitForCommand(label, command, args, timeoutMs = 30000) {
+async function waitForCommand(label, command, args, timeoutMs = 30000, options = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      return await execFileAsync(command, args);
+      return await execFileAsync(command, args, options);
     } catch (error) {
       lastError = error;
       await sleep(500);
     }
   }
   throw new Error(`${label} did not become ready: ${lastError?.stderr || lastError?.message || 'timeout'}`);
+}
+
+async function ensureDockerAvailable() {
+  try {
+    await execFileAsync('docker', ['version', '--format', '{{.Server.Version}}']);
+  } catch (error) {
+    const reason = error?.stderr || error?.message || 'unknown error';
+    throw new Error(
+      `Docker CLI/Daemon is required for the default real-stack smoke. ` +
+        `Install/start Docker, or set PLAYWRIGHT_REAL_STACK_DATABASE_URL and PLAYWRIGHT_REAL_STACK_REDIS_URL ` +
+        `to reuse disposable external services. Docker check failed: ${reason}`,
+    );
+  }
+}
+
+async function waitForExternalDatabase(databaseUrl) {
+  const code = `
+import asyncio
+import os
+import asyncpg
+
+async def main():
+    conn = await asyncpg.connect(os.environ["PLAYWRIGHT_REAL_STACK_DATABASE_URL"])
+    try:
+        await conn.execute("SELECT 1")
+    finally:
+        await conn.close()
+
+asyncio.run(main())
+`;
+  await waitForCommand('External Postgres', pythonCmd, ['-c', code], 30000, {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      PLAYWRIGHT_REAL_STACK_DATABASE_URL: databaseUrl,
+    },
+  });
+}
+
+async function waitForExternalRedis(redisUrl) {
+  const code = `
+import os
+from redis import Redis
+
+conn = Redis.from_url(os.environ["PLAYWRIGHT_REAL_STACK_REDIS_URL"])
+conn.ping()
+`;
+  await waitForCommand('External Redis', pythonCmd, ['-c', code], 30000, {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      PLAYWRIGHT_REAL_STACK_REDIS_URL: redisUrl,
+    },
+  });
+}
+
+async function waitForExternalRedisKey(redisUrl, key) {
+  const code = `
+import os
+import sys
+from redis import Redis
+
+conn = Redis.from_url(os.environ["PLAYWRIGHT_REAL_STACK_REDIS_URL"])
+value = conn.get(os.environ["PLAYWRIGHT_REAL_STACK_REDIS_KEY"])
+if not value:
+    sys.exit(1)
+if isinstance(value, bytes):
+    value = value.decode("utf-8", errors="replace")
+print(value)
+`;
+  return waitForCommand('RQ job key', pythonCmd, ['-c', code], 10000, {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      PLAYWRIGHT_REAL_STACK_REDIS_URL: redisUrl,
+      PLAYWRIGHT_REAL_STACK_REDIS_KEY: key,
+    },
+  });
 }
 
 async function waitForServer(url, timeoutMs = 30000) {
@@ -123,6 +209,48 @@ async function stopContainer(name) {
   await execFileAsync('docker', ['stop', name]).catch(() => undefined);
 }
 
+async function cleanupExternalResources(databaseUrl, redisUrl, runId, projectRoot) {
+  const code = `
+import asyncio
+import os
+import uuid
+
+import asyncpg
+from redis import Redis
+
+run_id = os.environ["PLAYWRIGHT_REAL_STACK_RUN_ID"]
+project_root = os.environ["PLAYWRIGHT_REAL_STACK_PROJECT_ROOT"]
+database_url = os.environ["PLAYWRIGHT_REAL_STACK_DATABASE_URL"]
+redis_url = os.environ["PLAYWRIGHT_REAL_STACK_REDIS_URL"]
+
+async def cleanup_db():
+    conn = await asyncpg.connect(database_url)
+    try:
+        run_db_id = str(uuid.uuid5(uuid.NAMESPACE_OID, f"ai-team:pipeline_run:{run_id}"))
+        await conn.execute("DELETE FROM run_events WHERE run_id = $1", run_id)
+        await conn.execute("DELETE FROM pipeline_run WHERE id = $1", run_db_id)
+        await conn.execute("DELETE FROM project WHERE root_path = $1", project_root)
+    finally:
+        await conn.close()
+
+asyncio.run(cleanup_db())
+Redis.from_url(redis_url).delete(f"ai-team:run_job:{run_id}")
+`;
+  await execFileAsync(pythonCmd, ['-c', code], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      PLAYWRIGHT_REAL_STACK_DATABASE_URL: databaseUrl,
+      PLAYWRIGHT_REAL_STACK_REDIS_URL: redisUrl,
+      PLAYWRIGHT_REAL_STACK_RUN_ID: runId,
+      PLAYWRIGHT_REAL_STACK_PROJECT_ROOT: projectRoot,
+    },
+  }).catch((error) => {
+    const reason = error?.stderr || error?.message || 'unknown error';
+    process.stderr.write(`[cleanup] external smoke cleanup failed: ${reason}\n`);
+  });
+}
+
 function pipeOutput(name, child) {
   child.stdout.on('data', (chunk) => process.stdout.write(`[${name}] ${chunk}`));
   child.stderr.on('data', (chunk) => process.stderr.write(`[${name}] ${chunk}`));
@@ -172,6 +300,7 @@ runner:
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const pythonCmd = preferredPython();
 const suffix = `${process.pid}-${Date.now()}`;
+const runId = process.env.PLAYWRIGHT_REAL_STACK_RUN_ID || `real-stack-smoke-${suffix}`;
 const pgContainer = `ai-team-smoke-pg-${suffix}`;
 const redisContainer = `ai-team-smoke-redis-${suffix}`;
 const fixtureRoot = await mkdtemp(join(tmpdir(), 'ai-team-real-stack-smoke-'));
@@ -182,8 +311,8 @@ const postgresPort = Number(process.env.PLAYWRIGHT_REAL_STACK_POSTGRES_PORT || a
 const redisPort = Number(process.env.PLAYWRIGHT_REAL_STACK_REDIS_PORT || await getFreePort());
 const baseUrl = `http://127.0.0.1:${webPort}`;
 const apiBaseUrl = `http://127.0.0.1:${apiPort}`;
-const databaseUrl = `postgresql://ai_team:ai_team@127.0.0.1:${postgresPort}/ai_team`;
-const redisUrl = `redis://127.0.0.1:${redisPort}/0`;
+const databaseUrl = externalDatabaseUrl || `postgresql://ai_team:ai_team@127.0.0.1:${postgresPort}/ai_team`;
+const redisUrl = externalRedisUrl || `redis://127.0.0.1:${redisPort}/0`;
 
 let backend;
 let frontend;
@@ -191,43 +320,49 @@ let worker;
 let browser;
 
 try {
-  await execFileAsync('docker', [
-    'run',
-    '-d',
-    '--rm',
-    '--name',
-    pgContainer,
-    '-e',
-    'POSTGRES_USER=ai_team',
-    '-e',
-    'POSTGRES_PASSWORD=ai_team',
-    '-e',
-    'POSTGRES_DB=ai_team',
-    '-p',
-    `127.0.0.1:${postgresPort}:5432`,
-    postgresImage,
-  ]);
-  await execFileAsync('docker', [
-    'run',
-    '-d',
-    '--rm',
-    '--name',
-    redisContainer,
-    '-p',
-    `127.0.0.1:${redisPort}:6379`,
-    redisImage,
-  ]);
+  if (useExternalServices) {
+    await waitForExternalDatabase(databaseUrl);
+    await waitForExternalRedis(redisUrl);
+  } else {
+    await ensureDockerAvailable();
+    await execFileAsync('docker', [
+      'run',
+      '-d',
+      '--rm',
+      '--name',
+      pgContainer,
+      '-e',
+      'POSTGRES_USER=ai_team',
+      '-e',
+      'POSTGRES_PASSWORD=ai_team',
+      '-e',
+      'POSTGRES_DB=ai_team',
+      '-p',
+      `127.0.0.1:${postgresPort}:5432`,
+      postgresImage,
+    ]);
+    await execFileAsync('docker', [
+      'run',
+      '-d',
+      '--rm',
+      '--name',
+      redisContainer,
+      '-p',
+      `127.0.0.1:${redisPort}:6379`,
+      redisImage,
+    ]);
 
-  await waitForCommand(
-    'Postgres',
-    'docker',
-    ['exec', pgContainer, 'pg_isready', '-U', 'ai_team', '-d', 'ai_team'],
-  );
-  await waitForCommand(
-    'Redis',
-    'docker',
-    ['exec', redisContainer, 'redis-cli', 'ping'],
-  );
+    await waitForCommand(
+      'Postgres',
+      'docker',
+      ['exec', pgContainer, 'pg_isready', '-U', 'ai_team', '-d', 'ai_team'],
+    );
+    await waitForCommand(
+      'Redis',
+      'docker',
+      ['exec', redisContainer, 'redis-cli', 'ping'],
+    );
+  }
 
   const configPath = await writeFixtureConfig(projectRoot);
   const env = {
@@ -293,12 +428,14 @@ try {
     throw new Error(`Run create API returned unexpected payload: ${JSON.stringify(created)}`);
   }
 
-  const redisJob = await waitForCommand(
-    'RQ job key',
-    'docker',
-    ['exec', redisContainer, 'redis-cli', 'GET', `ai-team:run_job:${runId}`],
-    10000,
-  );
+  const redisJob = useExternalServices
+    ? await waitForExternalRedisKey(redisUrl, `ai-team:run_job:${runId}`)
+    : await waitForCommand(
+        'RQ job key',
+        'docker',
+        ['exec', redisContainer, 'redis-cli', 'GET', `ai-team:run_job:${runId}`],
+        10000,
+      );
   if (!redisJob.stdout.trim()) {
     throw new Error(`Redis did not store ai-team:run_job:${runId}`);
   }
@@ -324,7 +461,7 @@ try {
   await page.getByRole('heading', { name: '执行记录' }).waitFor();
   await page.getByText(`#${runId}`).waitFor();
   await page.getByText('真实全栈 smoke: 经由 DB、Redis/RQ、worker 后在前端展示').waitFor();
-  await page.getByText('completed').first().waitFor();
+  await page.getByText('已完成').first().waitFor();
 
   await page.goto(`${baseUrl}/runs/${runId}?project_id=${encodeURIComponent(project.id)}`, { waitUntil: 'networkidle' });
   await page.getByRole('heading', { name: `Run #${runId}` }).waitFor();
@@ -339,7 +476,11 @@ try {
   await stopProcess(frontend);
   await stopProcess(worker);
   await stopProcess(backend);
-  await stopContainer(redisContainer);
-  await stopContainer(pgContainer);
+  if (useExternalServices) {
+    await cleanupExternalResources(databaseUrl, redisUrl, runId, projectRoot);
+  } else {
+    await stopContainer(redisContainer);
+    await stopContainer(pgContainer);
+  }
   await rm(fixtureRoot, { recursive: true, force: true });
 }
