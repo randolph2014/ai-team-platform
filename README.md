@@ -18,8 +18,9 @@
 最小 Quickstart（不需要 PostgreSQL、Redis、Web 服务、Docker 或 Playwright）：
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv  # any Python 3.11+ works
 . .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -e ".[dev]"
 ai-team --help
 pytest tests/ -q
