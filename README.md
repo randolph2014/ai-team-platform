@@ -15,6 +15,23 @@
 
 ## 快速开始
 
+最小本地确认路径（不需要 PostgreSQL、Redis、Docker 或 Playwright）：
+
+```bash
+# Python CLI 和轻量测试
+python3 -m venv .venv
+./.venv/bin/python -m pip install -e ".[dev]"
+./.venv/bin/ai-team status --project .
+./.venv/bin/python -m pytest tests/test_config.py -q
+
+# 前端轻量测试
+cd web
+npm install
+npm run test -- StatusBadge
+```
+
+完整本地运行：
+
 ```bash
 # 安装平台依赖（Python 3.11+）
 python3 -m pip install -e .
@@ -121,7 +138,7 @@ docker compose up
 - [Roadmap](ROADMAP.md)
 - [Changelog](CHANGELOG.md)
 - [License](LICENSE)
-- [v0.1.0 Release Notes Draft](docs/releases/v0.1.0.md)
+- [v0.1.0 Release Notes](docs/releases/v0.1.0.md)
 - [Public Issue Drafts for OSS Readiness](docs/roadmap/public-issue-drafts.md)
 - [贡献指南](CONTRIBUTING.md)
 - [安全策略](SECURITY.md)
