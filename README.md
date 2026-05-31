@@ -118,6 +118,13 @@ docker compose up
 - [需求规格说明书 v1.1](docs/spec_1.1.md)
 - [已认可前端原型](docs/prototypes/ai-team-dashboard/index.html)
 - [前端截图验收](docs/validation/README.md)
+- [Roadmap](ROADMAP.md)
+- [Changelog](CHANGELOG.md)
+- [License](LICENSE)
+- [v0.1.0 Release Notes Draft](docs/releases/v0.1.0.md)
+- [Public Issue Drafts for OSS Readiness](docs/roadmap/public-issue-drafts.md)
+- [贡献指南](CONTRIBUTING.md)
+- [安全策略](SECURITY.md)
 
 ## 项目结构
 
@@ -141,3 +148,7 @@ ai-team-platform/
 - **Phase 0**：质量优先 — Context Scanner / Worktree / Quality Gates / Prompt 增强 / 简单 API
 - **Phase 1**：持久化 + 前端 — PostgreSQL / WebSocket / Dashboard
 - **Phase 2**：高级能力 — 可视化编辑器 / CI/CD 集成 / Webhook / 模板库
+
+## 许可证
+
+本项目使用 [MIT License](LICENSE)。
