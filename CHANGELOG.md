@@ -19,12 +19,14 @@ No unreleased changes yet.
 - Published `v0.1.0` release notes.
 - Public OSS readiness issue drafts for roadmap, quickstart, security hardening, architecture documentation, and Codex integration.
 - Public roadmap for v0.1.x OSS readiness and future platform candidates.
+- GitHub-hosted public CI on `ubuntu-latest` for repository hygiene, CLI entrypoint, Python tests, frontend tests, and frontend build.
 - MIT license.
 - README minimal local confirmation path that does not require PostgreSQL, Redis, Docker, or Playwright.
 
 ### Changed
 
 - README documentation index now links to OSS readiness and maintainer workflow documents.
+- README quickstart now shows the shortest first-run path and explicitly moves DB, Redis, Web service, Docker, and browser smoke to advanced validation.
 
 ### Known gaps
 

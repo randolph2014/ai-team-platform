@@ -15,22 +15,17 @@
 
 ## 快速开始
 
-最小本地确认路径（不需要 PostgreSQL、Redis、Docker 或 Playwright）：
+最小 Quickstart（不需要 PostgreSQL、Redis、Web 服务、Docker 或 Playwright）：
 
 ```bash
-# Python CLI 和轻量测试
 python3 -m venv .venv
-./.venv/bin/python -m pip install -e ".[dev]"
-./.venv/bin/ai-team status --project .
-./.venv/bin/python -m pytest tests/test_config.py -q
-
-# 前端轻量测试
-cd web
-npm install
-npm run test -- StatusBadge
+. .venv/bin/activate
+pip install -e ".[dev]"
+ai-team --help
+pytest tests/ -q
 ```
 
-完整本地运行：
+DB、Redis、Web 面板、Docker 和浏览器 smoke 属于进阶验证，不是首次体验必需。完整本地运行：
 
 ```bash
 # 安装平台依赖（Python 3.11+）
